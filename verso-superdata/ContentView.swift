@@ -7,8 +7,8 @@ private enum ConductorTheme {
     static let inputFill = Color(red: 30/255, green: 32/255, blue: 34/255)       // #1E2022
     static let rightTop = Color(red: 19/255, green: 21/255, blue: 23/255)        // #131517
     static let rightBottom = Color(red: 19/255, green: 21/255, blue: 23/255)     // #131517
-    static let verticalDivider = Color(red: 26/255, green: 28/255, blue: 30/255) // #1A1C1E
-    static let horizontalDivider = Color(red: 26/255, green: 28/255, blue: 30/255) // #1A1C1E
+    static let verticalDivider = Color(red: 42/255, green: 45/255, blue: 48/255) // #2A2D30
+    static let horizontalDivider = Color(red: 42/255, green: 45/255, blue: 48/255) // #2A2D30
     static let windowBorder = Color.white.opacity(0.08)
     static let windowCornerRadius: CGFloat = 10
 }
@@ -29,8 +29,9 @@ struct ContentView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 10)
 
-                // Sidebar content area
-                Color.clear
+                Spacer(minLength: 0)
+
+                SidebarFooter()
             }
             .background(
                 LinearGradient(
@@ -44,7 +45,7 @@ struct ContentView: View {
                     .fill(ConductorTheme.verticalDivider)
                     .frame(width: 1)
             }
-            .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
+            .frame(minWidth: 220, idealWidth: 280, maxWidth: 360)
 
             // Center (main content area)
             VStack(spacing: 0) {
@@ -87,7 +88,7 @@ struct ContentView: View {
                 ConductorTheme.rightBottom
                     .frame(minHeight: 120)
             }
-            .frame(minWidth: 240, idealWidth: 300, maxWidth: 400)
+            .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
         }
         .ignoresSafeArea()
         .background(ConductorTheme.mainCanvas)
@@ -137,6 +138,37 @@ struct WindowControlButton: View {
         case .close: return "xmark"
         case .miniaturize: return "minus"
         case .zoom: return "plus"
+        }
+    }
+}
+
+private struct SidebarFooter: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(height: 1)
+
+            HStack(spacing: 14) {
+                Spacer()
+
+                Button(action: {}) {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.52))
+                }
+                .buttonStyle(.plain)
+
+                Button(action: {}) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Color.white.opacity(0.52))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.trailing, 16)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.06))
         }
     }
 }
