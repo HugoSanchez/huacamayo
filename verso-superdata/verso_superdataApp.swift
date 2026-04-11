@@ -10,23 +10,34 @@ struct verso_superdataApp: App {
             ContentView()
         }
         .defaultSize(width: 1200, height: 750)
+        .windowStyle(.hiddenTitleBar)
     }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Configure all windows as they appear
+        // Configure already-created windows immediately.
+        configureExistingWindows()
+
+        // Configure any window that becomes active afterwards.
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(windowDidBecomeKey(_:)),
-            name: NSWindow.didBecomeKeyNotification,
+            selector: #selector(windowDidBecomeMain(_:)),
+            name: NSWindow.didBecomeMainNotification,
             object: nil
         )
     }
 
-    @objc func windowDidBecomeKey(_ notification: Notification) {
+    @objc func windowDidBecomeMain(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         configureWindow(window)
+    }
+
+    private func configureExistingWindows() {
+        // WindowGroup windows may appear on the next run-loop turn.
+        DispatchQueue.main.async {
+            NSApplication.shared.windows.forEach { self.configureWindow($0) }
+        }
     }
 
     private func configureWindow(_ window: NSWindow) {
