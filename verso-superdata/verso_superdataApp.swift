@@ -8,7 +8,6 @@ struct verso_superdataApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1200, height: 750)
     }
@@ -35,6 +34,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.styleMask.remove(.titled)
         window.styleMask.insert(.fullSizeContentView)
         window.styleMask.insert(.resizable)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isOpaque = false
         window.hasShadow = true
