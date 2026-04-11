@@ -86,29 +86,36 @@ private enum ConductorThemes {
 
 struct ContentView: View {
     @AppStorage("isDarkMode") private var isDarkMode = true
+    @AppStorage("isLeftSidebarExpanded") private var isLeftSidebarExpanded = true
+    @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = true
 
     private var theme: ConductorThemePalette {
         isDarkMode ? ConductorThemes.dark : ConductorThemes.light
+    }
+
+    private var leftSidebarWidth: CGFloat {
+        isLeftSidebarExpanded ? 280 : 0
     }
 
     var body: some View {
         HSplitView {
             // Left sidebar
             VStack(spacing: 0) {
-                // Window controls
-                HStack(spacing: 8) {
-                    WindowControlButton(color: Color(red: 1.0, green: 0.38, blue: 0.35), action: .close)
-                    WindowControlButton(color: Color(red: 1.0, green: 0.78, blue: 0.24), action: .miniaturize)
-                    WindowControlButton(color: Color(red: 0.30, green: 0.85, blue: 0.39), action: .zoom)
-                    Spacer()
+                if isLeftSidebarExpanded {
+                    TopChromeControls(
+                        isLeftSidebarExpanded: $isLeftSidebarExpanded,
+                        iconColor: theme.footerIcon
+                    )
+                    .padding(.leading, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 10)
                 }
-                .padding(.leading, 14)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
 
                 Spacer(minLength: 0)
 
-                SidebarFooter(isDarkMode: $isDarkMode, theme: theme)
+                if isLeftSidebarExpanded {
+                    SidebarFooter(isDarkMode: $isDarkMode, theme: theme)
+                }
             }
             .background(
                 ZStack {
@@ -127,9 +134,10 @@ struct ContentView: View {
                 Rectangle()
                     .fill(theme.verticalDivider)
                     .frame(width: isDarkMode ? 1 : 0.5)
-                    .opacity(isDarkMode ? 1 : 0.00)
+                    .opacity(isLeftSidebarExpanded ? (isDarkMode ? 1 : 0.00) : 0)
             }
-            .frame(minWidth: 220, idealWidth: 280, maxWidth: 360)
+            .frame(minWidth: leftSidebarWidth, idealWidth: leftSidebarWidth, maxWidth: leftSidebarWidth)
+            .clipped()
 
             // Center (main content area)
             VStack(spacing: 0) {
@@ -152,10 +160,31 @@ struct ContentView: View {
                 }
                 .background(theme.mainCanvas)
             }
+            .overlay(alignment: .topLeading) {
+                if !isLeftSidebarExpanded {
+                    TopChromeControls(
+                        isLeftSidebarExpanded: $isLeftSidebarExpanded,
+                        iconColor: theme.footerIcon
+                    )
+                    .padding(.leading, 14)
+                    .padding(.top, 14)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                Button(action: { isRightSidebarExpanded.toggle() }) {
+                    SidebarToggleIcon(side: .right, color: theme.footerIcon.opacity(0.82))
+                        .frame(width: 18, height: 14)
+                        .padding(3)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 14)
+                .padding(.top, 14)
+            }
             .overlay(alignment: .trailing) {
                 Rectangle()
                     .fill(theme.verticalDivider)
-                    .frame(width: theme.centerRightDividerThickness)
+                    .frame(width: isRightSidebarExpanded ? theme.centerRightDividerThickness : 0)
             }
             .frame(minWidth: 400, idealWidth: 600)
 
@@ -179,9 +208,14 @@ struct ContentView: View {
                 Rectangle()
                     .fill(theme.rightTop)
                     .frame(width: 1)
-                    .opacity(isDarkMode ? 0 : 0.92)
+                    .opacity(isRightSidebarExpanded ? (isDarkMode ? 0 : 0.92) : 0)
             }
-            .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
+            .frame(
+                minWidth: isRightSidebarExpanded ? 300 : 0,
+                idealWidth: isRightSidebarExpanded ? 380 : 0,
+                maxWidth: isRightSidebarExpanded ? 500 : 0
+            )
+            .clipped()
         }
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .ignoresSafeArea()
@@ -262,6 +296,53 @@ private struct MainHeaderScaffold: View {
 
 enum WindowAction {
     case close, miniaturize, zoom
+}
+
+private struct TopChromeControls: View {
+    @Binding var isLeftSidebarExpanded: Bool
+    let iconColor: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            WindowControlButton(color: Color(red: 1.0, green: 0.38, blue: 0.35), action: .close)
+            WindowControlButton(color: Color(red: 1.0, green: 0.78, blue: 0.24), action: .miniaturize)
+            WindowControlButton(color: Color(red: 0.30, green: 0.85, blue: 0.39), action: .zoom)
+
+            Button(action: { isLeftSidebarExpanded.toggle() }) {
+                SidebarToggleIcon(side: .left, color: iconColor.opacity(0.82))
+                    .frame(width: 18, height: 14)
+                    .padding(3)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 8)
+
+            Spacer()
+        }
+    }
+}
+
+private enum SidebarToggleSide {
+    case left
+    case right
+}
+
+private struct SidebarToggleIcon: View {
+    let side: SidebarToggleSide
+    let color: Color
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                .stroke(color, lineWidth: 1.25)
+
+            Rectangle()
+                .fill(color)
+                .frame(width: 1.25)
+                .offset(x: side == .left ? -2.0 : 2.0)
+        }
+        .frame(width: 13, height: 12)
+    }
 }
 
 struct WindowControlButton: View {
