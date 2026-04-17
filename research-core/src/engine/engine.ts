@@ -9,6 +9,8 @@ import type {
   BrainStats, BrainHealth,
   IngestLogEntry, IngestLogInput,
   EngineConfig,
+  Source, SourceInput,
+  Context, ContextInput,
 } from './types.ts';
 
 /** Maximum results returned by search operations. Internal bulk operations (listPages) are not clamped. */
@@ -85,6 +87,22 @@ export interface BrainEngine {
   // Config
   getConfig(key: string): Promise<string | null>;
   setConfig(key: string, value: string): Promise<void>;
+
+  // Sources
+  createSource(input: SourceInput): Promise<Source>;
+  getSource(id: string): Promise<Source | null>;
+  listSources(): Promise<Source[]>;
+  updateSourceStatus(id: string, status: string): Promise<void>;
+  deleteSource(id: string): Promise<void>;
+
+  // Contexts
+  createContext(input: ContextInput): Promise<Context>;
+  getContext(id: string): Promise<Context | null>;
+  listContexts(): Promise<Context[]>;
+  deleteContext(id: string): Promise<void>;
+  addSourceToContext(contextId: string, sourceId: string): Promise<void>;
+  removeSourceFromContext(contextId: string, sourceId: string): Promise<void>;
+  getContextSourceIds(contextId: string): Promise<string[]>;
 
   // Migration support
   runMigration(version: number, sql: string): Promise<void>;
