@@ -58,6 +58,7 @@ export interface BrainEngine {
   addTag(slug: string, tag: string): Promise<void>;
   removeTag(slug: string, tag: string): Promise<void>;
   getTags(slug: string): Promise<string[]>;
+  listAllTags(): Promise<string[]>;
 
   // Timeline
   addTimelineEntry(slug: string, entry: TimelineInput): Promise<void>;

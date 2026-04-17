@@ -12,6 +12,7 @@ export type { Source, SourceInput, Context, ContextInput } from './engine/types.
 export type { VervoConfig } from './engine/config.ts';
 export { loadConfig, saveConfig, toEngineConfig, configDir } from './engine/config.ts';
 export { operations, operationsByName } from './engine/operations.ts';
+export { startServer } from './http/server.ts';
 export { hybridSearch } from './engine/search/hybrid.ts';
 export { importFromContent, importFromFile } from './engine/import-file.ts';
 export {

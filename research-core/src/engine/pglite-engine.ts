@@ -447,6 +447,11 @@ export class PGLiteEngine implements BrainEngine {
     return (rows as { tag: string }[]).map(r => r.tag);
   }
 
+  async listAllTags(): Promise<string[]> {
+    const { rows } = await this.db.query('SELECT DISTINCT tag FROM tags ORDER BY tag');
+    return (rows as { tag: string }[]).map(r => r.tag);
+  }
+
   // Timeline
   async addTimelineEntry(slug: string, entry: TimelineInput): Promise<void> {
     await this.db.query(
