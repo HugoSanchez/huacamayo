@@ -27,7 +27,7 @@ The attention mechanism allows models to focus on relevant parts of the input.
 It was introduced in the paper "Attention Is All You Need".
 `;
 
-    const result = await importFromContent(engine, 'concepts/attention', content);
+    const result = await importFromContent(engine, 'concepts/attention', content, { noEmbed: true });
     expect(result.status).toBe('imported');
     expect(result.slug).toBe('concepts/attention');
     expect(result.chunks).toBeGreaterThan(0);
@@ -52,10 +52,10 @@ title: Test Page
 Some content.
 `;
 
-    const first = await importFromContent(engine, 'test/idempotent', content);
+    const first = await importFromContent(engine, 'test/idempotent', content, { noEmbed: true });
     expect(first.status).toBe('imported');
 
-    const second = await importFromContent(engine, 'test/idempotent', content);
+    const second = await importFromContent(engine, 'test/idempotent', content, { noEmbed: true });
     expect(second.status).toBe('skipped');
   });
 
@@ -71,8 +71,8 @@ title: Evolving Page Updated
 Version two content with more detail.
 `;
 
-    await importFromContent(engine, 'test/evolving', v1);
-    const result = await importFromContent(engine, 'test/evolving', v2);
+    await importFromContent(engine, 'test/evolving', v1, { noEmbed: true });
+    const result = await importFromContent(engine, 'test/evolving', v2, { noEmbed: true });
     expect(result.status).toBe('imported');
 
     const page = await engine.getPage('test/evolving');
@@ -93,7 +93,7 @@ Alice is a researcher in NLP.
 2024-03-01: Joined OpenAI.
 `;
 
-    const result = await importFromContent(engine, 'people/alice', content);
+    const result = await importFromContent(engine, 'people/alice', content, { noEmbed: true });
     expect(result.status).toBe('imported');
 
     const page = await engine.getPage('people/alice');
@@ -103,7 +103,7 @@ Alice is a researcher in NLP.
 
   it('rejects oversized content', async () => {
     const huge = 'x'.repeat(6_000_000);
-    const result = await importFromContent(engine, 'test/too-big', huge);
+    const result = await importFromContent(engine, 'test/too-big', huge, { noEmbed: true });
     expect(result.status).toBe('skipped');
     expect(result.error).toContain('too large');
   });
@@ -114,7 +114,7 @@ Alice is a researcher in NLP.
 Just a plain markdown file with no YAML frontmatter.
 `;
 
-    const result = await importFromContent(engine, 'notes/simple', content);
+    const result = await importFromContent(engine, 'notes/simple', content, { noEmbed: true });
     expect(result.status).toBe('imported');
 
     const page = await engine.getPage('notes/simple');

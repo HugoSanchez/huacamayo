@@ -13,3 +13,8 @@ export { loadConfig, saveConfig, toEngineConfig, configDir } from './engine/conf
 export { operations, operationsByName } from './engine/operations.ts';
 export { hybridSearch } from './engine/search/hybrid.ts';
 export { importFromContent, importFromFile } from './engine/import-file.ts';
+export {
+  embed, embedBatch, dispose as disposeEmbedding,
+  isAvailable as embeddingAvailable, isLoaded as embeddingLoaded,
+  setModelPath, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS,
+} from './engine/embedding.ts';

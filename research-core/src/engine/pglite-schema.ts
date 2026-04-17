@@ -48,8 +48,8 @@ CREATE TABLE IF NOT EXISTS content_chunks (
   chunk_index   INTEGER NOT NULL,
   chunk_text    TEXT    NOT NULL,
   chunk_source  TEXT    NOT NULL DEFAULT 'compiled_truth',
-  embedding     vector(768),
-  model         TEXT    NOT NULL DEFAULT 'embeddinggemma-300M',
+  embedding     vector(1024),
+  model         TEXT    NOT NULL DEFAULT 'bge-m3',
   token_count   INTEGER,
   embedded_at   TIMESTAMPTZ,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -154,8 +154,8 @@ CREATE TABLE IF NOT EXISTS config (
 INSERT INTO config (key, value) VALUES
   ('version', '1'),
   ('engine', 'pglite'),
-  ('embedding_model', 'embeddinggemma-300M'),
-  ('embedding_dimensions', '768'),
+  ('embedding_model', 'bge-m3'),
+  ('embedding_dimensions', '1024'),
   ('chunk_strategy', 'semantic')
 ON CONFLICT (key) DO NOTHING;
 
