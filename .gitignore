@@ -9,5 +9,18 @@ xcuserdata/
 .build/
 Packages/
 
+# Node / Bun
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+
+# Models
+*.gguf
+
 # macOS
 .DS_Store
+
+# Conductor workspace
+.context/

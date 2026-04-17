@@ -7,19 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10000010000000000000001 /* verso_superdataApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000001 /* verso_superdataApp.swift */; };
+		A10000010000000000000001 /* VervoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000001 /* VervoApp.swift */; };
 		A10000010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000002 /* ContentView.swift */; };
 		A10000010000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000003 /* Assets.xcassets */; };
 		A10000010000000000000004 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000004 /* Preview Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A10000020000000000000001 /* verso_superdataApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = verso_superdataApp.swift; sourceTree = "<group>"; };
+		A10000020000000000000001 /* VervoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VervoApp.swift; sourceTree = "<group>"; };
 		A10000020000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A10000020000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000020000000000000004 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
-		A10000020000000000000005 /* verso-superdata.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "verso-superdata.entitlements"; sourceTree = "<group>"; };
-		A10000030000000000000001 /* verso-superdata.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "verso-superdata.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000020000000000000005 /* Vervo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Vervo.entitlements"; sourceTree = "<group>"; };
+		A10000030000000000000001 /* Vervo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Vervo.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -36,27 +36,27 @@
 		A10000050000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				A10000050000000000000002 /* verso-superdata */,
+				A10000050000000000000002 /* Vervo */,
 				A10000050000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A10000050000000000000002 /* verso-superdata */ = {
+		A10000050000000000000002 /* Vervo */ = {
 			isa = PBXGroup;
 			children = (
-				A10000020000000000000001 /* verso_superdataApp.swift */,
+				A10000020000000000000001 /* VervoApp.swift */,
 				A10000020000000000000002 /* ContentView.swift */,
 				A10000020000000000000003 /* Assets.xcassets */,
-				A10000020000000000000005 /* verso-superdata.entitlements */,
+				A10000020000000000000005 /* Vervo.entitlements */,
 				A10000050000000000000004 /* Preview Content */,
 			);
-			path = "verso-superdata";
+			path = "Vervo";
 			sourceTree = "<group>";
 		};
 		A10000050000000000000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A10000030000000000000001 /* verso-superdata.app */,
+				A10000030000000000000001 /* Vervo.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -72,9 +72,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A10000060000000000000001 /* verso-superdata */ = {
+		A10000060000000000000001 /* Vervo */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A10000080000000000000001 /* Build configuration list for PBXNativeTarget "verso-superdata" */;
+			buildConfigurationList = A10000080000000000000001 /* Build configuration list for PBXNativeTarget "Vervo" */;
 			buildPhases = (
 				A10000070000000000000001 /* Sources */,
 				A10000040000000000000001 /* Frameworks */,
@@ -84,9 +84,9 @@
 			);
 			dependencies = (
 			);
-			name = "verso-superdata";
-			productName = "verso-superdata";
-			productReference = A10000030000000000000001 /* verso-superdata.app */;
+			name = "Vervo";
+			productName = "Vervo";
+			productReference = A10000030000000000000001 /* Vervo.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -104,7 +104,7 @@
 					};
 				};
 			};
-			buildConfigurationList = A10000080000000000000002 /* Build configuration list for PBXProject "verso-superdata" */;
+			buildConfigurationList = A10000080000000000000002 /* Build configuration list for PBXProject "Vervo" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -117,7 +117,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A10000060000000000000001 /* verso-superdata */,
+				A10000060000000000000001 /* Vervo */,
 			);
 		};
 /* End PBXProject section */
@@ -140,7 +140,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000010000000000000002 /* ContentView.swift in Sources */,
-				A10000010000000000000001 /* verso_superdataApp.swift in Sources */,
+				A10000010000000000000001 /* VervoApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -268,11 +268,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "verso-superdata/verso-superdata.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "Vervo/Vervo.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"verso-superdata/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"Vervo/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -281,7 +281,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.verso.verso-superdata";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vervo.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -293,11 +293,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "verso-superdata/verso-superdata.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "Vervo/Vervo.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"verso-superdata/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"Vervo/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -306,7 +306,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.verso.verso-superdata";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vervo.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -316,7 +316,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000080000000000000002 /* Build configuration list for PBXProject "verso-superdata" */ = {
+		A10000080000000000000002 /* Build configuration list for PBXProject "Vervo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A100000A0000000000000001 /* Debug */,
@@ -325,7 +325,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A10000080000000000000001 /* Build configuration list for PBXNativeTarget "verso-superdata" */ = {
+		A10000080000000000000001 /* Build configuration list for PBXNativeTarget "Vervo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A100000A0000000000000003 /* Debug */,

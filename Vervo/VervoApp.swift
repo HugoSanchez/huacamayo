@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 @main
-struct verso_superdataApp: App {
+struct VervoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
