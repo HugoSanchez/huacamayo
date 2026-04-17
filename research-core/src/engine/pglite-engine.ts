@@ -18,6 +18,8 @@ import type {
   BrainStats, BrainHealth,
   IngestLogEntry, IngestLogInput,
   EngineConfig,
+  Source, SourceInput,
+  Context, ContextInput,
 } from './types.ts';
 import { validateSlug, contentHash, rowToPage, rowToChunk, rowToSearchResult } from './utils.ts';
 
@@ -80,7 +82,7 @@ export class PGLiteEngine implements BrainEngine {
   // Pages CRUD
   async getPage(slug: string): Promise<Page | null> {
     const { rows } = await this.db.query(
-      `SELECT id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at
+      `SELECT id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, source_id, created_at, updated_at
        FROM pages WHERE slug = $1`,
       [slug]
     );
@@ -92,10 +94,11 @@ export class PGLiteEngine implements BrainEngine {
     slug = validateSlug(slug);
     const hash = page.content_hash || contentHash(page.compiled_truth, page.timeline || '');
     const frontmatter = page.frontmatter || {};
+    const sourceId = page.source_id || null;
 
     const { rows } = await this.db.query(
-      `INSERT INTO pages (slug, type, title, compiled_truth, timeline, frontmatter, content_hash, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
+      `INSERT INTO pages (slug, type, title, compiled_truth, timeline, frontmatter, content_hash, source_id, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, now())
        ON CONFLICT (slug) DO UPDATE SET
          type = EXCLUDED.type,
          title = EXCLUDED.title,
@@ -103,9 +106,10 @@ export class PGLiteEngine implements BrainEngine {
          timeline = EXCLUDED.timeline,
          frontmatter = EXCLUDED.frontmatter,
          content_hash = EXCLUDED.content_hash,
+         source_id = COALESCE(EXCLUDED.source_id, pages.source_id),
          updated_at = now()
-       RETURNING id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, created_at, updated_at`,
-      [slug, page.type, page.title, page.compiled_truth, page.timeline || '', JSON.stringify(frontmatter), hash]
+       RETURNING id, slug, type, title, compiled_truth, timeline, frontmatter, content_hash, source_id, created_at, updated_at`,
+      [slug, page.type, page.title, page.compiled_truth, page.timeline || '', JSON.stringify(frontmatter), hash, sourceId]
     );
     return rowToPage(rows[0] as Record<string, unknown>);
   }
@@ -179,6 +183,12 @@ export class PGLiteEngine implements BrainEngine {
       console.warn(`[gbrain] Warning: search limit clamped from ${opts.limit} to ${MAX_SEARCH_LIMIT}`);
     }
 
+    const contextFilter = opts?.contextId
+      ? `AND p.source_id IN (SELECT source_id FROM context_sources WHERE context_id = $4)`
+      : '';
+    const params: unknown[] = [query, limit, offset];
+    if (opts?.contextId) params.push(opts.contextId);
+
     const { rows } = await this.db.query(
       `SELECT
         p.slug, p.id as page_id, p.title, p.type,
@@ -189,11 +199,11 @@ export class PGLiteEngine implements BrainEngine {
         ) THEN true ELSE false END AS stale
       FROM pages p
       JOIN content_chunks cc ON cc.page_id = p.id
-      WHERE p.search_vector @@ websearch_to_tsquery('english', $1) ${detailFilter}
+      WHERE p.search_vector @@ websearch_to_tsquery('english', $1) ${detailFilter} ${contextFilter}
       ORDER BY score DESC
       LIMIT $2
       OFFSET $3`,
-      [query, limit, offset]
+      params
     );
 
     return (rows as Record<string, unknown>[]).map(rowToSearchResult);
@@ -209,6 +219,12 @@ export class PGLiteEngine implements BrainEngine {
       console.warn(`[gbrain] Warning: search limit clamped from ${opts.limit} to ${MAX_SEARCH_LIMIT}`);
     }
 
+    const contextFilter = opts?.contextId
+      ? `AND p.source_id IN (SELECT source_id FROM context_sources WHERE context_id = $4)`
+      : '';
+    const params: unknown[] = [vecStr, limit, offset];
+    if (opts?.contextId) params.push(opts.contextId);
+
     const { rows } = await this.db.query(
       `SELECT
         p.slug, p.id as page_id, p.title, p.type,
@@ -219,11 +235,11 @@ export class PGLiteEngine implements BrainEngine {
         ) THEN true ELSE false END AS stale
       FROM content_chunks cc
       JOIN pages p ON p.id = cc.page_id
-      WHERE cc.embedding IS NOT NULL ${detailFilter}
+      WHERE cc.embedding IS NOT NULL ${detailFilter} ${contextFilter}
       ORDER BY cc.embedding <=> $1::vector
       LIMIT $2
       OFFSET $3`,
-      [vecStr, limit, offset]
+      params
     );
 
     return (rows as Record<string, unknown>[]).map(rowToSearchResult);
@@ -428,6 +444,11 @@ export class PGLiteEngine implements BrainEngine {
        ORDER BY tag`,
       [slug]
     );
+    return (rows as { tag: string }[]).map(r => r.tag);
+  }
+
+  async listAllTags(): Promise<string[]> {
+    const { rows } = await this.db.query('SELECT DISTINCT tag FROM tags ORDER BY tag');
     return (rows as { tag: string }[]).map(r => r.tag);
   }
 
@@ -671,6 +692,116 @@ export class PGLiteEngine implements BrainEngine {
   // Migration support
   async runMigration(_version: number, sql: string): Promise<void> {
     await this.db.exec(sql);
+  }
+
+  // Sources
+  async createSource(input: SourceInput): Promise<Source> {
+    const id = input.id || crypto.randomUUID();
+    const { rows } = await this.db.query(
+      `INSERT INTO sources (id, type, name, location, include_globs, exclude_globs, config)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       RETURNING *`,
+      [
+        id,
+        input.type || 'folder',
+        input.name || '',
+        input.location,
+        input.include_globs || ['**/*.md', '**/*.pdf'],
+        input.exclude_globs || [],
+        JSON.stringify(input.config || {}),
+      ]
+    );
+    return rows[0] as unknown as Source;
+  }
+
+  async getSource(id: string): Promise<Source | null> {
+    const { rows } = await this.db.query('SELECT * FROM sources WHERE id = $1', [id]);
+    return rows.length > 0 ? (rows[0] as unknown as Source) : null;
+  }
+
+  async listSources(): Promise<Source[]> {
+    const { rows } = await this.db.query('SELECT * FROM sources ORDER BY created_at DESC');
+    return rows as unknown as Source[];
+  }
+
+  async updateSourceStatus(id: string, status: string): Promise<void> {
+    await this.db.query(
+      'UPDATE sources SET status = $1, updated_at = now() WHERE id = $2',
+      [status, id]
+    );
+  }
+
+  async deleteSource(id: string): Promise<void> {
+    await this.db.query('DELETE FROM sources WHERE id = $1', [id]);
+  }
+
+  // Contexts
+  async createContext(input: ContextInput): Promise<Context> {
+    const id = input.id || crypto.randomUUID();
+    const { rows } = await this.db.query(
+      `INSERT INTO contexts (id, name, description)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [id, input.name, input.description || '']
+    );
+
+    // Add source memberships
+    if (input.source_ids && input.source_ids.length > 0) {
+      for (const sourceId of input.source_ids) {
+        await this.db.query(
+          'INSERT INTO context_sources (context_id, source_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [id, sourceId]
+        );
+      }
+    }
+
+    const sourceIds = await this.getContextSourceIds(id);
+    const ctx = rows[0] as Record<string, unknown>;
+    return { ...ctx, source_ids: sourceIds } as unknown as Context;
+  }
+
+  async getContext(id: string): Promise<Context | null> {
+    const { rows } = await this.db.query('SELECT * FROM contexts WHERE id = $1', [id]);
+    if (rows.length === 0) return null;
+    const sourceIds = await this.getContextSourceIds(id);
+    const ctx = rows[0] as Record<string, unknown>;
+    return { ...ctx, source_ids: sourceIds } as unknown as Context;
+  }
+
+  async listContexts(): Promise<Context[]> {
+    const { rows } = await this.db.query('SELECT * FROM contexts ORDER BY created_at DESC');
+    const contexts: Context[] = [];
+    for (const row of rows as Record<string, unknown>[]) {
+      const sourceIds = await this.getContextSourceIds(row.id as string);
+      contexts.push({ ...row, source_ids: sourceIds } as unknown as Context);
+    }
+    return contexts;
+  }
+
+  async deleteContext(id: string): Promise<void> {
+    await this.db.query('DELETE FROM contexts WHERE id = $1', [id]);
+  }
+
+  async addSourceToContext(contextId: string, sourceId: string): Promise<void> {
+    await this.db.query(
+      'INSERT INTO context_sources (context_id, source_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [contextId, sourceId]
+    );
+  }
+
+  async removeSourceFromContext(contextId: string, sourceId: string): Promise<void> {
+    await this.db.query(
+      'DELETE FROM context_sources WHERE context_id = $1 AND source_id = $2',
+      [contextId, sourceId]
+    );
+  }
+
+  async getContextSourceIds(contextId: string): Promise<string[]> {
+    const { rows } = await this.db.query(
+      'SELECT source_id FROM context_sources WHERE context_id = $1 ORDER BY source_id',
+      [contextId]
+    );
+    return (rows as { source_id: string }[]).map(r => r.source_id);
   }
 
   async getChunksWithEmbeddings(slug: string): Promise<Chunk[]> {

@@ -82,6 +82,49 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 5,
+    name: 'sources_and_contexts',
+    sql: `
+      -- Sources: a connected data location (folder, drive, etc.)
+      CREATE TABLE IF NOT EXISTS sources (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL DEFAULT 'folder',
+        name TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL,
+        include_globs TEXT[] NOT NULL DEFAULT ARRAY['**/*.md', '**/*.pdf'],
+        exclude_globs TEXT[] NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'active',
+        last_scan_at TIMESTAMPTZ,
+        config JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      -- Contexts: named views over a set of sources
+      CREATE TABLE IF NOT EXISTS contexts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      -- Many-to-many join: which sources belong to which contexts
+      CREATE TABLE IF NOT EXISTS context_sources (
+        context_id TEXT NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        PRIMARY KEY (context_id, source_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_context_sources_context ON context_sources(context_id);
+      CREATE INDEX IF NOT EXISTS idx_context_sources_source ON context_sources(source_id);
+
+      -- Add source_id to pages for provenance tracking (nullable for existing pages)
+      ALTER TABLE pages ADD COLUMN IF NOT EXISTS source_id TEXT REFERENCES sources(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_pages_source ON pages(source_id);
+    `,
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.length > 0

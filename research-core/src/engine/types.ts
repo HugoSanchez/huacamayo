@@ -10,6 +10,7 @@ export interface Page {
   timeline: string;
   frontmatter: Record<string, unknown>;
   content_hash?: string;
+  source_id?: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -21,6 +22,7 @@ export interface PageInput {
   timeline?: string;
   frontmatter?: Record<string, unknown>;
   content_hash?: string;
+  source_id?: string;
 }
 
 export interface PageFilters {
@@ -72,6 +74,8 @@ export interface SearchOpts {
   type?: PageType;
   exclude_slugs?: string[];
   detail?: 'low' | 'medium' | 'high';
+  /** Scope results to pages belonging to this context's sources */
+  contextId?: string;
 }
 
 // Links
@@ -166,6 +170,48 @@ export interface IngestLogInput {
   source_ref: string;
   pages_updated: string[];
   summary: string;
+}
+
+// Sources
+export interface Source {
+  id: string;
+  type: string;
+  name: string;
+  location: string;
+  include_globs: string[];
+  exclude_globs: string[];
+  status: string;
+  last_scan_at: Date | null;
+  config: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface SourceInput {
+  id?: string;
+  type?: string;
+  name?: string;
+  location: string;
+  include_globs?: string[];
+  exclude_globs?: string[];
+  config?: Record<string, unknown>;
+}
+
+// Contexts
+export interface Context {
+  id: string;
+  name: string;
+  description: string;
+  source_ids: string[];
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ContextInput {
+  id?: string;
+  name: string;
+  description?: string;
+  source_ids?: string[];
 }
 
 // Config
