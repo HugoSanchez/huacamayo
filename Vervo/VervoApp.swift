@@ -4,10 +4,12 @@ import AppKit
 @main
 struct VervoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var sidecar = SidecarManager()
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(sidecar: sidecar)
+                .onAppear { sidecar.start() }
         }
         .defaultSize(width: 1200, height: 750)
         .windowStyle(.hiddenTitleBar)
@@ -29,22 +31,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func windowDidBecomeMain(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else { return }
+        guard let window = notification.object as? NSWindow,
+              Self.isAppWindow(window) else { return }
         configureWindow(window)
     }
 
     private func configureExistingWindows() {
         // WindowGroup windows may appear on the next run-loop turn.
         DispatchQueue.main.async {
-            NSApplication.shared.windows.forEach { self.configureWindow($0) }
+            NSApplication.shared.windows
+                .filter { Self.isAppWindow($0) }
+                .forEach { self.configureWindow($0) }
         }
     }
 
+    /// Only configure our own content windows, not system panels (NSOpenPanel, NSSavePanel, alerts).
+    private static func isAppWindow(_ window: NSWindow) -> Bool {
+        !(window is NSPanel)
+    }
+
     private func configureWindow(_ window: NSWindow) {
-        // Remove the title bar entirely
+        // Remove the title bar but keep window capabilities
         window.styleMask.remove(.titled)
         window.styleMask.insert(.fullSizeContentView)
         window.styleMask.insert(.resizable)
+        window.styleMask.insert(.closable)
+        window.styleMask.insert(.miniaturizable)
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true

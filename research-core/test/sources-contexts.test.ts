@@ -62,11 +62,16 @@ describe('Sources and Contexts', () => {
       expect(source!.status).toBe('indexing');
     });
 
-    it('deletes a source', async () => {
+    it('deletes a source and its pages', async () => {
       await engine.createSource({ id: 'src-1', location: '/tmp/a' });
+      await engine.putPage('src1/doc', {
+        type: 'reference', title: 'Doc', compiled_truth: 'Content', source_id: 'src-1',
+      });
       await engine.deleteSource('src-1');
       const source = await engine.getSource('src-1');
       expect(source).toBeNull();
+      const page = await engine.getPage('src1/doc');
+      expect(page).toBeNull();
     });
   });
 

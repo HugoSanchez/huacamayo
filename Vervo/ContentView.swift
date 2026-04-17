@@ -85,9 +85,19 @@ private enum ConductorThemes {
 }
 
 struct ContentView: View {
+    @ObservedObject var sidecar: SidecarManager
+    @StateObject private var researchClient: ResearchClient
+    @StateObject private var sourceManager: SourceManager
     @AppStorage("isDarkMode") private var isDarkMode = true
     @AppStorage("isLeftSidebarExpanded") private var isLeftSidebarExpanded = true
     @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = true
+
+    init(sidecar: SidecarManager) {
+        self.sidecar = sidecar
+        let client = ResearchClient(sidecar: sidecar)
+        _researchClient = StateObject(wrappedValue: client)
+        _sourceManager = StateObject(wrappedValue: SourceManager(client: client))
+    }
 
     private var theme: ConductorThemePalette {
         isDarkMode ? ConductorThemes.dark : ConductorThemes.light
@@ -111,10 +121,19 @@ struct ContentView: View {
                     .padding(.bottom, 10)
                 }
 
+                if isLeftSidebarExpanded {
+                    SourceListView(
+                        sourceManager: sourceManager,
+                        iconColor: theme.footerIcon,
+                        dividerColor: theme.verticalDivider,
+                        isDarkMode: isDarkMode
+                    )
+                }
+
                 Spacer(minLength: 0)
 
                 if isLeftSidebarExpanded {
-                    SidebarFooter(isDarkMode: $isDarkMode, theme: theme)
+                    SidebarFooter(isDarkMode: $isDarkMode, sidecarState: sidecar.state, theme: theme)
                 }
             }
             .background(
@@ -220,6 +239,11 @@ struct ContentView: View {
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .ignoresSafeArea()
         .background(theme.mainCanvas)
+        .onChange(of: sidecar.state) { _, newState in
+            if case .running = newState {
+                Task { await sourceManager.refresh() }
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: ConductorThemePalette.windowCornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: ConductorThemePalette.windowCornerRadius, style: .continuous)
@@ -363,9 +387,14 @@ struct WindowControlButton: View {
             }
             .onHover { isHovered = $0 }
             .onTapGesture {
-                guard let window = NSApplication.shared.keyWindow else { return }
+                guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow ?? NSApplication.shared.windows.first else { return }
                 switch action {
-                case .close: window.close()
+                case .close:
+                    window.close()
+                    // If this was the last window, quit the app
+                    if NSApplication.shared.windows.filter({ $0.isVisible }).isEmpty {
+                        NSApplication.shared.terminate(nil)
+                    }
                 case .miniaturize: window.miniaturize(nil)
                 case .zoom: window.zoom(nil)
                 }
@@ -383,6 +412,7 @@ struct WindowControlButton: View {
 
 private struct SidebarFooter: View {
     @Binding var isDarkMode: Bool
+    let sidecarState: SidecarManager.State
     let theme: ConductorThemePalette
 
     var body: some View {
@@ -392,6 +422,17 @@ private struct SidebarFooter: View {
                 .frame(height: 1)
 
             HStack(spacing: 14) {
+                // Sidecar status dot
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(sidecarStatusColor)
+                        .frame(width: 7, height: 7)
+                    Text(sidecarStatusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.footerIcon)
+                }
+                .padding(.leading, 16)
+
                 Spacer()
 
                 Button(action: { isDarkMode.toggle() }) {
@@ -419,10 +460,28 @@ private struct SidebarFooter: View {
             .padding(.vertical, 10)
         }
     }
+
+    private var sidecarStatusColor: Color {
+        switch sidecarState {
+        case .idle: return .gray
+        case .starting: return .yellow
+        case .running: return .green
+        case .failed: return .red
+        }
+    }
+
+    private var sidecarStatusText: String {
+        switch sidecarState {
+        case .idle: return "Offline"
+        case .starting: return "Starting..."
+        case .running(let port): return "Port \(port)"
+        case .failed: return "Error"
+        }
+    }
 }
 
 #Preview {
-    ContentView()
+    ContentView(sidecar: SidecarManager())
         .frame(width: 1200, height: 750)
         .preferredColorScheme(.dark)
 }
