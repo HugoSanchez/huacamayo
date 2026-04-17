@@ -18,3 +18,8 @@ export {
   isAvailable as embeddingAvailable, isLoaded as embeddingLoaded,
   setModelPath, EMBEDDING_MODEL, EMBEDDING_DIMENSIONS,
 } from './engine/embedding.ts';
+export {
+  rerank, disposeReranker,
+  isRerankerAvailable, isRerankerLoaded,
+  setRerankerModelPath, RERANKER_MODEL,
+} from './engine/search/rerank.ts';

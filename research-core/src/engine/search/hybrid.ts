@@ -2,7 +2,7 @@
  * Hybrid Search with Reciprocal Rank Fusion (RRF)
  * Ported from production Ruby implementation (content_chunk.rb)
  *
- * Pipeline: keyword + vector → RRF fusion → normalize → boost → cosine re-score → dedup
+ * Pipeline: keyword + vector → RRF fusion → normalize → boost → cosine re-score → rerank → dedup
  *
  * RRF score = sum(1 / (60 + rank_in_list))
  * Compiled truth boost: 2.0x for compiled_truth chunks after RRF normalization
@@ -15,6 +15,7 @@ import type { SearchResult, SearchOpts } from '../types.ts';
 import { embed, isAvailable as embeddingAvailable } from '../embedding.ts';
 import { dedupResults } from './dedup.ts';
 import { autoDetectDetail } from './intent.ts';
+import { rerank, blendScores, isRerankerAvailable, type RerankInput } from './rerank.ts';
 
 const RRF_K = 60;
 const COMPILED_TRUTH_BOOST = 2.0;
@@ -23,6 +24,8 @@ const DEBUG = process.env.GBRAIN_SEARCH_DEBUG === '1';
 export interface HybridSearchOpts extends SearchOpts {
   expansion?: boolean;
   expandFn?: (query: string) => Promise<string[]>;
+  /** Enable cross-encoder reranking after RRF fusion (requires reranker model). */
+  rerank?: boolean;
   /** Override default RRF K constant (default: 60). Lower values boost top-ranked results more. */
   rrfK?: number;
   /** Override dedup pipeline parameters. */
@@ -96,6 +99,31 @@ export async function hybridSearch(
   // Cosine re-scoring before dedup so semantically better chunks survive
   if (queryEmbedding) {
     fused = await cosineReScore(engine, fused, queryEmbedding);
+  }
+
+  // Cross-encoder reranking (opt-in, requires model)
+  if (opts?.rerank && isRerankerAvailable() && fused.length > 0) {
+    try {
+      const inputs: RerankInput[] = fused.map(r => ({
+        text: r.chunk_text,
+        result: r,
+      }));
+      const reranked = await rerank(query, inputs);
+      const scoreMap = new Map(reranked.map(r => [
+        `${r.result.slug}:${r.result.chunk_id ?? r.result.chunk_text.slice(0, 50)}`,
+        r.score,
+      ]));
+      fused = blendScores(fused, scoreMap);
+
+      if (DEBUG) {
+        for (const r of fused.slice(0, 5)) {
+          console.error(`[search-debug] reranked ${r.slug}:${r.chunk_id} score=${r.score.toFixed(4)}`);
+        }
+      }
+    } catch (e) {
+      // Reranking failure is non-fatal
+      if (DEBUG) console.error(`[search-debug] rerank failed: ${e}`);
+    }
   }
 
   // Dedup
