@@ -11,6 +11,14 @@
 		A10000010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000002 /* ContentView.swift */; };
 		A10000010000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000003 /* Assets.xcassets */; };
 		A10000010000000000000004 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000004 /* Preview Assets.xcassets */; };
+		A10000010000000000000005 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000006 /* SidecarManager.swift */; };
+		A10000010000000000000006 /* ResearchClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000007 /* ResearchClient.swift */; };
+		A10000010000000000000007 /* SourceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000008 /* SourceManager.swift */; };
+		A10000010000000000000008 /* SourceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000009 /* SourceListView.swift */; };
+		A10000010000000000000009 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000A /* ModelManager.swift */; };
+		A1000001000000000000000A /* ModelSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000B /* ModelSetupView.swift */; };
+		A1000001000000000000000B /* ChatWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000C /* ChatWebView.swift */; };
+		A1000001000000000000000C /* chat-ui in Resources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000D /* chat-ui */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -19,6 +27,14 @@
 		A10000020000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000020000000000000004 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		A10000020000000000000005 /* Vervo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Vervo.entitlements"; sourceTree = "<group>"; };
+		A10000020000000000000006 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
+		A10000020000000000000007 /* ResearchClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchClient.swift; sourceTree = "<group>"; };
+		A10000020000000000000008 /* SourceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManager.swift; sourceTree = "<group>"; };
+		A10000020000000000000009 /* SourceListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceListView.swift; sourceTree = "<group>"; };
+		A1000002000000000000000A /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
+		A1000002000000000000000B /* ModelSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSetupView.swift; sourceTree = "<group>"; };
+		A1000002000000000000000C /* ChatWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebView.swift; sourceTree = "<group>"; };
+		A1000002000000000000000D /* chat-ui */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "chat-ui"; sourceTree = "<group>"; };
 		A10000030000000000000001 /* Vervo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Vervo.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -46,6 +62,14 @@
 			children = (
 				A10000020000000000000001 /* VervoApp.swift */,
 				A10000020000000000000002 /* ContentView.swift */,
+				A10000020000000000000006 /* SidecarManager.swift */,
+				A10000020000000000000007 /* ResearchClient.swift */,
+				A10000020000000000000008 /* SourceManager.swift */,
+				A10000020000000000000009 /* SourceListView.swift */,
+				A1000002000000000000000A /* ModelManager.swift */,
+				A1000002000000000000000B /* ModelSetupView.swift */,
+				A1000002000000000000000C /* ChatWebView.swift */,
+				A1000002000000000000000D /* chat-ui */,
 				A10000020000000000000003 /* Assets.xcassets */,
 				A10000020000000000000005 /* Vervo.entitlements */,
 				A10000050000000000000004 /* Preview Content */,
@@ -76,6 +100,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A10000080000000000000001 /* Build configuration list for PBXNativeTarget "Vervo" */;
 			buildPhases = (
+				A100000B0000000000000001 /* Build Chat UI */,
 				A10000070000000000000001 /* Sources */,
 				A10000040000000000000001 /* Frameworks */,
 				A10000070000000000000002 /* Resources */,
@@ -122,6 +147,24 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A100000B0000000000000001 /* Build Chat UI */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Chat UI";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "export PATH=\"/usr/local/bin:/opt/homebrew/bin:$PATH\"\ncd \"$SRCROOT/chat-ui\"\nif [ ! -d node_modules ]; then\n  npm install\nfi\nnpm run build\nrm -rf \"$SRCROOT/Vervo/chat-ui\"\ncp -r dist \"$SRCROOT/Vervo/chat-ui\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXResourcesBuildPhase section */
 		A10000070000000000000002 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
@@ -129,6 +172,7 @@
 			files = (
 				A10000010000000000000004 /* Preview Assets.xcassets in Resources */,
 				A10000010000000000000003 /* Assets.xcassets in Resources */,
+				A1000001000000000000000C /* chat-ui in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -141,6 +185,13 @@
 			files = (
 				A10000010000000000000002 /* ContentView.swift in Sources */,
 				A10000010000000000000001 /* VervoApp.swift in Sources */,
+				A10000010000000000000005 /* SidecarManager.swift in Sources */,
+				A10000010000000000000006 /* ResearchClient.swift in Sources */,
+				A10000010000000000000007 /* SourceManager.swift in Sources */,
+				A10000010000000000000008 /* SourceListView.swift in Sources */,
+				A10000010000000000000009 /* ModelManager.swift in Sources */,
+				A1000001000000000000000A /* ModelSetupView.swift in Sources */,
+				A1000001000000000000000B /* ChatWebView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -184,7 +235,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -246,7 +297,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;

@@ -15,12 +15,44 @@ import {
   disposeReranker, RERANKER_MODEL,
 } from '../engine/search/rerank.ts';
 import { route, dispatch, json, type Route } from './router.ts';
+import { buildAgentRoutes } from './agent.ts';
+import { RESEARCH_CORE_MCP_TOOL_NAMES } from '../mcp/server.ts';
 
-function buildRoutes(engine: BrainEngine): Route[] {
+function buildRoutes(
+  engine: BrainEngine,
+  runtime: { databasePath?: string } = {},
+): Route[] {
   return [
     // Health
     route('GET', '/health', async (_req, res) => {
       json(res, 200, { status: 'ok', timestamp: Date.now() });
+    }),
+
+    // Runtime diagnostics (DB + MCP declaration + engine health snapshot)
+    route('GET', '/diagnostics', async (_req, res) => {
+      const [stats, health] = await Promise.all([
+        engine.getStats(),
+        engine.getHealth(),
+      ]);
+
+      json(res, 200, {
+        status: 'ok',
+        timestamp: Date.now(),
+        runtime: {
+          pid: process.pid,
+          cwd: process.cwd(),
+          databasePath: runtime.databasePath ?? null,
+        },
+        mcp: {
+          mode: 'in_process_sdk',
+          server: 'research-core',
+          declaredTools: [...RESEARCH_CORE_MCP_TOOL_NAMES],
+        },
+        engine: {
+          stats,
+          health,
+        },
+      });
     }),
 
     // --- Pages ---
@@ -197,19 +229,29 @@ function buildRoutes(engine: BrainEngine): Route[] {
   ];
 }
 
-export async function startServer(opts: { port?: number } = {}): Promise<{
+export async function startServer(opts: {
+  port?: number;
+  databasePath?: string;
+  skipConfig?: boolean;
+} = {}): Promise<{
   server: http.Server;
   engine: BrainEngine;
   port: number;
 }> {
-  const config = loadConfig() || { engine: 'pglite' as const };
+  const config = (opts.skipConfig ? null : loadConfig()) || { engine: 'pglite' as const };
   const engineConfig = toEngineConfig(config);
+  if (opts.databasePath !== undefined) {
+    engineConfig.database_path = opts.databasePath;
+  }
 
   const engine = await createEngine(engineConfig);
   await engine.connect(engineConfig);
   await engine.initSchema();
 
-  const routes = buildRoutes(engine);
+  const routes = [
+    ...buildRoutes(engine, { databasePath: engineConfig.database_path }),
+    ...buildAgentRoutes(engine, { databasePath: engineConfig.database_path }),
+  ];
   const server = http.createServer((req, res) => {
     dispatch(routes, req, res);
   });
@@ -233,7 +275,14 @@ const isMain = process.argv[1] && (
 if (isMain) {
   startServer().then(({ server, engine, port }) => {
     // Structured JSON line for the Swift app to parse
-    console.log(JSON.stringify({ port, status: 'ready' }));
+    const config = loadConfig() || { engine: 'pglite' as const };
+    const engineConfig = toEngineConfig(config);
+    console.log(JSON.stringify({
+      port,
+      status: 'ready',
+      databasePath: engineConfig.database_path ?? null,
+      pid: process.pid,
+    }));
 
     const shutdown = async () => {
       server.close();
@@ -245,8 +294,64 @@ if (isMain) {
 
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
-  }).catch((err) => {
-    console.error(JSON.stringify({ status: 'error', message: err.message }));
+  }).catch((err: unknown) => {
+    console.error(JSON.stringify(classifyStartupError(err)));
     process.exit(1);
   });
+}
+
+function classifyStartupError(err: unknown): {
+  status: 'error';
+  code: 'db_corrupt' | 'db_locked' | 'migration_failed' | 'unknown';
+  message: string;
+  recoverable: boolean;
+  details?: string;
+} {
+  const message = err instanceof Error ? err.message : String(err);
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes('tuple already updated by self')) {
+    return {
+      status: 'error',
+      code: 'db_corrupt',
+      message: 'Local database appears corrupted during migration.',
+      recoverable: true,
+      details: message,
+    };
+  }
+
+  if (
+    normalized.includes('timed out waiting for pglite lock') ||
+    normalized.includes('could not acquire pglite lock')
+  ) {
+    return {
+      status: 'error',
+      code: 'db_locked',
+      message: 'Database is locked by another process.',
+      recoverable: false,
+      details: message,
+    };
+  }
+
+  if (
+    normalized.includes('migration') ||
+    normalized.includes('idx_chunks_page_index') ||
+    normalized.includes('content_chunks')
+  ) {
+    return {
+      status: 'error',
+      code: 'migration_failed',
+      message: 'Database migration failed during startup.',
+      recoverable: true,
+      details: message,
+    };
+  }
+
+  return {
+    status: 'error',
+    code: 'unknown',
+    message,
+    recoverable: false,
+    details: message,
+  };
 }

@@ -732,6 +732,8 @@ export class PGLiteEngine implements BrainEngine {
   }
 
   async deleteSource(id: string): Promise<void> {
+    // Delete all pages belonging to this source, then the source itself
+    await this.db.query('DELETE FROM pages WHERE source_id = $1', [id]);
     await this.db.query('DELETE FROM sources WHERE id = $1', [id]);
   }
 
