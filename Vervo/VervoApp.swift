@@ -5,11 +5,23 @@ import AppKit
 struct VervoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var sidecar = SidecarManager()
+    @StateObject private var modelManager = ModelManager()
 
     var body: some Scene {
         WindowGroup {
-            ContentView(sidecar: sidecar)
-                .onAppear { sidecar.start() }
+            Group {
+                if modelManager.status == .ready {
+                    ContentView(sidecar: sidecar)
+                        .onAppear { sidecar.start() }
+                } else {
+                    ModelSetupView(modelManager: modelManager)
+                }
+            }
+            .onAppear {
+                // Launch with -forceModelSetup to show the wizard even when models exist
+                let force = CommandLine.arguments.contains("-forceModelSetup")
+                modelManager.checkModels(forceNeedsDownload: force)
+            }
         }
         .defaultSize(width: 1200, height: 750)
         .windowStyle(.hiddenTitleBar)

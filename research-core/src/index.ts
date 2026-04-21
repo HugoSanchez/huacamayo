@@ -25,3 +25,4 @@ export {
   isRerankerAvailable, isRerankerLoaded,
   setRerankerModelPath, RERANKER_MODEL,
 } from './engine/search/rerank.ts';
+export { createMcpServer, startMcpServer } from './mcp/server.ts';

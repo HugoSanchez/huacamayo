@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "research-core": {
+      "command": "research-core/node_modules/.bin/tsx",
+      "args": ["src/mcp/server.ts"],
+      "cwd": "research-core",
+      "env": {}
+    }
+  }
+}

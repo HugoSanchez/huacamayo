@@ -103,8 +103,13 @@ struct ContentView: View {
         isDarkMode ? ConductorThemes.dark : ConductorThemes.light
     }
 
+    private var sidecarPort: Int? {
+        if case .running(let port) = sidecar.state { return port }
+        return nil
+    }
+
     private var leftSidebarWidth: CGFloat {
-        isLeftSidebarExpanded ? 280 : 0
+        isLeftSidebarExpanded ? 320 : 0
     }
 
     var body: some View {
@@ -162,22 +167,11 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 MainHeaderScaffold(theme: theme)
 
-                // Scrollable content area
-                theme.mainCanvas
-
-                // Input bar
-                VStack(spacing: 0) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(theme.inputFill)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(theme.inputStroke, lineWidth: 1)
-                        )
-                        .frame(height: 80)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                }
-                .background(theme.mainCanvas)
+                // Chat WebView
+                ChatWebView(
+                    sidecarPort: sidecarPort,
+                    isDarkMode: isDarkMode
+                )
             }
             .overlay(alignment: .topLeading) {
                 if !isLeftSidebarExpanded {
@@ -473,11 +467,12 @@ private struct SidebarFooter: View {
     private var sidecarStatusText: String {
         switch sidecarState {
         case .idle: return "Offline"
-        case .starting: return "Starting..."
-        case .running(let port): return "Port \(port)"
-        case .failed: return "Error"
+        case .starting: return "Connecting"
+        case .running: return "Connected"
+        case .failed: return "Connection error"
         }
     }
+
 }
 
 #Preview {

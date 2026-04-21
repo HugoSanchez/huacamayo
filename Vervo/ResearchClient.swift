@@ -157,6 +157,51 @@ final class ResearchClient: ObservableObject {
         try await get("/embedding/status")
     }
 
+    // MARK: - Agent
+
+    /// Stream an agent query via SSE. Calls `onEvent` for each SSE message on the main actor.
+    func agentQuery(
+        prompt: String,
+        sessionId: String? = nil,
+        contextId: String? = nil,
+        onEvent: @escaping ([String: Any]) -> Void
+    ) async throws {
+        let url = try baseURL.appendingPathComponent("/agent/query")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 300 // agent queries can be long
+        var body: [String: Any] = ["prompt": prompt]
+        if let sessionId { body["sessionId"] = sessionId }
+        if let contextId { body["contextId"] = contextId }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (stream, response) = try await URLSession.shared.bytes(for: req)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw ResearchClientError.httpError(code, "Agent query failed")
+        }
+
+        for try await line in stream.lines {
+            guard line.hasPrefix("data: ") else { continue }
+            let jsonStr = String(line.dropFirst(6))
+            guard let data = jsonStr.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            onEvent(parsed)
+        }
+    }
+
+    func agentStop() async throws {
+        let _: [String: Any] = try await request("POST", path: "/agent/stop")
+    }
+
+    func agentStatus() async throws -> [String: Any] {
+        try await get("/agent/status")
+    }
+
     // MARK: - Private
 
     private func get<T>(_ path: String) async throws -> T {

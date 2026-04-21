@@ -69,9 +69,21 @@ export function route(method: string, path: string, handler: RouteHandler): Rout
 
 /** Dispatch a request to the matching route. */
 export async function dispatch(routes: Route[], req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // CORS headers — allow the WKWebView (file:// origin) to call the sidecar
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
   const method = req.method?.toUpperCase() || 'GET';
+
+  // Handle CORS preflight
+  if (method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
 
   for (const r of routes) {
     if (r.method !== method) continue;

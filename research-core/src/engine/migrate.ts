@@ -53,8 +53,14 @@ const MIGRATIONS: Migration[] = [
     name: 'unique_chunk_index',
     sql: `
       -- Deduplicate any existing duplicate (page_id, chunk_index) rows before adding constraint
-      DELETE FROM content_chunks a USING content_chunks b
-        WHERE a.page_id = b.page_id AND a.chunk_index = b.chunk_index AND a.id > b.id;
+      WITH ranked AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (PARTITION BY page_id, chunk_index ORDER BY id ASC) AS rn
+        FROM content_chunks
+      )
+      DELETE FROM content_chunks
+      WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_page_index ON content_chunks(page_id, chunk_index);
     `,
   },

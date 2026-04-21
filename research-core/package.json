@@ -8,11 +8,14 @@
     "dev": "bun run --watch src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "serve": "bun run src/http/server.ts",
+    "mcp": "bun run src/mcp/server.ts",
     "test": "vitest run",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@electric-sql/pglite": "^0.4.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "gray-matter": "^4.0.3",
     "marked": "^18.0.0",
     "node-llama-cpp": "^3.18.1"
