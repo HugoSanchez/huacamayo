@@ -86,17 +86,12 @@ private enum ConductorThemes {
 
 struct ContentView: View {
     @ObservedObject var sidecar: SidecarManager
-    @StateObject private var researchClient: ResearchClient
-    @StateObject private var sourceManager: SourceManager
     @AppStorage("isDarkMode") private var isDarkMode = true
     @AppStorage("isLeftSidebarExpanded") private var isLeftSidebarExpanded = true
     @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = true
 
     init(sidecar: SidecarManager) {
         self.sidecar = sidecar
-        let client = ResearchClient(sidecar: sidecar)
-        _researchClient = StateObject(wrappedValue: client)
-        _sourceManager = StateObject(wrappedValue: SourceManager(client: client))
     }
 
     private var theme: ConductorThemePalette {
@@ -127,12 +122,7 @@ struct ContentView: View {
                 }
 
                 if isLeftSidebarExpanded {
-                    SourceListView(
-                        sourceManager: sourceManager,
-                        iconColor: theme.footerIcon,
-                        dividerColor: theme.verticalDivider,
-                        isDarkMode: isDarkMode
-                    )
+                    HermesSidebarPlaceholder(theme: theme, isDarkMode: isDarkMode)
                 }
 
                 Spacer(minLength: 0)
@@ -233,16 +223,65 @@ struct ContentView: View {
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .ignoresSafeArea()
         .background(theme.mainCanvas)
-        .onChange(of: sidecar.state) { _, newState in
-            if case .running = newState {
-                Task { await sourceManager.refresh() }
-            }
-        }
         .clipShape(RoundedRectangle(cornerRadius: ConductorThemePalette.windowCornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: ConductorThemePalette.windowCornerRadius, style: .continuous)
                 .strokeBorder(theme.windowBorder, lineWidth: 1)
         }
+    }
+}
+
+private struct HermesSidebarPlaceholder: View {
+    let theme: ConductorThemePalette
+    let isDarkMode: Bool
+
+    private var primaryText: Color {
+        isDarkMode ? Color.white.opacity(0.86) : Color.black.opacity(0.72)
+    }
+
+    private var secondaryText: Color {
+        isDarkMode ? Color.white.opacity(0.44) : Color.black.opacity(0.42)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Workspace")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(primaryText)
+
+            Text("Hermes-only mode")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(primaryText)
+
+            Text("Sources and tools are intentionally disconnected while the chat runtime is being rebuilt around Hermes.")
+                .font(.system(size: 12))
+                .foregroundStyle(secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(theme.inputFill.opacity(isDarkMode ? 0.62 : 0.92))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(theme.inputStroke, lineWidth: 1)
+                }
+                .overlay(alignment: .topLeading) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Next")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(primaryText)
+                        Text("Reconnect resources through a clean tool bridge after the Hermes chat spine is stable.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                }
+                .frame(height: 110)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 6)
     }
 }
 
@@ -475,8 +514,12 @@ private struct SidebarFooter: View {
 
 }
 
-#Preview {
-    ContentView(sidecar: SidecarManager())
-        .frame(width: 1200, height: 750)
-        .preferredColorScheme(.dark)
+#if DEBUG
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView(sidecar: SidecarManager())
+            .frame(width: 1200, height: 750)
+            .preferredColorScheme(.dark)
+    }
 }
+#endif

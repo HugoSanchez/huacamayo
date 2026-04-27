@@ -1,0 +1,21 @@
+{
+  "name": "vervo-sidecar",
+  "version": "0.1.0",
+  "description": "Thin local Hermes sidecar for the Vervo macOS app",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc --noEmit",
+    "serve": "tsx src/http/server.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.4"
+  }
+}

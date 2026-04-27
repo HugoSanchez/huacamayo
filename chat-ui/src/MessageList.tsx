@@ -25,7 +25,7 @@ export function MessageList({ messages }: Props) {
         color: 'var(--text-dim)',
         fontSize: '15px',
       }}>
-        Ask anything about your research
+        Ask Hermes anything
       </div>
     );
   }
@@ -151,14 +151,18 @@ function ActivityHeader({
       }}
     >
       {hasActivity && !message.isStreaming && (
-        <span style={{
-          display: 'inline-block',
-          transition: 'transform 120ms ease',
-          transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-          width: '10px',
-          fontSize: '12px',
-          fontFamily: 'inherit',
-        }}>{'>'}</span>
+        <svg
+          width="10" height="10" viewBox="0 0 10 10"
+          fill="none" stroke="currentColor" strokeWidth="1.75"
+          strokeLinecap="round" strokeLinejoin="round"
+          style={{
+            transition: 'transform 120ms ease',
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+            flexShrink: 0,
+          }}
+        >
+          <polyline points="3.5,2 7,5 3.5,8" />
+        </svg>
       )}
       {message.isStreaming ? <Spinner /> : <Dot />}
       <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatElapsed(elapsed)}</span>
@@ -211,7 +215,7 @@ function StepView({ step }: { step: ActivityStep }) {
 }
 
 function displayToolName(name: string): string {
-  // mcp__research-core__context_search → context_search
+  // namespace__tool_name -> tool_name
   const parts = name.split('__');
   return parts[parts.length - 1] || name;
 }
