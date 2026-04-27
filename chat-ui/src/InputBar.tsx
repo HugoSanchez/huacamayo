@@ -16,13 +16,14 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
       onStop();
       return;
     }
+    if (disabled) return;
     const trimmed = text.trim();
     if (!trimmed) return;
     onSend(trimmed);
     setText('');
     // Reset textarea height
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [text, isStreaming, onSend, onStop]);
+  }, [text, isStreaming, disabled, onSend, onStop]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -59,8 +60,7 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
           value={text}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'Waiting for sidecar...' : 'Ask about your research...'}
-          disabled={disabled}
+          placeholder={disabled ? 'Sidecar starting... you can type now, send when ready.' : 'Message Hermes...'}
           rows={2}
           style={{
             width: '100%',
