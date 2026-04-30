@@ -10,7 +10,7 @@
   --text: rgba(255, 255, 255, 0.88);
   --text-dim: rgba(255, 255, 255, 0.52);
   --accent: #6eb5ff;
-  --user-bubble: #2a3a4a;
+  --user-bubble: #34383d;
   --assistant-bg: transparent;
   --tool-bg: rgba(255, 255, 255, 0.04);
   --tool-border: rgba(255, 255, 255, 0.08);
@@ -38,7 +38,7 @@ html, body, #root {
     --text: rgba(0, 0, 0, 0.85);
     --text-dim: rgba(0, 0, 0, 0.52);
     --accent: #0066cc;
-    --user-bubble: #dce4ee;
+    --user-bubble: #e1e4e7;
     --assistant-bg: transparent;
     --tool-bg: rgba(0, 0, 0, 0.03);
     --tool-border: rgba(0, 0, 0, 0.08);

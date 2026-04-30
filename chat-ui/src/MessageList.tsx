@@ -51,8 +51,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     <div style={{
       display: 'flex',
       justifyContent: isUser ? 'flex-end' : 'flex-start',
-      marginBottom: isUser ? '20px' : '12px',
-      marginTop: isUser ? '20px' : '0',
+      marginBottom: isUser ? '28px' : '12px',
+      marginTop: isUser ? '28px' : '0',
     }}>
       <div style={{
         maxWidth: isUser ? '70%' : '100%',
