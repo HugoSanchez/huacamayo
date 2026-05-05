@@ -1,3 +1,8 @@
+import { existsSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 export interface RemoteBridgeSessionView {
   userId: string;
   sessionId: string;
@@ -73,6 +78,10 @@ export class RemoteBridgeHttpError extends Error {
 }
 
 export class RemoteComposioBridgeClient {
+  private static localBridgeProcess: ChildProcess | null = null;
+
+  private static localBridgeStartup: Promise<void> | null = null;
+
   private readonly baseUrl: string;
 
   private readonly token: string | null;
@@ -160,11 +169,17 @@ export class RemoteComposioBridgeClient {
     userId: string,
     toolSlug: string,
     arguments_: Record<string, unknown> | undefined,
+    connectedAccountId?: string,
   ): Promise<RemoteBridgeToolExecutionView> {
     const body = await this.request<{ result: RemoteBridgeToolExecutionView }>(
       'POST',
       '/v1/tools/execute',
-      { userId, toolSlug, arguments: arguments_ ?? {} },
+      {
+        userId,
+        toolSlug,
+        arguments: arguments_ ?? {},
+        ...(connectedAccountId ? { connectedAccountId } : {}),
+      },
     );
     return body.result;
   }
@@ -188,11 +203,25 @@ export class RemoteComposioBridgeClient {
       payload = JSON.stringify(body);
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      body: payload,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers,
+        body: payload,
+      });
+    } catch (error) {
+      await this.ensureLocalBridgeAvailable().catch(() => {});
+      try {
+        response = await fetch(`${this.baseUrl}${path}`, {
+          method,
+          headers,
+          body: payload,
+        });
+      } catch {
+        throw error;
+      }
+    }
 
     if (!response.ok) {
       const message = await readError(response, `${method} ${path} failed`);
@@ -200,6 +229,69 @@ export class RemoteComposioBridgeClient {
     }
 
     return response.json() as Promise<T>;
+  }
+
+  private async ensureLocalBridgeAvailable(): Promise<void> {
+    if (!this.canAutoStartLocalBridge()) return;
+    if (await isBridgeHealthy(this.baseUrl)) return;
+
+    if (!RemoteComposioBridgeClient.localBridgeStartup) {
+      RemoteComposioBridgeClient.localBridgeStartup = this.startLocalBridge()
+        .finally(() => {
+          RemoteComposioBridgeClient.localBridgeStartup = null;
+        });
+    }
+
+    await RemoteComposioBridgeClient.localBridgeStartup;
+  }
+
+  private canAutoStartLocalBridge(): boolean {
+    try {
+      const url = new URL(this.baseUrl);
+      return (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && Boolean(resolveLocalBridgeDir());
+    } catch {
+      return false;
+    }
+  }
+
+  private async startLocalBridge(): Promise<void> {
+    if (RemoteComposioBridgeClient.localBridgeProcess && await isBridgeHealthy(this.baseUrl)) {
+      return;
+    }
+
+    const bridgeDir = resolveLocalBridgeDir();
+    if (!bridgeDir) {
+      throw new RemoteBridgeHttpError(503, 'Local Composio bridge directory not found.');
+    }
+
+    const url = new URL(this.baseUrl);
+    const tsxBin = path.join(bridgeDir, 'node_modules/.bin/tsx');
+    if (!existsSync(tsxBin)) {
+      throw new RemoteBridgeHttpError(503, 'Local Composio bridge dependencies are missing.');
+    }
+
+    const child = spawn(process.execPath, [tsxBin, 'src/server.ts'], {
+      cwd: bridgeDir,
+      env: {
+        ...process.env,
+        PORT: url.port || '8787',
+      },
+      stdio: 'ignore',
+    });
+
+    RemoteComposioBridgeClient.localBridgeProcess = child;
+    registerBridgeProcessCleanup(child);
+
+    child.once('exit', () => {
+      if (RemoteComposioBridgeClient.localBridgeProcess === child) {
+        RemoteComposioBridgeClient.localBridgeProcess = null;
+      }
+    });
+
+    const healthy = await waitForBridgeHealth(this.baseUrl, 5000);
+    if (!healthy) {
+      throw new RemoteBridgeHttpError(503, 'Local Composio bridge failed to start.');
+    }
   }
 }
 
@@ -212,4 +304,51 @@ async function readError(response: Response, fallback: string): Promise<string> 
   } catch {
     return fallback;
   }
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let cleanupRegistered = false;
+
+function resolveLocalBridgeDir(): string | null {
+  const candidate = path.resolve(__dirname, '../../../composio-bridge');
+  return existsSync(candidate) ? candidate : null;
+}
+
+function registerBridgeProcessCleanup(child: ChildProcess): void {
+  if (cleanupRegistered) return;
+  cleanupRegistered = true;
+
+  const cleanup = () => {
+    if (RemoteComposioBridgeClient['localBridgeProcess'] === child && !child.killed) {
+      child.kill('SIGTERM');
+    }
+  };
+
+  process.once('exit', cleanup);
+  process.once('SIGINT', () => {
+    cleanup();
+    process.exit(130);
+  });
+  process.once('SIGTERM', () => {
+    cleanup();
+    process.exit(143);
+  });
+}
+
+async function isBridgeHealthy(baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForBridgeHealth(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isBridgeHealthy(baseUrl)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
 }

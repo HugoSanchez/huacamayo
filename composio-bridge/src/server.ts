@@ -113,7 +113,8 @@ function buildRoutes(service: ComposioBridgeBackendService): Route[] {
         const userId = getRequiredString(body, 'userId');
         const toolSlug = getRequiredString(body, 'toolSlug');
         const arguments_ = getOptionalRecord(body, 'arguments');
-        const result = await service.executeTool(userId, toolSlug, arguments_ ?? undefined);
+        const connectedAccountId = getOptionalString(body, 'connectedAccountId');
+        const result = await service.executeTool(userId, toolSlug, arguments_ ?? undefined, connectedAccountId);
         json(res, 200, { result });
       } catch (error: unknown) {
         handleError(res, error);
@@ -166,6 +167,13 @@ function getRequiredString(body: unknown, key: string): string {
     throw new BridgeHttpError(400, `Missing "${key}"`);
   }
   return value.trim();
+}
+
+function getOptionalString(body: unknown, key: string): string | undefined {
+  const value = body && typeof body === 'object' && !Array.isArray(body)
+    ? (body as Record<string, unknown>)[key]
+    : undefined;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function getRequiredParam(params: Record<string, string>, key: string): string {
