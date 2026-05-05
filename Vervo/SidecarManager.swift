@@ -103,9 +103,9 @@ final class SidecarManager: ObservableObject {
         logger.info("Launching sidecar: \(nodePath) \(tsxBin) src/http/server.ts")
         logger.info("Working directory: \(serverDir)")
         if let command = env["VERVO_HERMES_COMMAND"], !command.isEmpty {
-            logger.info("Hermes launch mode: managed command \(command)")
+            logger.info("Agent runtime launch mode: managed command \(command)")
         } else {
-            logger.info("Hermes launch mode: auto-detect installed CLI")
+            logger.info("Agent runtime launch mode: auto-detect installed CLI")
         }
 
         self.process = process

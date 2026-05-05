@@ -1,11 +1,15 @@
-import type { ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { json, route, type Route } from './router.ts';
 import {
   ChatStore,
   type ChatMessageRecord,
+  type ChatSessionRecord,
   type ChatSessionSummary,
 } from './chat-store.ts';
+import { HermesSessionsClient } from './hermes-sessions.ts';
 import { HermesSupervisor, type HermesGatewayConfig } from './hermes-supervisor.ts';
+import { ConnectionsService, type ConnectionRequestView } from '../integrations/composio.ts';
 
 type ChatStatus = 'idle' | 'running' | 'error';
 
@@ -19,7 +23,6 @@ interface ActiveChatRequest {
 
 class HermesHttpError extends Error {
   readonly status: number;
-
   readonly body: string;
 
   constructor(status: number, body: string, message: string) {
@@ -30,11 +33,17 @@ class HermesHttpError extends Error {
   }
 }
 
+type HermesEventPayload = Record<string, unknown> | null;
+
 let activeRequest: ActiveChatRequest | null = null;
 let chatStatus: ChatStatus = 'idle';
 let lastError: string | null = null;
 
-export function buildChatRoutes(store: ChatStore, hermes: HermesSupervisor): Route[] {
+export function buildChatRoutes(
+  store: ChatStore,
+  hermes: HermesSupervisor,
+  connections: ConnectionsService,
+): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
       const gateway = await hermes.getStatus();
@@ -56,7 +65,8 @@ export function buildChatRoutes(store: ChatStore, hermes: HermesSupervisor): Rou
     }),
 
     route('GET', '/chat/sessions', async (_req, res) => {
-      json(res, 200, { sessions: store.listSessions() });
+      const sessions = await hydrateSessionSummaries(store, hermes);
+      json(res, 200, { sessions });
     }),
 
     route('POST', '/chat/sessions', async (_req, res, _params, body) => {
@@ -68,24 +78,61 @@ export function buildChatRoutes(store: ChatStore, hermes: HermesSupervisor): Rou
     }),
 
     route('GET', '/chat/sessions/:id', async (_req, res, params) => {
-      const session = store.getSession(params.id);
-      if (!session) {
+      const record = store.getSessionRecord(params.id);
+      if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
+      const session = await hydrateSessionSummary(record, store, hermes);
       json(res, 200, { session });
     }),
 
     route('GET', '/chat/sessions/:id/messages', async (_req, res, params) => {
-      const messages = store.getMessages(params.id);
-      if (!messages) {
+      const record = store.getSessionRecord(params.id);
+      if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
+      const messages = await hydrateSessionMessages(record, store, hermes);
       json(res, 200, { messages });
     }),
 
-    route('POST', '/chat/sessions/:id/messages', async (_req, res, params, body) => {
-      const session = store.getSession(params.id);
-      if (!session) {
+    route('POST', '/chat/sessions/:id/rename', async (_req, res, params, body) => {
+      const title = typeof (body as { title?: unknown } | null)?.title === 'string'
+        ? ((body as { title?: string }).title ?? '').trim()
+        : '';
+      if (!title) {
+        return json(res, 400, { error: 'bad_request', message: 'Missing "title"' });
+      }
+
+      const record = store.renameSession(params.id, title);
+      if (!record) {
+        return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
+      }
+
+      const session = await hydrateSessionSummary(record, store, hermes);
+      json(res, 200, { session });
+    }),
+
+    route('POST', '/chat/sessions/:id/archive', async (_req, res, params) => {
+      const record = store.archiveSession(params.id);
+      if (!record) {
+        return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
+      }
+      const session = await hydrateSessionSummary(record, store, hermes);
+      json(res, 200, { session });
+    }),
+
+    route('POST', '/chat/sessions/:id/unarchive', async (_req, res, params) => {
+      const record = store.unarchiveSession(params.id);
+      if (!record) {
+        return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
+      }
+      const session = await hydrateSessionSummary(record, store, hermes);
+      json(res, 200, { session });
+    }),
+
+    route('POST', '/chat/sessions/:id/messages', async (req, res, params, body) => {
+      const record = store.getSessionRecord(params.id);
+      if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
 
@@ -100,11 +147,9 @@ export function buildChatRoutes(store: ChatStore, hermes: HermesSupervisor): Rou
         return json(res, 409, { error: 'conflict', message: 'A chat request is already running' });
       }
 
-      const priorMessages = store.getMessages(session.id) ?? [];
-      const userMessage = store.appendMessage(session.id, 'user', content);
-      if (!userMessage) {
-        return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
-      }
+      store.appendMessage(params.id, 'user', content);
+
+      const session = await hydrateSessionSummary(record, store, hermes);
 
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -118,10 +163,11 @@ export function buildChatRoutes(store: ChatStore, hermes: HermesSupervisor): Rou
       try {
         await runHermesMessage({
           session,
-          priorMessages,
+          sessionRecord: record,
           userPrompt: content,
           res,
-        }, store, hermes);
+          requestBaseUrl: requestBaseUrl(req),
+        }, store, hermes, connections);
       } catch (error: unknown) {
         if (isAbortError(error)) {
           sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
@@ -141,7 +187,7 @@ export function buildChatRoutes(store: ChatStore, hermes: HermesSupervisor): Rou
     }),
 
     route('POST', '/chat/sessions/:id/cancel', async (_req, res, params) => {
-      const session = store.getSession(params.id);
+      const session = store.getSessionRecord(params.id);
       if (!session) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
@@ -181,15 +227,141 @@ export function buildChatDiagnostics(store: ChatStore): {
   };
 }
 
+async function hydrateSessionSummaries(store: ChatStore, hermes: HermesSupervisor): Promise<ChatSessionSummary[]> {
+  const records = store.listSessionRecords();
+  const client = await maybeCreateHermesSessionsClient(records, hermes);
+  return Promise.all(records.map((record) => hydrateSessionSummaryRecord(record, store, client)));
+}
+
+async function hydrateSessionSummary(
+  record: ChatSessionRecord,
+  store: ChatStore,
+  hermes: HermesSupervisor,
+): Promise<ChatSessionSummary> {
+  const client = await maybeCreateHermesSessionsClient([record], hermes);
+  return hydrateSessionSummaryRecord(record, store, client);
+}
+
+async function hydrateSessionMessages(
+  record: ChatSessionRecord,
+  store: ChatStore,
+  hermes: HermesSupervisor,
+): Promise<ChatMessageRecord[]> {
+  const client = await maybeCreateHermesSessionsClient([record], hermes);
+  return loadSessionMessages(record, store, client);
+}
+
+async function maybeCreateHermesSessionsClient(
+  records: ChatSessionRecord[],
+  hermes: HermesSupervisor,
+): Promise<HermesSessionsClient | null> {
+  if (!records.some((record) => record.hermesSessionId)) return null;
+
+  try {
+    const config = await hermes.ensureReady();
+    return new HermesSessionsClient(config.baseUrl);
+  } catch {
+    return null;
+  }
+}
+
+async function hydrateSessionSummaryRecord(
+  record: ChatSessionRecord,
+  store: ChatStore,
+  client: HermesSessionsClient | null,
+): Promise<ChatSessionSummary> {
+  const [detail, messages] = await Promise.all([
+    loadHermesSessionDetail(record, client),
+    loadSessionMessages(record, store, client),
+  ]);
+  const lastMessage = messages[messages.length - 1];
+  const updatedAt = [
+    record.updatedAt,
+    lastMessage?.createdAt ?? null,
+    timestampToIso(detail?.last_active) ?? null,
+  ]
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? record.updatedAt;
+
+  return {
+    id: record.id,
+    title: resolveSessionTitle(record, detail),
+    createdAt: record.createdAt,
+    updatedAt,
+    archivedAt: record.archivedAt,
+    messageCount: messages.length,
+    lastMessagePreview: lastMessage ? preview(lastMessage.content) : null,
+  };
+}
+
+async function loadSessionMessages(
+  record: ChatSessionRecord,
+  store: ChatStore,
+  _client: HermesSessionsClient | null,
+): Promise<ChatMessageRecord[]> {
+  return store.getMessages(record.id) ?? [];
+}
+
+async function loadHermesVisibleMessages(
+  record: ChatSessionRecord,
+  client: HermesSessionsClient | null,
+): Promise<ChatMessageRecord[]> {
+  if (!record.hermesSessionId || !client) return [];
+
+  try {
+    const messages = await client.getSessionMessages(record.hermesSessionId);
+    if (!messages) return [];
+
+    return messages
+      .filter((message) =>
+        (message.role === 'user' || message.role === 'assistant')
+        && typeof message.content === 'string'
+        && message.content.trim().length > 0)
+      .map((message) => ({
+        id: `hermes:${record.hermesSessionId}:${message.id}`,
+        sessionId: record.id,
+        role: message.role as 'user' | 'assistant',
+        content: message.content ?? '',
+        createdAt: timestampToIso(message.timestamp) ?? new Date().toISOString(),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+async function loadHermesSessionDetail(
+  record: ChatSessionRecord,
+  client: HermesSessionsClient | null,
+): Promise<{ title?: string | null; last_active?: number } | null> {
+  if (!record.hermesSessionId || !client) return null;
+
+  try {
+    return await client.getSession(record.hermesSessionId);
+  } catch {
+    return null;
+  }
+}
+
+function resolveSessionTitle(
+  record: ChatSessionRecord,
+  detail: { title?: string | null } | null,
+): string {
+  const hermesTitle = typeof detail?.title === 'string' ? detail.title.trim() : '';
+  return hermesTitle || record.title;
+}
+
 async function runHermesMessage(
   opts: {
     session: ChatSessionSummary;
-    priorMessages: ChatMessageRecord[];
+    sessionRecord: ChatSessionRecord;
     userPrompt: string;
     res: ServerResponse;
+    requestBaseUrl: string;
   },
   store: ChatStore,
   hermes: HermesSupervisor,
+  connections: ConnectionsService,
 ): Promise<void> {
   const controller = new AbortController();
   const runtime = await hermes.getStatus(500);
@@ -204,11 +376,11 @@ async function runHermesMessage(
   }
 
   const config = await hermes.ensureReady(controller.signal);
-  const previousResponseId = store.getLastResponseId(opts.session.id);
+  const client = new HermesSessionsClient(config.baseUrl);
 
   activeRequest = {
     sessionId: opts.session.id,
-    responseId: previousResponseId,
+    responseId: null,
     gatewayUrl: config.baseUrl,
     startedAt: Date.now(),
     close: () => controller.abort(),
@@ -216,7 +388,8 @@ async function runHermesMessage(
 
   let streamedText = '';
   let finalText = '';
-  let completedResponseId: string | null = null;
+  let linkedHermesSessionId = opts.sessionRecord.hermesSessionId;
+  let sawConnectionToolCall = false;
 
   const handleEvent = (eventName: string, data: HermesEventPayload) => {
     if (eventName === 'response.created') {
@@ -252,6 +425,10 @@ async function runHermesMessage(
       if (!item) return;
 
       if (item.type === 'function_call') {
+        const toolName = typeof item.name === 'string' ? item.name : 'tool';
+        if (toolName === 'mcp_vervo_request_connection' || toolName === 'vervo_request_connection') {
+          sawConnectionToolCall = true;
+        }
         sendSSE(opts.res, {
           type: 'assistant',
           session_id: opts.session.id,
@@ -260,7 +437,7 @@ async function runHermesMessage(
             content: [{
               type: 'tool_use',
               id: typeof item.call_id === 'string' ? item.call_id : undefined,
-              name: typeof item.name === 'string' ? item.name : 'tool',
+              name: toolName,
               input: parseJsonMaybe(item.arguments),
             }],
           },
@@ -277,7 +454,7 @@ async function runHermesMessage(
             content: [{
               type: 'tool_result',
               tool_use_id: typeof item.call_id === 'string' ? item.call_id : undefined,
-              content: Array.isArray(item.output) ? item.output : [],
+              content: parseJsonMaybe(item.output),
             }],
           },
         });
@@ -286,7 +463,6 @@ async function runHermesMessage(
     }
 
     if (eventName === 'response.completed') {
-      completedResponseId = extractResponseId(data);
       finalText = extractFinalResponseText(data) || finalText || streamedText;
       return;
     }
@@ -299,32 +475,39 @@ async function runHermesMessage(
 
   try {
     await streamHermesConversation(config, {
+      conversation: opts.session.id,
       userPrompt: opts.userPrompt,
-      priorMessages: opts.priorMessages,
-      previousResponseId,
+      conversationHistory: null,
       signal: controller.signal,
+      onSessionId: (sessionId) => {
+        linkedHermesSessionId = sessionId;
+      },
       onEvent: handleEvent,
     });
   } catch (error: unknown) {
-    if (shouldRetryWithoutCursor(error, previousResponseId)) {
-      store.setLastResponseId(opts.session.id, null);
-      if (activeRequest) {
-        activeRequest.responseId = null;
-      }
+    if (shouldRetryWithoutCursor(error) && linkedHermesSessionId) {
       sendSSE(opts.res, {
         type: 'status',
         provider: 'hermes',
         session_id: opts.session.id,
         message: 'Recovering chat context',
       });
+
       streamedText = '';
       finalText = '';
-      completedResponseId = null;
+      const recoveryMessages = await loadHermesVisibleMessages({
+        ...opts.sessionRecord,
+        hermesSessionId: linkedHermesSessionId,
+      }, client);
+
       await streamHermesConversation(config, {
+        conversation: opts.session.id,
         userPrompt: opts.userPrompt,
-        priorMessages: opts.priorMessages,
-        previousResponseId: null,
+        conversationHistory: recoveryMessages,
         signal: controller.signal,
+        onSessionId: (sessionId) => {
+          linkedHermesSessionId = sessionId;
+        },
         onEvent: handleEvent,
       });
     } else {
@@ -332,12 +515,26 @@ async function runHermesMessage(
     }
   }
 
+  if (linkedHermesSessionId && linkedHermesSessionId !== opts.sessionRecord.hermesSessionId) {
+    store.linkHermesSession(opts.session.id, linkedHermesSessionId);
+  }
+
   const assistantText = finalText || streamedText;
-  if (assistantText.trim().length > 0) {
+  if (assistantText) {
     store.appendMessage(opts.session.id, 'assistant', assistantText);
   }
-  if (completedResponseId) {
-    store.setLastResponseId(opts.session.id, completedResponseId);
+
+  store.touchSession(opts.session.id);
+
+  const fallbackToolkit = detectConnectionToolkit(opts.userPrompt);
+  if (fallbackToolkit && !sawConnectionToolCall) {
+    await emitConnectionFallback({
+      sessionId: opts.session.id,
+      toolkit: fallbackToolkit,
+      requestBaseUrl: opts.requestBaseUrl,
+      res: opts.res,
+      connections,
+    });
   }
 
   sendSSE(opts.res, { type: 'done', session_id: opts.session.id });
@@ -346,55 +543,46 @@ async function runHermesMessage(
 async function streamHermesConversation(
   config: HermesGatewayConfig,
   opts: {
+    conversation: string;
     userPrompt: string;
-    priorMessages: ChatMessageRecord[];
-    previousResponseId: string | null;
+    conversationHistory: ChatMessageRecord[] | null;
     signal: AbortSignal;
+    onSessionId: (sessionId: string) => void;
     onEvent: (eventName: string, data: HermesEventPayload) => void;
   },
 ): Promise<void> {
-  const payload = buildHermesRequestBody(opts.priorMessages, opts.userPrompt, opts.previousResponseId);
-  await streamHermesResponse(config, payload, opts.signal, opts.onEvent);
+  const payload = buildHermesRequestBody(opts.conversation, opts.userPrompt, opts.conversationHistory);
+  await streamHermesResponse(config, payload, opts.signal, opts.onSessionId, opts.onEvent);
 }
 
 function buildHermesRequestBody(
-  priorMessages: ChatMessageRecord[],
+  conversation: string,
   userPrompt: string,
-  previousResponseId: string | null,
+  conversationHistory: ChatMessageRecord[] | null,
 ): Record<string, unknown> {
-  if (previousResponseId) {
-    return {
-      input: userPrompt,
-      previous_response_id: previousResponseId,
-      stream: true,
-      store: true,
-    };
-  }
-
-  if (priorMessages.length > 0) {
-    return {
-      input: userPrompt,
-      conversation_history: priorMessages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
-      truncation: 'auto',
-      stream: true,
-      store: true,
-    };
-  }
-
-  return {
+  const body: Record<string, unknown> = {
     input: userPrompt,
+    conversation,
+    truncation: 'auto',
     stream: true,
     store: true,
   };
+
+  if (conversationHistory && conversationHistory.length > 0) {
+    body.conversation_history = conversationHistory.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+  }
+
+  return body;
 }
 
 async function streamHermesResponse(
   config: HermesGatewayConfig,
   body: Record<string, unknown>,
   signal: AbortSignal,
+  onSessionId: (sessionId: string) => void,
   onEvent: (eventName: string, data: HermesEventPayload) => void,
 ): Promise<void> {
   const timeoutController = new AbortController();
@@ -418,6 +606,11 @@ async function streamHermesResponse(
         responseBody,
         `Hermes response stream failed (HTTP ${res.status})${responseBody ? `: ${responseBody}` : ''}`,
       );
+    }
+
+    const hermesSessionId = res.headers.get('x-hermes-session-id');
+    if (hermesSessionId) {
+      onSessionId(hermesSessionId);
     }
 
     const reader = res.body.getReader();
@@ -449,8 +642,6 @@ async function streamHermesResponse(
     clearTimeout(timeout);
   }
 }
-
-type HermesEventPayload = Record<string, unknown> | null;
 
 function parseSseFrame(frame: string): { event: string; data: HermesEventPayload } | null {
   const lines = frame
@@ -548,11 +739,79 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function shouldRetryWithoutCursor(error: unknown, previousResponseId: string | null): boolean {
-  if (!previousResponseId) return false;
+function shouldRetryWithoutCursor(error: unknown): boolean {
   if (!(error instanceof HermesHttpError)) return false;
   if (error.status !== 404) return false;
   return /previous response not found/i.test(error.body);
+}
+
+function detectConnectionToolkit(content: string): string | null {
+  const normalized = content.toLowerCase();
+  const asksToConnect = /\b(connect|connection|link|authorize|authorise|access|sync)\b/.test(normalized);
+  const asksToDisconnect = /\b(disconnect|remove|unlink)\b/.test(normalized);
+
+  if (!asksToConnect || asksToDisconnect) {
+    return null;
+  }
+
+  const match = content.match(
+    /\b(?:connect|link|authorize|authorise|sync|give)\b(?:\s+\w+){0,4}?\s+(?:to\s+)?(?:my\s+)?([a-z0-9][a-z0-9 _-]{1,40}?)(?=(?:\s+(?:and|so|then|for|with)\b|[?.!,]|$))/i,
+  );
+  const candidate = match?.[1]?.trim();
+  return candidate && candidate.length > 1 ? candidate : null;
+}
+
+function requestBaseUrl(req: IncomingMessage): string {
+  const host = req.headers.host || '127.0.0.1';
+  return `http://${host}`;
+}
+
+async function emitConnectionFallback(opts: {
+  sessionId: string;
+  toolkit: string;
+  requestBaseUrl: string;
+  res: ServerResponse;
+  connections: ConnectionsService;
+}): Promise<void> {
+  const toolUseId = randomUUID();
+  let request: ConnectionRequestView;
+
+  try {
+    request = await opts.connections.requestConnection(opts.toolkit, opts.requestBaseUrl);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    request = opts.connections.createUnavailableRequest(opts.toolkit, message);
+  }
+
+  sendSSE(opts.res, {
+    type: 'assistant',
+    session_id: opts.sessionId,
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: toolUseId,
+        name: 'vervo_request_connection',
+        input: { toolkit: opts.toolkit, fallback: true },
+      }],
+    },
+  });
+
+  sendSSE(opts.res, {
+    type: 'user',
+    session_id: opts.sessionId,
+    message: {
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: {
+          kind: 'connection_request',
+          request: sanitizeConnectionRequestForAssistant(request),
+        },
+      }],
+    },
+  });
 }
 
 function sendSSE(res: ServerResponse, data: unknown): void {
@@ -596,4 +855,22 @@ function anySignal(signals: AbortSignal[]): AbortSignal {
   }
 
   return controller.signal;
+}
+
+function preview(content: string): string {
+  const compact = content.replace(/\s+/g, ' ').trim();
+  if (compact.length <= 120) return compact;
+  return `${compact.slice(0, 120)}...`;
+}
+
+function sanitizeConnectionRequestForAssistant(request: ConnectionRequestView): ConnectionRequestView {
+  return {
+    ...request,
+    redirectUrl: null,
+  };
+}
+
+function timestampToIso(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return new Date(value * 1000).toISOString();
 }

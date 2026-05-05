@@ -60,7 +60,7 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
           value={text}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'Sidecar starting... you can type now, send when ready.' : 'Message Hermes...'}
+          placeholder={disabled ? 'Connecting... you can type while things load.' : 'Write a message...'}
           rows={2}
           style={{
             width: '100%',

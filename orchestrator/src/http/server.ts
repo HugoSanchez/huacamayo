@@ -1,8 +1,13 @@
+import 'dotenv/config';
 import http from 'node:http';
 import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
 import { ChatStore } from './chat-store.ts';
+import { buildComposioBridgeRoutes } from './composio-bridge.ts';
+import { buildConnectionsRoutes } from './connections.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
 import { dispatch, json, route, type Route } from './router.ts';
+import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
+import { ConnectionsService } from '../integrations/composio.ts';
 
 function buildRoutes(store: ChatStore, hermes: HermesSupervisor): Route[] {
   return [
@@ -33,9 +38,13 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
 }> {
   const store = new ChatStore();
   const hermes = new HermesSupervisor();
+  const connections = new ConnectionsService();
+  const composioBridge = new ComposioBridgeService();
   const routes = [
     ...buildRoutes(store, hermes),
-    ...buildChatRoutes(store, hermes),
+    ...buildComposioBridgeRoutes(composioBridge),
+    ...buildConnectionsRoutes(connections),
+    ...buildChatRoutes(store, hermes, connections),
   ];
 
   const server = http.createServer((req, res) => {
@@ -54,8 +63,14 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   };
 
   return new Promise((resolve) => {
-    server.listen(port, '127.0.0.1', () => {
+    server.listen(port, '127.0.0.1', async () => {
       const addr = server.address() as { port: number };
+      hermes.setOrchestratorBaseUrl(`http://127.0.0.1:${addr.port}`);
+      if (composioBridge.configured) {
+        void composioBridge.getDefaultSession().catch((error) => {
+          console.warn('[composio] failed to initialize bridge session:', error);
+        });
+      }
       hermes.prepare();
       resolve({ server, port: addr.port, close });
     });

@@ -89,6 +89,15 @@ struct ContentView: View {
     @AppStorage("isDarkMode") private var isDarkMode = true
     @AppStorage("isLeftSidebarExpanded") private var isLeftSidebarExpanded = true
     @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = true
+    @AppStorage("isConnectionsCatalogExpanded") private var isConnectionsCatalogExpanded = false
+    @AppStorage("selectedChatSessionId") private var persistedSelectedSessionId = ""
+    @State private var sessions: [SidebarChatSession] = []
+    @State private var selectedSessionId: String?
+    @State private var isLoadingSessions = false
+    @State private var sessionError: String?
+    @State private var sidebarToast: SidebarToast?
+    @State private var connections: [SidebarConnection] = []
+    private let sidebarRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     init(sidecar: SidecarManager) {
         self.sidecar = sidecar
@@ -122,7 +131,32 @@ struct ContentView: View {
                 }
 
                 if isLeftSidebarExpanded {
-                    HermesSidebarPlaceholder(theme: theme, isDarkMode: isDarkMode)
+                    SessionSidebar(
+                        theme: theme,
+                        isDarkMode: isDarkMode,
+                        sessions: sessions,
+                        selectedSessionId: selectedSessionId,
+                        isLoadingSessions: isLoadingSessions,
+                        sessionError: sessionError,
+                        sidecarReady: sidecarPort != nil,
+                        connections: connections,
+                        isCatalogOpen: isConnectionsCatalogExpanded,
+                        onCreateSession: {
+                            Task { await createSession() }
+                        },
+                        onArchiveSession: { sessionId in
+                            Task { await archiveSession(sessionId) }
+                        },
+                        onRenameSession: { sessionId, title in
+                            Task { await renameSession(sessionId, title: title) }
+                        },
+                        onSelectSession: { sessionId in
+                            selectSession(sessionId)
+                        },
+                        onToggleCatalog: {
+                            isConnectionsCatalogExpanded.toggle()
+                        }
+                    )
                 }
 
                 Spacer(minLength: 0)
@@ -150,19 +184,29 @@ struct ContentView: View {
                     .frame(width: isDarkMode ? 1 : 0.5)
                     .opacity(isLeftSidebarExpanded ? (isDarkMode ? 1 : 0.00) : 0)
             }
+            .overlay(alignment: .bottom) {
+                if let sidebarToast {
+                    SidebarToastView(toast: sidebarToast, isDarkMode: isDarkMode)
+                        .padding(.bottom, 52)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .frame(minWidth: leftSidebarWidth, idealWidth: leftSidebarWidth, maxWidth: leftSidebarWidth)
             .clipped()
 
-            // Center (main content area)
-            VStack(spacing: 0) {
-                MainHeaderScaffold(theme: theme)
-
-                // Chat WebView
-                ChatWebView(
-                    sidecarPort: sidecarPort,
-                    isDarkMode: isDarkMode
-                )
-            }
+            // Center (main content area). The chat WebView fills the full column
+            // height so the catalog overlay (rendered inside the WebView) can
+            // span the full window height like the left sidebar.
+            ChatWebView(
+                sidecarPort: sidecarPort,
+                selectedSessionId: selectedSessionId,
+                isDarkMode: isDarkMode,
+                isCatalogOpen: isConnectionsCatalogExpanded,
+                onSessionStateChange: handleWebSessionStateChange,
+                onCatalogStateChange: { open in
+                    isConnectionsCatalogExpanded = open
+                }
+            )
             .overlay(alignment: .topLeading) {
                 if !isLeftSidebarExpanded {
                     TopChromeControls(
@@ -228,12 +272,259 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: ConductorThemePalette.windowCornerRadius, style: .continuous)
                 .strokeBorder(theme.windowBorder, lineWidth: 1)
         }
+        .task(id: sidecarPort) {
+            await refreshSessions()
+            await refreshConnections()
+        }
+        .onReceive(sidebarRefreshTimer) { _ in
+            guard sidecarPort != nil else { return }
+            Task {
+                await refreshSessions()
+                await refreshConnections()
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshSessions(preferredSelection: String? = nil) async {
+        guard let baseURL = sidecar.baseURL else {
+            sessions = []
+            setSelectedSession(nil)
+            sessionError = nil
+            isLoadingSessions = false
+            return
+        }
+
+        isLoadingSessions = true
+
+        do {
+            let url = baseURL.appendingPathComponent("chat/sessions")
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarChatSessionsResponse.self, from: data)
+            let nextSessions = sortSessions(decoded.sessions)
+            sessions = nextSessions
+            setSelectedSession(resolveSelectedSessionId(in: nextSessions, preferredSelection: preferredSelection))
+            sessionError = nil
+        } catch {
+            sessionError = error.localizedDescription
+        }
+
+        isLoadingSessions = false
+    }
+
+    @MainActor
+    private func refreshConnections() async {
+        guard let baseURL = sidecar.baseURL else {
+            connections = []
+            return
+        }
+
+        do {
+            let url = baseURL.appendingPathComponent("connections")
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                return
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarConnectionsResponse.self, from: data)
+            connections = decoded.connections
+        } catch {
+            // Keep the last known list when refresh fails.
+        }
+    }
+
+    @MainActor
+    private func createSession() async {
+        guard let baseURL = sidecar.baseURL else { return }
+
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("chat/sessions"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data("{}".utf8)
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            sessions = sortSessions(replacing(decoded.session, in: sessions))
+            setSelectedSession(decoded.session.id)
+            sessionError = nil
+        } catch {
+            sessionError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func archiveSession(_ sessionId: String) async {
+        guard let baseURL = sidecar.baseURL else { return }
+
+        do {
+            var request = URLRequest(
+                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/archive")
+            )
+            request.httpMethod = "POST"
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            let nextSessions = sortSessions(replacing(decoded.session, in: sessions))
+            sessions = nextSessions
+            if selectedSessionId == decoded.session.id {
+                setSelectedSession(resolveSelectedSessionId(in: nextSessions, preferredSelection: nil))
+            }
+            sessionError = nil
+            showSidebarToast("Session archived")
+        } catch {
+            sessionError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func renameSession(_ sessionId: String, title: String) async {
+        guard let baseURL = sidecar.baseURL else { return }
+
+        do {
+            var request = URLRequest(
+                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/rename")
+            )
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(SidebarRenameSessionRequest(title: title))
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            sessions = sortSessions(replacing(decoded.session, in: sessions))
+            if selectedSessionId == decoded.session.id {
+                setSelectedSession(decoded.session.id)
+            }
+            sessionError = nil
+        } catch {
+            sessionError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func resumeArchivedSession(_ sessionId: String) async {
+        guard let baseURL = sidecar.baseURL else { return }
+
+        do {
+            var request = URLRequest(
+                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/unarchive")
+            )
+            request.httpMethod = "POST"
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            sessions = sortSessions(replacing(decoded.session, in: sessions))
+            setSelectedSession(decoded.session.id)
+            sessionError = nil
+        } catch {
+            sessionError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func handleWebSessionStateChange(_ sessionId: String?) {
+        setSelectedSession(sessionId)
+        Task {
+            await refreshSessions(preferredSelection: sessionId)
+        }
+    }
+
+    @MainActor
+    private func selectSession(_ sessionId: String) {
+        guard selectedSessionId != sessionId else { return }
+        if let session = sessions.first(where: { $0.id == sessionId }),
+           session.archivedAt != nil {
+            Task { await resumeArchivedSession(sessionId) }
+            return
+        }
+        setSelectedSession(sessionId)
+        sessionError = nil
+    }
+
+    private func setSelectedSession(_ sessionId: String?) {
+        selectedSessionId = sessionId
+        persistedSelectedSessionId = sessionId ?? ""
+    }
+
+    private func resolveSelectedSessionId(
+        in sessions: [SidebarChatSession],
+        preferredSelection: String?,
+    ) -> String? {
+        let candidates = [
+            preferredSelection,
+            selectedSessionId,
+            persistedSelectedSessionId.isEmpty ? nil : persistedSelectedSessionId,
+        ]
+
+        for candidate in candidates {
+            guard let candidate,
+                  sessions.contains(where: { $0.id == candidate }) else { continue }
+            return candidate
+        }
+
+        return sessions.first(where: { $0.archivedAt == nil })?.id ?? sessions.first?.id
+    }
+
+    private func showSidebarToast(_ message: String) {
+        let toast = SidebarToast(id: UUID(), message: message)
+        sidebarToast = toast
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.8))
+            if sidebarToast?.id == toast.id {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    sidebarToast = nil
+                }
+            }
+        }
     }
 }
 
-private struct HermesSidebarPlaceholder: View {
+private struct SessionSidebar: View {
     let theme: ConductorThemePalette
     let isDarkMode: Bool
+    let sessions: [SidebarChatSession]
+    let selectedSessionId: String?
+    let isLoadingSessions: Bool
+    let sessionError: String?
+    let sidecarReady: Bool
+    let connections: [SidebarConnection]
+    let isCatalogOpen: Bool
+    let onCreateSession: () -> Void
+    let onArchiveSession: (String) -> Void
+    let onRenameSession: (String, String) -> Void
+    let onSelectSession: (String) -> Void
+    let onToggleCatalog: () -> Void
+
+    @State private var renamingSessionId: String?
+    @State private var draftTitle = ""
+    @FocusState private var focusedSessionId: String?
 
     private var primaryText: Color {
         isDarkMode ? Color.white.opacity(0.86) : Color.black.opacity(0.72)
@@ -243,45 +534,481 @@ private struct HermesSidebarPlaceholder: View {
         isDarkMode ? Color.white.opacity(0.44) : Color.black.opacity(0.42)
     }
 
+    private var activeSessions: [SidebarChatSession] {
+        sessions.filter { $0.archivedAt == nil }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Workspace")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(primaryText)
-
-            Text("Hermes-only mode")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(primaryText)
-
-            Text("Sources and tools are intentionally disconnected while the chat runtime is being rebuilt around Hermes.")
-                .font(.system(size: 12))
-                .foregroundStyle(secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(theme.inputFill.opacity(isDarkMode ? 0.62 : 0.92))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(theme.inputStroke, lineWidth: 1)
+        VStack(alignment: .leading, spacing: 14) {
+            Button(action: onCreateSession) {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("New Session")
+                        .font(.system(size: 13, weight: .medium))
+                    Spacer(minLength: 0)
                 }
-                .overlay(alignment: .topLeading) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Next")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(primaryText)
-                        Text("Reconnect resources through a clean tool bridge after the Hermes chat spine is stable.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(primaryText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isDarkMode ? Color.white.opacity(0.05) : Color.white.opacity(0.32))
+                )
+                .shadow(color: .black.opacity(isDarkMode ? 0.22 : 0.06), radius: 4, x: 0, y: 1)
+            }
+            .buttonStyle(.plain)
+            .disabled(!sidecarReady)
+
+            if let sessionError, !sessionError.isEmpty {
+                Text(sessionError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.red.opacity(isDarkMode ? 0.88 : 0.74))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(cardFill)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(theme.inputStroke, lineWidth: 1)
                     }
-                    .padding(12)
-                }
-                .frame(height: 110)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
 
-            Spacer(minLength: 0)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    SessionSidebarSection(
+                        title: "SESSIONS",
+                        emptyText: sidecarReady ? "No sessions yet." : "Sessions will appear once the sidecar is ready.",
+                        sessions: activeSessions,
+                        selectedSessionId: selectedSessionId,
+                        isDarkMode: isDarkMode,
+                        renamingSessionId: renamingSessionId,
+                        draftTitle: draftTitle,
+                        focusedSessionId: $focusedSessionId,
+                        onDraftTitleChange: { draftTitle = $0 },
+                        onSelectSession: onSelectSession,
+                        onArchiveSession: onArchiveSession,
+                        onBeginRename: beginRename,
+                        onCommitRename: commitRename
+                    )
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button(action: onToggleCatalog) {
+                            HStack(spacing: 6) {
+                                Text("CONNECTIONS")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .tracking(0.8)
+                                    .foregroundStyle(secondaryText)
+                                Image(systemName: isCatalogOpen ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .foregroundStyle(secondaryText)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!sidecarReady)
+
+                        if connections.isEmpty {
+                            Text("No connected tools")
+                                .font(.system(size: 12))
+                                .foregroundStyle(secondaryText)
+                                .padding(.horizontal, 10)
+                        } else {
+                            ForEach(connections) { connection in
+                                HStack(spacing: 10) {
+                                    ConnectionLogo(
+                                        logoUrl: connection.logoUrl,
+                                        toolkitName: connection.toolkitName,
+                                        isDarkMode: isDarkMode
+                                    )
+
+                                    Text(connection.toolkitName)
+                                        .font(.system(size: 13, weight: .regular))
+                                        .foregroundStyle(primaryText)
+
+                                    Spacer(minLength: 0)
+
+                                    Text(connection.status.capitalized)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(secondaryText)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                            }
+                        }
+                    }
+                }
+                .padding(.bottom, 8)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.top, 6)
+    }
+
+    private var rowSelectionFill: Color {
+        isDarkMode ? Color.white.opacity(0.07) : Color.white.opacity(0.72)
+    }
+
+    private var cardFill: Color {
+        theme.inputFill.opacity(isDarkMode ? 0.38 : 0.82)
+    }
+
+    private func beginRename(_ session: SidebarChatSession) {
+        renamingSessionId = session.id
+        draftTitle = session.title
+        focusedSessionId = session.id
+    }
+
+    private func commitRename(_ session: SidebarChatSession) {
+        let trimmed = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        renamingSessionId = nil
+        focusedSessionId = nil
+        guard !trimmed.isEmpty, trimmed != session.title else { return }
+        onRenameSession(session.id, trimmed)
+    }
+}
+
+private struct SessionSidebarSection: View {
+    let title: String?
+    let emptyText: String
+    let sessions: [SidebarChatSession]
+    let selectedSessionId: String?
+    let isDarkMode: Bool
+    let renamingSessionId: String?
+    let draftTitle: String
+    @FocusState.Binding var focusedSessionId: String?
+    let onDraftTitleChange: (String) -> Void
+    let onSelectSession: (String) -> Void
+    let onArchiveSession: ((String) -> Void)?
+    let onBeginRename: (SidebarChatSession) -> Void
+    let onCommitRename: (SidebarChatSession) -> Void
+
+    private var primaryText: Color {
+        isDarkMode ? Color.white.opacity(0.84) : Color.black.opacity(0.72)
+    }
+
+    private var secondaryText: Color {
+        isDarkMode ? Color.white.opacity(0.44) : Color.black.opacity(0.42)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let title {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(secondaryText)
+            }
+
+            if sessions.isEmpty {
+                Text(emptyText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(secondaryText)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(sessions) { session in
+                        SessionSidebarRow(
+                            session: session,
+                            isSelected: session.id == selectedSessionId,
+                            isDarkMode: isDarkMode,
+                            isRenaming: renamingSessionId == session.id,
+                            draftTitle: draftTitle,
+                            focusedSessionId: $focusedSessionId,
+                            onDraftTitleChange: onDraftTitleChange,
+                            onSelectSession: onSelectSession,
+                            onArchiveSession: onArchiveSession,
+                            onBeginRename: onBeginRename,
+                            onCommitRename: onCommitRename
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SessionSidebarRow: View {
+    let session: SidebarChatSession
+    let isSelected: Bool
+    let isDarkMode: Bool
+    let isRenaming: Bool
+    let draftTitle: String
+    @FocusState.Binding var focusedSessionId: String?
+    let onDraftTitleChange: (String) -> Void
+    let onSelectSession: (String) -> Void
+    let onArchiveSession: ((String) -> Void)?
+    let onBeginRename: (SidebarChatSession) -> Void
+    let onCommitRename: (SidebarChatSession) -> Void
+    @State private var isHovered = false
+
+    private var primaryText: Color {
+        isDarkMode ? Color.white.opacity(0.88) : Color.black.opacity(0.76)
+    }
+
+    private var secondaryText: Color {
+        isDarkMode ? Color.white.opacity(0.46) : Color.black.opacity(0.42)
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            if isRenaming {
+                TextField("", text: Binding(
+                    get: { draftTitle },
+                    set: onDraftTitleChange
+                ))
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(primaryText)
+                .focused($focusedSessionId, equals: session.id)
+                .onSubmit {
+                    onCommitRename(session)
+                }
+                .onExitCommand {
+                    onDraftTitleChange(session.title)
+                    onCommitRename(session)
+                }
+            } else {
+                Text(session.title)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(primaryText)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: 0)
+
+            if let onArchiveSession, session.archivedAt == nil, isHovered, !isRenaming {
+                Button(action: { onArchiveSession(session.id) }) {
+                    Image(systemName: "archivebox")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(secondaryText)
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text(sessionTimestampLabel(session))
+                    .font(.system(size: 11))
+                    .foregroundStyle(secondaryText)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+        .background(backgroundFill)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isRenaming else { return }
+            onSelectSession(session.id)
+        }
+        .onHover { isHovered = $0 }
+        .contextMenu {
+            Button("Rename Session") {
+                onBeginRename(session)
+            }
+        }
+    }
+
+    private var backgroundFill: Color {
+        if isSelected {
+            return isDarkMode ? Color.white.opacity(0.05) : Color.white.opacity(0.32)
+        }
+        if isHovered {
+            return isDarkMode ? Color.white.opacity(0.03) : Color.white.opacity(0.18)
+        }
+        return .clear
+    }
+}
+
+private struct SidebarConnection: Decodable, Identifiable {
+    let connectedAccountId: String
+    let toolkitSlug: String
+    let toolkitName: String
+    let logoUrl: String?
+    let status: String
+
+    var id: String { connectedAccountId }
+}
+
+private struct ConnectionLogo: View {
+    let logoUrl: String?
+    let toolkitName: String
+    let isDarkMode: Bool
+
+    @State private var image: NSImage?
+
+    private static let size: CGFloat = 18
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                fallback
+            }
+        }
+        .frame(width: Self.size, height: Self.size)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .task(id: logoUrl) {
+            await loadImage()
+        }
+    }
+
+    private var fallback: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
+            Text(String(toolkitName.prefix(1)).uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(isDarkMode ? Color.white.opacity(0.7) : Color.black.opacity(0.55))
+        }
+    }
+
+    private func loadImage() async {
+        guard let logoUrl, let url = URL(string: logoUrl) else {
+            image = nil
+            return
+        }
+        if let cached = ConnectionLogoCache.shared.image(for: logoUrl) {
+            image = cached
+            return
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
+            if let nsImage = NSImage(data: data) {
+                ConnectionLogoCache.shared.set(nsImage, for: logoUrl)
+                image = nsImage
+            }
+        } catch {
+            // Fallback view will render on failure.
+        }
+    }
+}
+
+private final class ConnectionLogoCache {
+    static let shared = ConnectionLogoCache()
+
+    private let cache = NSCache<NSString, NSImage>()
+
+    func image(for key: String) -> NSImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func set(_ image: NSImage, for key: String) {
+        cache.setObject(image, forKey: key as NSString)
+    }
+}
+
+private struct SidebarConnectionsResponse: Decodable {
+    let connections: [SidebarConnection]
+}
+
+private struct SidebarChatSession: Decodable, Identifiable, Equatable {
+    let id: String
+    let title: String
+    let createdAt: String
+    let updatedAt: String
+    let archivedAt: String?
+    let messageCount: Int
+    let lastMessagePreview: String?
+}
+
+private struct SidebarChatSessionsResponse: Decodable {
+    let sessions: [SidebarChatSession]
+}
+
+private struct SidebarChatSessionEnvelope: Decodable {
+    let session: SidebarChatSession
+}
+
+private struct SidebarRenameSessionRequest: Encodable {
+    let title: String
+}
+
+private struct SidebarToast: Identifiable, Equatable {
+    let id: UUID
+    let message: String
+}
+
+private enum SidebarRequestError: LocalizedError {
+    case invalidResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            return "The sidecar returned an invalid response."
+        }
+    }
+}
+
+private func replacing(_ session: SidebarChatSession, in sessions: [SidebarChatSession]) -> [SidebarChatSession] {
+    let filtered = sessions.filter { $0.id != session.id }
+    return [session] + filtered
+}
+
+private func sortSessions(_ sessions: [SidebarChatSession]) -> [SidebarChatSession] {
+    sessions.sorted { left, right in
+        if (left.archivedAt == nil) != (right.archivedAt == nil) {
+            return left.archivedAt == nil
+        }
+
+        let leftKey = left.archivedAt ?? left.updatedAt
+        let rightKey = right.archivedAt ?? right.updatedAt
+        return leftKey > rightKey
+    }
+}
+
+private func sessionTimestampLabel(_ session: SidebarChatSession) -> String {
+    let source = session.archivedAt ?? session.updatedAt
+    guard let date = sidebarISO8601WithFractional.date(from: source) ?? sidebarISO8601.date(from: source) else { return "" }
+    return sidebarRelativeFormatter.localizedString(for: date, relativeTo: Date())
+}
+
+private let sidebarISO8601WithFractional: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
+private let sidebarISO8601: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+
+private let sidebarRelativeFormatter: RelativeDateTimeFormatter = {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .short
+    return formatter
+}()
+
+private struct SidebarToastView: View {
+    let toast: SidebarToast
+    let isDarkMode: Bool
+
+    var body: some View {
+        Text(toast.message)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(isDarkMode ? Color.white.opacity(0.88) : Color.black.opacity(0.78))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                    .fill(isDarkMode ? Color.black.opacity(0.42) : Color.white.opacity(0.82))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                    .stroke(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.08), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(isDarkMode ? 0.18 : 0.08), radius: 12, y: 4)
     }
 }
 
@@ -303,51 +1030,6 @@ private struct SidebarVisualEffect: NSViewRepresentable {
     }
 }
 
-private struct MainHeaderScaffold: View {
-    let theme: ConductorThemePalette
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Color.clear
-                .frame(height: 44)
-                .background(.ultraThinMaterial)
-                .background(
-                    LinearGradient(
-                        colors: [theme.headerTopStart, theme.headerTopEnd],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(theme.headerDivider)
-                        .frame(height: 1)
-                }
-
-            Color.clear
-                .frame(height: 46)
-                .background(.ultraThinMaterial)
-                .background(
-                    LinearGradient(
-                        colors: [theme.headerTabsStart, theme.headerTabsEnd],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(theme.headerBottomDivider)
-                        .frame(height: theme.headerBottomDividerThickness)
-                }
-                .overlay(alignment: .bottomLeading) {
-                    Rectangle()
-                        .fill(theme.headerActiveLine)
-                        .frame(width: 140, height: 2)
-                        .padding(.leading, 34)
-                }
-        }
-    }
-}
 
 // MARK: - Window Control Button
 
@@ -513,6 +1195,7 @@ private struct SidebarFooter: View {
     }
 
 }
+
 
 #if DEBUG
 struct ContentView_Previews: PreviewProvider {

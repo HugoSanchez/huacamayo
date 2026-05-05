@@ -1,4 +1,11 @@
-import type { ChatSessionSummary, ChatSSEEvent, StoredChatMessage } from './types';
+import type {
+  ChatSessionSummary,
+  ChatSSEEvent,
+  ConnectionRequestView,
+  ConnectionView,
+  StoredChatMessage,
+  ToolkitView,
+} from './types';
 
 let sidecarPort: number | null = null;
 
@@ -23,6 +30,37 @@ export async function createChatSession(title?: string): Promise<ChatSessionSumm
   });
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to create chat session'));
+  }
+  const body = await res.json() as { session: ChatSessionSummary };
+  return body.session;
+}
+
+export async function getChatSessions(): Promise<ChatSessionSummary[]> {
+  const res = await fetch(`${baseURL()}/chat/sessions`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load chat sessions'));
+  }
+  const body = await res.json() as { sessions: ChatSessionSummary[] };
+  return Array.isArray(body.sessions) ? body.sessions : [];
+}
+
+export async function archiveChatSession(sessionId: string): Promise<ChatSessionSummary> {
+  const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/archive`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to archive chat session'));
+  }
+  const body = await res.json() as { session: ChatSessionSummary };
+  return body.session;
+}
+
+export async function unarchiveChatSession(sessionId: string): Promise<ChatSessionSummary> {
+  const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/unarchive`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to restore chat session'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
   return body.session;
@@ -109,6 +147,80 @@ export async function getChatStatus(): Promise<{
     throw new Error(await readError(res, 'Failed to load chat status'));
   }
   return res.json();
+}
+
+export async function getConnections(): Promise<{
+  available: boolean;
+  configured: boolean;
+  connections: ConnectionView[];
+}> {
+  const res = await fetch(`${baseURL()}/connections`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load connections'));
+  }
+  return res.json();
+}
+
+export async function getToolkits(opts: {
+  query?: string;
+  cursor?: string;
+  limit?: number;
+} = {}): Promise<{
+  toolkits: ToolkitView[];
+  nextCursor: string | null;
+}> {
+  const params = new URLSearchParams();
+  if (opts.query) params.set('query', opts.query);
+  if (opts.cursor) params.set('cursor', opts.cursor);
+  if (typeof opts.limit === 'number') params.set('limit', String(opts.limit));
+  const url = params.toString().length > 0
+    ? `${baseURL()}/connections/toolkits?${params.toString()}`
+    : `${baseURL()}/connections/toolkits`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load toolkits'));
+  }
+  const body = await res.json() as { toolkits: ToolkitView[]; nextCursor?: string | null };
+  return {
+    toolkits: body.toolkits ?? [],
+    nextCursor: body.nextCursor ?? null,
+  };
+}
+
+export async function getConnectionRequest(requestId: string): Promise<ConnectionRequestView> {
+  const res = await fetch(`${baseURL()}/connections/requests/${encodeURIComponent(requestId)}`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load connection request'));
+  }
+  const body = await res.json() as { request: ConnectionRequestView };
+  return body.request;
+}
+
+export async function createConnectionRequest(toolkit: string): Promise<ConnectionRequestView> {
+  const res = await fetch(`${baseURL()}/connections/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ toolkit }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to create connection request'));
+  }
+  const body = await res.json() as { request: ConnectionRequestView };
+  return body.request;
+}
+
+export function openConnectionRequest(requestId: string): void {
+  openExternalUrl(`${baseURL()}/connections/requests/${encodeURIComponent(requestId)}/open`);
+}
+
+export function openExternalUrl(url: string): void {
+  const handler = window.webkit?.messageHandlers?.chatBridge;
+  if (handler) {
+    handler.postMessage({ type: 'openExternalUrl', url });
+    return;
+  }
+
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 async function readError(res: Response, fallback: string): Promise<string> {
