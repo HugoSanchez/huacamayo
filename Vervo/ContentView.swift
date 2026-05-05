@@ -524,7 +524,6 @@ private struct SessionSidebar: View {
 
     @State private var renamingSessionId: String?
     @State private var draftTitle = ""
-    @FocusState private var focusedSessionId: String?
 
     private var primaryText: Color {
         isDarkMode ? Color.white.opacity(0.86) : Color.black.opacity(0.72)
@@ -552,11 +551,7 @@ private struct SessionSidebar: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(isDarkMode ? Color.white.opacity(0.05) : Color.white.opacity(0.32))
-                )
-                .shadow(color: .black.opacity(isDarkMode ? 0.22 : 0.06), radius: 4, x: 0, y: 1)
+                .background(Color.clear)
             }
             .buttonStyle(.plain)
             .disabled(!sidecarReady)
@@ -586,7 +581,6 @@ private struct SessionSidebar: View {
                         isDarkMode: isDarkMode,
                         renamingSessionId: renamingSessionId,
                         draftTitle: draftTitle,
-                        focusedSessionId: $focusedSessionId,
                         onDraftTitleChange: { draftTitle = $0 },
                         onSelectSession: onSelectSession,
                         onArchiveSession: onArchiveSession,
@@ -645,7 +639,7 @@ private struct SessionSidebar: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.top, 6)
+        .padding(.top, 22)
     }
 
     private var rowSelectionFill: Color {
@@ -659,13 +653,13 @@ private struct SessionSidebar: View {
     private func beginRename(_ session: SidebarChatSession) {
         renamingSessionId = session.id
         draftTitle = session.title
-        focusedSessionId = session.id
     }
 
     private func commitRename(_ session: SidebarChatSession) {
         let trimmed = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         renamingSessionId = nil
-        focusedSessionId = nil
+        // Hand focus back so the chat WebView can become first responder cleanly.
+        NSApp.keyWindow?.makeFirstResponder(nil)
         guard !trimmed.isEmpty, trimmed != session.title else { return }
         onRenameSession(session.id, trimmed)
     }
@@ -679,7 +673,6 @@ private struct SessionSidebarSection: View {
     let isDarkMode: Bool
     let renamingSessionId: String?
     let draftTitle: String
-    @FocusState.Binding var focusedSessionId: String?
     let onDraftTitleChange: (String) -> Void
     let onSelectSession: (String) -> Void
     let onArchiveSession: ((String) -> Void)?
@@ -718,7 +711,6 @@ private struct SessionSidebarSection: View {
                             isDarkMode: isDarkMode,
                             isRenaming: renamingSessionId == session.id,
                             draftTitle: draftTitle,
-                            focusedSessionId: $focusedSessionId,
                             onDraftTitleChange: onDraftTitleChange,
                             onSelectSession: onSelectSession,
                             onArchiveSession: onArchiveSession,
@@ -738,7 +730,6 @@ private struct SessionSidebarRow: View {
     let isDarkMode: Bool
     let isRenaming: Bool
     let draftTitle: String
-    @FocusState.Binding var focusedSessionId: String?
     let onDraftTitleChange: (String) -> Void
     let onSelectSession: (String) -> Void
     let onArchiveSession: ((String) -> Void)?
@@ -757,40 +748,56 @@ private struct SessionSidebarRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             if isRenaming {
-                TextField("", text: Binding(
-                    get: { draftTitle },
-                    set: onDraftTitleChange
-                ))
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(primaryText)
-                .focused($focusedSessionId, equals: session.id)
-                .onSubmit {
-                    onCommitRename(session)
-                }
-                .onExitCommand {
-                    onDraftTitleChange(session.title)
-                    onCommitRename(session)
-                }
+                RenameTextField(
+                    text: Binding(
+                        get: { draftTitle },
+                        set: onDraftTitleChange
+                    ),
+                    isDarkMode: isDarkMode,
+                    onCommit: { onCommitRename(session) },
+                    onCancel: {
+                        onDraftTitleChange(session.title)
+                        onCommitRename(session)
+                    }
+                )
+                .frame(maxWidth: .infinity)
             } else {
                 Text(session.title)
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(primaryText)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onBeginRename(session)
+                    }
             }
 
             Spacer(minLength: 0)
 
-            if let onArchiveSession, session.archivedAt == nil, isHovered, !isRenaming {
-                Button(action: { onArchiveSession(session.id) }) {
-                    Image(systemName: "archivebox")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(secondaryText)
-                        .frame(width: 20, height: 20)
+            if isHovered, !isRenaming {
+                HStack(spacing: 2) {
+                    Button(action: { onBeginRename(session) }) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(secondaryText)
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Rename session")
+
+                    if let onArchiveSession, session.archivedAt == nil {
+                        Button(action: { onArchiveSession(session.id) }) {
+                            Image(systemName: "archivebox")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(secondaryText)
+                                .frame(width: 20, height: 20)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Archive session")
+                    }
                 }
-                .buttonStyle(.plain)
-            } else {
+            } else if !isRenaming {
                 Text(sessionTimestampLabel(session))
                     .font(.system(size: 11))
                     .foregroundStyle(secondaryText)
@@ -806,11 +813,6 @@ private struct SessionSidebarRow: View {
             onSelectSession(session.id)
         }
         .onHover { isHovered = $0 }
-        .contextMenu {
-            Button("Rename Session") {
-                onBeginRename(session)
-            }
-        }
     }
 
     private var backgroundFill: Color {
@@ -1009,6 +1011,100 @@ private struct SidebarToastView: View {
                     .stroke(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.08), lineWidth: 1)
             }
             .shadow(color: .black.opacity(isDarkMode ? 0.18 : 0.08), radius: 12, y: 4)
+    }
+}
+
+private struct RenameTextField: NSViewRepresentable {
+    @Binding var text: String
+    let isDarkMode: Bool
+    let onCommit: () -> Void
+    let onCancel: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: text)
+        field.delegate = context.coordinator
+        field.isBordered = false
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 13, weight: .regular)
+        field.textColor = isDarkMode
+            ? NSColor.white.withAlphaComponent(0.88)
+            : NSColor.black.withAlphaComponent(0.76)
+        field.cell?.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.cell?.lineBreakMode = .byTruncatingTail
+
+        // Take first responder once the view is in a window. The chat WKWebView
+        // frequently holds first responder, so we have to claim it directly via
+        // AppKit — SwiftUI's @FocusState doesn't always pre-empt the WebView.
+        DispatchQueue.main.async {
+            guard let window = field.window else { return }
+            window.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+        }
+
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        nsView.textColor = isDarkMode
+            ? NSColor.white.withAlphaComponent(0.88)
+            : NSColor.black.withAlphaComponent(0.76)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: RenameTextField
+        private var hasResolved = false
+
+        init(parent: RenameTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            doCommandBy commandSelector: Selector
+        ) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                resolve(commit: true)
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                resolve(commit: false)
+                return true
+            }
+            return false
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            // Commit on losing focus too (clicking elsewhere).
+            resolve(commit: true)
+        }
+
+        private func resolve(commit: Bool) {
+            guard !hasResolved else { return }
+            hasResolved = true
+            if commit {
+                parent.onCommit()
+            } else {
+                parent.onCancel()
+            }
+        }
     }
 }
 

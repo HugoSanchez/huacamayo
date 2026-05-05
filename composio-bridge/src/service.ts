@@ -252,26 +252,43 @@ export class ComposioBridgeBackendService {
 
   async searchTools(userId: string, query: string, toolkits?: string[]): Promise<BridgeSearchToolResult[]> {
     this.assertConfigured();
-    const routerSession = await this.createToolRouterSession(normalizeUserId(userId));
-    const response = await routerSession.search({
-      query,
-      toolkits: normalizeToolkits(toolkits),
-    });
-    const slugs = Array.from(new Set(response.results.flatMap((result) => [
-      ...result.primaryToolSlugs,
-      ...result.relatedToolSlugs,
-    ])));
+    const normalizedToolkits = normalizeToolkits(toolkits);
 
-    return Promise.all(slugs.map(async (slug) => {
-      const tool = await this.client!.tools.getRawComposioToolBySlug(slug);
-      return {
-        slug: tool.slug,
-        name: tool.name,
-        description: tool.description ?? null,
-        toolkitSlug: tool.toolkit?.slug ?? null,
-        toolkitName: tool.toolkit?.name ?? null,
-      } satisfies BridgeSearchToolResult;
-    }));
+    try {
+      const routerSession = await this.createToolRouterSession(normalizeUserId(userId));
+      const response = await routerSession.search({
+        query,
+        toolkits: normalizedToolkits,
+      });
+      const slugs = Array.from(new Set(response.results.flatMap((result) => [
+        ...result.primaryToolSlugs,
+        ...result.relatedToolSlugs,
+      ])));
+
+      if (slugs.length > 0) {
+        const tools = await Promise.all(slugs.map(async (slug) => this.getToolBySlug(slug).catch(() => null)));
+        const filtered = tools
+          .filter((tool): tool is NonNullable<typeof tool> => tool !== null)
+          .filter((tool) => !normalizedToolkits || normalizedToolkits.includes(tool.toolkit?.slug?.trim().toLowerCase() ?? ''))
+          .map((tool) => toSearchToolView(tool));
+        if (filtered.length > 0) {
+          return filtered;
+        }
+      }
+    } catch (error: unknown) {
+      if (!shouldFallbackToolkitToolSearch(normalizedToolkits, error)) {
+        throw error;
+      }
+    }
+
+    if (normalizedToolkits && normalizedToolkits.length > 0) {
+      const fallbackResults = await this.searchToolkitToolsDirect(normalizedToolkits, query);
+      if (fallbackResults.length > 0) {
+        return fallbackResults;
+      }
+    }
+
+    return [];
   }
 
   async getToolSchemas(userId: string, toolSlugs: string[]): Promise<BridgeToolSchemaView[]> {
@@ -280,7 +297,7 @@ export class ComposioBridgeBackendService {
 
     const schemas = await Promise.all(
       Array.from(wanted).map(async (slug) => {
-        const tool = await this.client!.tools.getRawComposioToolBySlug(slug);
+        const tool = await this.getToolBySlug(slug);
         return {
           slug: tool.slug,
           name: tool.name,
@@ -295,10 +312,19 @@ export class ComposioBridgeBackendService {
     return schemas;
   }
 
-  async executeTool(userId: string, toolSlug: string, arguments_: Record<string, unknown> | undefined): Promise<BridgeToolExecutionView> {
+  async executeTool(
+    userId: string,
+    toolSlug: string,
+    arguments_: Record<string, unknown> | undefined,
+    connectedAccountId?: string,
+  ): Promise<BridgeToolExecutionView> {
     this.assertConfigured();
-    const routerSession = await this.createToolRouterSession(normalizeUserId(userId));
-    const result = await routerSession.execute(toolSlug, arguments_ ?? {});
+    const result = await this.executeToolRaw(
+      normalizeUserId(userId),
+      toolSlug,
+      arguments_ ?? {},
+      connectedAccountId?.trim() || undefined,
+    );
     return {
       data: result.data ?? null,
       error: typeof result.error === 'string' ? result.error : null,
@@ -333,18 +359,43 @@ export class ComposioBridgeBackendService {
   }
 
   private async searchToolkitCatalog(query: string | undefined, limit: number) {
-    const response = await this.client!.toolkits.get({
-      managedBy: 'all',
-      sortBy: query ? 'usage' : 'alphabetically',
-      limit: query ? 200 : limit,
-    }) as unknown as CatalogToolkitItem[] | { items: CatalogToolkitItem[] };
-    const items = Array.isArray(response) ? response : (response.items ?? []);
+    const params = new URLSearchParams();
+    params.set('managed_by', 'all');
+    params.set('limit', String(query ? 200 : limit));
+    if (query) {
+      params.set('search', query);
+      params.set('sort_by', 'alphabetically');
+    } else {
+      params.set('sort_by', 'usage');
+    }
+
+    const response = await fetch(`https://backend.composio.dev/api/v3/toolkits?${params.toString()}`, {
+      headers: {
+        'x-api-key': this.apiKey!,
+        Accept: 'application/json',
+      },
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new BridgeHttpError(
+        response.status,
+        `Composio toolkits request failed (${response.status}): ${body || response.statusText}`,
+      );
+    }
+
+    const body = await response.json() as {
+      items?: CatalogToolkitItem[];
+    };
+    const items = Array.isArray(body.items) ? body.items : [];
     if (!query) return items.slice(0, limit);
 
     const normalizedQuery = normalizeSearchQuery(query);
-    return items
+    const matched = items
       .filter((toolkit: CatalogToolkitItem) => matchesToolkitQuery(toolkit, normalizedQuery))
       .slice(0, limit);
+    const direct = await this.tryGetToolkitCatalogItem(query);
+    if (!direct) return matched;
+    return dedupeToolkitCatalogItems([direct, ...matched]).slice(0, limit);
   }
 
   private async listConnectedAccountsByToolkit(userId: string): Promise<Map<string, BridgeConnectionView>> {
@@ -365,7 +416,7 @@ export class ComposioBridgeBackendService {
     }
 
     try {
-      const toolkit = await this.client!.toolkits.get(normalizedInput);
+      const toolkit = await this.getToolkitByInput(toolkitInput);
       if (!this.isAllowedToolkit(toolkit.slug)) {
         throw new BridgeHttpError(400, `Toolkit "${toolkitInput}" is not allowed by policy.`);
       }
@@ -419,6 +470,183 @@ export class ComposioBridgeBackendService {
     if (!this.allowedToolkits) return true;
     return this.allowedToolkits.has(toolkitSlug.trim().toLowerCase());
   }
+
+  private async searchToolkitToolsDirect(toolkits: string[], query: string): Promise<BridgeSearchToolResult[]> {
+    const normalizedQuery = normalizeSearchQuery(query);
+    const results: BridgeSearchToolResult[] = [];
+
+    for (const toolkitInput of toolkits) {
+      const toolkit = await this.resolveToolkit(toolkitInput);
+      const items = await this.listToolkitTools(toolkit.slug);
+      const matches = items
+        .filter((tool) => matchesToolQuery(tool, normalizedQuery))
+        .map((tool) => ({
+          slug: tool.slug,
+          name: tool.name,
+          description: tool.description ?? null,
+          toolkitSlug: tool.toolkit?.slug ?? toolkit.slug,
+          toolkitName: tool.toolkit?.name ?? toolkit.name,
+        } satisfies BridgeSearchToolResult));
+      if (matches.length > 0) {
+        results.push(...matches);
+      } else {
+        results.push(...items.map((tool) => ({
+          slug: tool.slug,
+          name: tool.name,
+          description: tool.description ?? null,
+          toolkitSlug: tool.toolkit?.slug ?? toolkit.slug,
+          toolkitName: tool.toolkit?.name ?? toolkit.name,
+        } satisfies BridgeSearchToolResult)));
+      }
+    }
+
+    return dedupeSearchToolResults(results);
+  }
+
+  private async getToolkitByInput(toolkitInput: string) {
+    const candidates = toolkitInputCandidates(toolkitInput);
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        return await this.client!.toolkits.get(candidate);
+      } catch (error: unknown) {
+        lastError = error;
+      }
+    }
+    throw lastError ?? new BridgeHttpError(404, `No Composio toolkit found for "${toolkitInput}".`);
+  }
+
+  private async tryGetToolkitCatalogItem(query: string): Promise<CatalogToolkitItem | null> {
+    try {
+      const toolkit = await this.getToolkitByInput(query);
+      return {
+        slug: toolkit.slug,
+        name: toolkit.name,
+        meta: {
+          description: toolkit.meta.description ?? undefined,
+          logo: toolkit.meta.logo ?? undefined,
+          categories: toolkit.meta.categories ?? [],
+        },
+        authSchemes: toolkit.authConfigDetails?.map((detail) => detail.name).filter(isNonEmptyString) ?? [],
+        composioManagedAuthSchemes: toolkit.composioManagedAuthSchemes ?? [],
+        noAuth: false,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async listToolkitTools(toolkitSlug: string): Promise<Array<{
+    slug: string;
+    name: string;
+    description?: string | null;
+    toolkit?: { slug?: string | null; name?: string | null } | null;
+  }>> {
+    const response = await fetch(`https://backend.composio.dev/api/v3/tools?toolkit_slug=${encodeURIComponent(toolkitSlug)}&toolkit_versions=latest&limit=200`, {
+      headers: {
+        'x-api-key': this.apiKey!,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new BridgeHttpError(
+        response.status,
+        `Composio tools request failed (${response.status}): ${body || response.statusText}`,
+      );
+    }
+
+    const body = await response.json() as {
+      items?: Array<{
+        slug: string;
+        name: string;
+        description?: string | null;
+        toolkit?: { slug?: string | null; name?: string | null } | null;
+      }>;
+    };
+
+    return Array.isArray(body.items) ? body.items : [];
+  }
+
+  private async getToolBySlug(toolSlug: string): Promise<{
+    slug: string;
+    name: string;
+    description?: string | null;
+    toolkit?: { slug?: string | null; name?: string | null } | null;
+    inputParameters?: Record<string, unknown> | null;
+  }> {
+    const response = await fetch(`https://backend.composio.dev/api/v3/tools/${encodeURIComponent(toolSlug)}?toolkit_versions=latest`, {
+      headers: {
+        'x-api-key': this.apiKey!,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new BridgeHttpError(
+        response.status,
+        `Composio tool lookup failed (${response.status}): ${body || response.statusText}`,
+      );
+    }
+
+    const body = await response.json() as {
+      slug: string;
+      name: string;
+      description?: string | null;
+      toolkit?: { slug?: string | null; name?: string | null } | null;
+      input_parameters?: Record<string, unknown> | null;
+    };
+
+    return {
+      slug: body.slug,
+      name: body.name,
+      description: body.description ?? null,
+      toolkit: body.toolkit ?? null,
+      inputParameters: asRecord(body.input_parameters),
+    };
+  }
+
+  private async executeToolRaw(
+    userId: string,
+    toolSlug: string,
+    arguments_: Record<string, unknown>,
+    connectedAccountId?: string,
+  ): Promise<{
+    data?: unknown;
+    error?: string | null;
+    logId?: string | null;
+  }> {
+    const response = await fetch(`https://backend.composio.dev/api/v3/tools/execute/${encodeURIComponent(toolSlug)}`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': this.apiKey!,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        arguments: arguments_,
+        user_id: userId,
+        version: 'latest',
+        ...(connectedAccountId ? { connected_account_id: connectedAccountId } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new BridgeHttpError(
+        response.status,
+        `Composio tool execute failed (${response.status}): ${body || response.statusText}`,
+      );
+    }
+
+    return response.json() as Promise<{
+      data?: unknown;
+      error?: string | null;
+      logId?: string | null;
+    }>;
+  }
 }
 
 function normalizeHeaders(headers: Record<string, unknown> | undefined): Record<string, string> {
@@ -445,7 +673,7 @@ function normalizeUserId(userId: string): string {
 function normalizeToolkits(toolkits: string[] | undefined): string[] | undefined {
   if (!toolkits || toolkits.length === 0) return undefined;
   const normalized = toolkits
-    .map((toolkit) => toolkit.trim().toLowerCase())
+    .flatMap((toolkit) => toolkitInputCandidates(toolkit))
     .filter(Boolean);
   return normalized.length > 0 ? normalized : undefined;
 }
@@ -475,6 +703,26 @@ function defaultToolkitMetadata(toolkitSlug: string): { toolkitName: string; log
     toolkitName: titleCase(toolkitSlug.replace(/[_-]+/g, ' ')),
     logoUrl: null,
   };
+}
+
+function toolkitInputCandidates(value: string): string[] {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return [];
+
+  const aliases = new Set<string>([
+    normalized,
+    normalized.replace(/\s+/g, '_'),
+    normalized.replace(/\s+/g, ''),
+    normalized.replace(/[_-]+/g, ' '),
+  ]);
+
+  if (normalized === 'granola' || normalized === 'granola mcp' || normalized === 'granola_mcp') {
+    aliases.add('granola_mcp');
+    aliases.add('granola mcp');
+    aliases.add('granola');
+  }
+
+  return Array.from(aliases);
 }
 
 function titleCase(value: string): string {
@@ -553,4 +801,67 @@ function matchesToolkitQuery(
     toolkit.meta.description?.toLowerCase() ?? '',
   ];
   return haystacks.some((value) => value.includes(normalizedQuery) || value.includes(compactQuery));
+}
+
+function matchesToolQuery(
+  tool: {
+    slug?: string;
+    name?: string;
+    description?: string | null;
+  },
+  normalizedQuery: string,
+): boolean {
+  const compactQuery = normalizedQuery.replace(/\s+/g, '');
+  const haystacks = [
+    tool.slug?.toLowerCase() ?? '',
+    tool.slug?.toLowerCase().replace(/[_-]+/g, '') ?? '',
+    tool.name?.toLowerCase() ?? '',
+    tool.description?.toLowerCase() ?? '',
+  ];
+  return haystacks.some((value) => value.includes(normalizedQuery) || value.includes(compactQuery));
+}
+
+function dedupeToolkitCatalogItems(items: CatalogToolkitItem[]): CatalogToolkitItem[] {
+  const seen = new Set<string>();
+  const deduped: CatalogToolkitItem[] = [];
+  for (const item of items) {
+    if (seen.has(item.slug)) continue;
+    seen.add(item.slug);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function dedupeSearchToolResults(items: BridgeSearchToolResult[]): BridgeSearchToolResult[] {
+  const seen = new Set<string>();
+  const deduped: BridgeSearchToolResult[] = [];
+  for (const item of items) {
+    if (seen.has(item.slug)) continue;
+    seen.add(item.slug);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function shouldFallbackToolkitToolSearch(toolkits: string[] | undefined, error: unknown): boolean {
+  if (!toolkits || toolkits.length === 0) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('outputParameters')
+    || message.includes('invalid_literal')
+    || message.includes('invalid_type');
+}
+
+function toSearchToolView(tool: {
+  slug: string;
+  name: string;
+  description?: string | null;
+  toolkit?: { slug?: string | null; name?: string | null } | null;
+}): BridgeSearchToolResult {
+  return {
+    slug: tool.slug,
+    name: tool.name,
+    description: tool.description ?? null,
+    toolkitSlug: tool.toolkit?.slug ?? null,
+    toolkitName: tool.toolkit?.name ?? null,
+  };
 }

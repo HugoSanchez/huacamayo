@@ -95,9 +95,15 @@ export class ConnectionsService {
   async listConnections(): Promise<ConnectionView[]> {
     if (this.bridgeClient.configured) {
       const userId = this.store.ensureVervoUserId();
-      const items = await this.bridgeClient.listConnections(userId);
-      syncRemoteConnectionsIntoStore(this.store, items);
-      return items.map((item) => ({ ...item }));
+      try {
+        const items = await this.bridgeClient.listConnections(userId);
+        syncRemoteConnectionsIntoStore(this.store, items);
+        return mergeConnectionViews(items, this.store.listConnections().map(toConnectionView));
+      } catch {
+        if (!this.client) {
+          return this.store.listConnections().map(toConnectionView);
+        }
+      }
     }
 
     await this.syncConnections().catch(() => {});
@@ -110,10 +116,30 @@ export class ConnectionsService {
   }> {
     this.assertConfigured();
 
-    if (this.bridgeClient.configured && this.client === null) {
+    if (this.bridgeClient.configured) {
       const userId = this.store.ensureVervoUserId();
-      const items = await this.bridgeClient.listToolkits(userId, opts.query, opts.limit);
-      return { toolkits: items, nextCursor: null };
+      try {
+        const items = await this.bridgeClient.listToolkits(userId, opts.query, opts.limit);
+        return {
+          toolkits: mergeToolkitViewsWithStoredConnections(
+            items,
+            this.store.listConnections().map(toConnectionView),
+            opts.query,
+          ),
+          nextCursor: null,
+        };
+      } catch {
+        if (this.client === null) {
+          return {
+            toolkits: mergeToolkitViewsWithStoredConnections(
+              [],
+              this.store.listConnections().map(toConnectionView),
+              opts.query,
+            ),
+            nextCursor: null,
+          };
+        }
+      }
     }
 
     if (this.client === null || !this.apiKey) {
@@ -196,9 +222,15 @@ export class ConnectionsService {
 
     if (this.bridgeClient.configured) {
       const userId = this.store.ensureVervoUserId();
-      const request = await this.bridgeClient.requestConnection(userId, toolkitSlug, `${baseUrl}/connections/callback`);
-      syncRemoteRequestIntoStore(this.store, request);
-      return request;
+      try {
+        const request = await this.bridgeClient.requestConnection(userId, toolkitSlug, `${baseUrl}/connections/callback`);
+        syncRemoteRequestIntoStore(this.store, request);
+        return request;
+      } catch {
+        if (this.client === null) {
+          throw new HttpError(503, 'Composio bridge is unavailable.');
+        }
+      }
     }
 
     const resolvedToolkit = await this.resolveToolkit(toolkitSlug);
@@ -521,6 +553,60 @@ function syncRemoteRequestIntoStore(
   }
 }
 
+function mergeConnectionViews(remote: ConnectionView[], local: ConnectionView[]): ConnectionView[] {
+  const merged = new Map<string, ConnectionView>();
+
+  for (const connection of local) {
+    merged.set(connection.connectedAccountId, connection);
+  }
+
+  for (const connection of remote) {
+    merged.set(connection.connectedAccountId, { ...connection });
+  }
+
+  return Array.from(merged.values()).sort((left, right) => left.toolkitName.localeCompare(right.toolkitName));
+}
+
+function mergeToolkitViewsWithStoredConnections(
+  remote: ToolkitView[],
+  localConnections: ConnectionView[],
+  query?: string,
+): ToolkitView[] {
+  const merged = new Map(remote.map((toolkit) => [toolkit.slug, { ...toolkit }]));
+
+  for (const connection of localConnections) {
+    const existing = merged.get(connection.toolkitSlug);
+    if (existing) {
+      merged.set(connection.toolkitSlug, {
+        ...existing,
+        connected: connection.status === 'active',
+        connectedAccountId: connection.connectedAccountId,
+        logoUrl: existing.logoUrl ?? connection.logoUrl,
+      });
+      continue;
+    }
+
+    if (query && !matchesStoredConnectionQuery(connection, normalizeSearchQuery(query))) {
+      continue;
+    }
+
+    merged.set(connection.toolkitSlug, {
+      slug: connection.toolkitSlug,
+      name: connection.toolkitName,
+      description: null,
+      logoUrl: connection.logoUrl,
+      categories: [],
+      authSchemes: [],
+      composioManagedAuthSchemes: [],
+      connected: connection.status === 'active',
+      connectedAccountId: connection.connectedAccountId,
+      noAuth: false,
+    });
+  }
+
+  return Array.from(merged.values()).sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function rankToolkits(
   toolkits: ToolkitView[] | RemoteBridgeToolkitView[],
   normalizedInput: string,
@@ -568,6 +654,16 @@ function matchesToolkitQuery(
     toolkit.slug.replace(/[_-]+/g, ''),
     toolkit.name.toLowerCase(),
     toolkit.meta.description?.toLowerCase() ?? '',
+  ];
+  return haystacks.some((value) => value.includes(normalizedQuery) || value.includes(compactQuery));
+}
+
+function matchesStoredConnectionQuery(connection: ConnectionView, normalizedQuery: string): boolean {
+  const compactQuery = normalizedQuery.replace(/\s+/g, '');
+  const haystacks = [
+    connection.toolkitSlug.toLowerCase(),
+    connection.toolkitSlug.toLowerCase().replace(/[_-]+/g, ''),
+    connection.toolkitName.toLowerCase(),
   ];
   return haystacks.some((value) => value.includes(normalizedQuery) || value.includes(compactQuery));
 }

@@ -9,7 +9,8 @@ interface Props {
   onConnect: (toolkit: ToolkitView) => void;
 }
 
-const PAGE_SIZE = 200;
+const DEFAULT_PAGE_SIZE = 100;
+const SEARCH_PAGE_SIZE = 200;
 const SEARCH_DEBOUNCE_MS = 250;
 const SCROLL_THRESHOLD_PX = 240;
 const MIN_SEARCH_CHARS = 3;
@@ -25,6 +26,9 @@ export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Pro
 
   const fetchTokenRef = useRef(0);
   const listRef = useRef<HTMLDivElement | null>(null);
+
+  const activePageSize = searchQuery ? SEARCH_PAGE_SIZE : DEFAULT_PAGE_SIZE;
+  const canFetchMore = Boolean(searchQuery);
 
   // Debounce search input -> search query. Composio requires queries to be
   // at least MIN_SEARCH_CHARS long; shorter inputs fall back to the default
@@ -48,7 +52,7 @@ export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Pro
 
     void getToolkits({
       query: searchQuery || undefined,
-      limit: PAGE_SIZE,
+      limit: activePageSize,
     })
       .then((result) => {
         if (token !== fetchTokenRef.current) return;
@@ -64,16 +68,16 @@ export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Pro
         setIsLoading(false);
         if (listRef.current) listRef.current.scrollTop = 0;
       });
-  }, [isOpen, refreshToken, searchQuery]);
+  }, [isOpen, refreshToken, searchQuery, activePageSize]);
 
   const fetchMore = useCallback(() => {
-    if (!nextCursor || isFetchingMore || isLoading) return;
+    if (!canFetchMore || !nextCursor || isFetchingMore || isLoading) return;
     const token = fetchTokenRef.current;
     setIsFetchingMore(true);
     void getToolkits({
       query: searchQuery || undefined,
       cursor: nextCursor,
-      limit: PAGE_SIZE,
+      limit: activePageSize,
     })
       .then((result) => {
         if (token !== fetchTokenRef.current) return;
@@ -92,7 +96,7 @@ export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Pro
         if (token !== fetchTokenRef.current) return;
         setIsFetchingMore(false);
       });
-  }, [nextCursor, isFetchingMore, isLoading, searchQuery]);
+  }, [nextCursor, isFetchingMore, isLoading, searchQuery, activePageSize, canFetchMore]);
 
   const handleScroll = useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
@@ -157,7 +161,7 @@ export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Pro
         {toolkits.map((toolkit) => (
           <CatalogRow key={toolkit.slug} toolkit={toolkit} onConnect={onConnect} />
         ))}
-        {isFetchingMore && (
+        {canFetchMore && isFetchingMore && (
           <div className="catalog-overlay-loading-more">Loading more…</div>
         )}
       </div>
