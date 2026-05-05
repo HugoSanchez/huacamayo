@@ -28,7 +28,7 @@ describe('Managed Hermes Startup', () => {
 
     gatewayPort = await allocatePort();
     process.env.VERVO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
-    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-managed-${process.pid}.json`;
+    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-managed-${process.pid}.sqlite`;
     process.env.VERVO_HERMES_COMMAND = process.execPath;
     process.env.VERVO_HERMES_ARGS = JSON.stringify([
       path.resolve(process.cwd(), 'test/fixtures/fake-hermes-gateway.mjs'),
@@ -84,7 +84,7 @@ describe('Managed Hermes Startup', () => {
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain('Starting Hermes');
-    expect(body).toContain('Managed Hermes');
+    expect(body).toContain('Managed Hermes: Say hello from managed Hermes');
     expect(body).toContain('content_block_delta');
 
     const status = await fetchJson('/chat/status');

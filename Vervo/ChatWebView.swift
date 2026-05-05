@@ -5,10 +5,17 @@ import WebKit
 /// Passes the sidecar port to JS via `window.setSidecarPort(port)`.
 struct ChatWebView: NSViewRepresentable {
     let sidecarPort: Int?
+    let selectedSessionId: String?
     let isDarkMode: Bool
+    let isCatalogOpen: Bool
+    let onSessionStateChange: ((String?) -> Void)?
+    let onCatalogStateChange: ((Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(
+            onSessionStateChange: onSessionStateChange,
+            onCatalogStateChange: onCatalogStateChange
+        )
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -16,6 +23,7 @@ struct ChatWebView: NSViewRepresentable {
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         // Allow fetch to localhost from file:// origin
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        config.userContentController.add(context.coordinator, name: "chatBridge")
         config.userContentController.addUserScript(WKUserScript(
             source: """
             (function() {
@@ -39,9 +47,27 @@ struct ChatWebView: NSViewRepresentable {
 
               window.__vervoApplySidecarPort = function(port) {
                 window.__vervoPendingSidecarPort = port;
-                if (typeof assignedHandler === 'function') {
-                  try { assignedHandler(port); } catch (_) {}
-                }
+              if (typeof assignedHandler === 'function') {
+                try { assignedHandler(port); } catch (_) {}
+              }
+              };
+
+              window.__vervoShellMode = 'native';
+              window.__vervoPendingSelectedSessionId = null;
+              window.__vervoApplySelectedSession = function(sessionId) {
+                window.__vervoPendingSelectedSessionId = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
+                window.dispatchEvent(new CustomEvent('vervo:select-session', {
+                  detail: { sessionId: window.__vervoPendingSelectedSessionId }
+                }));
+              };
+
+              window.__vervoPendingCatalogOpen = false;
+              window.__vervoApplyCatalogState = function(open) {
+                var next = !!open;
+                window.__vervoPendingCatalogOpen = next;
+                window.dispatchEvent(new CustomEvent('vervo:toggle-catalog', {
+                  detail: { open: next }
+                }));
               };
             })();
             """,
@@ -74,11 +100,29 @@ struct ChatWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onSessionStateChange = onSessionStateChange
+        context.coordinator.onCatalogStateChange = onCatalogStateChange
+
         // When sidecar port becomes available, inject it into JS
         if let port = sidecarPort, port != context.coordinator.lastInjectedPort {
             context.coordinator.pendingPort = port
             if context.coordinator.pageLoaded {
                 context.coordinator.injectPort(port)
+            }
+        }
+
+        let selectedSessionToken = selectedSessionId ?? "__vervo_nil_session__"
+        if selectedSessionToken != context.coordinator.lastInjectedSelectedSessionToken {
+            context.coordinator.pendingSelectedSessionId = selectedSessionId
+            if context.coordinator.pageLoaded {
+                context.coordinator.injectSelectedSession(selectedSessionId)
+            }
+        }
+
+        if isCatalogOpen != context.coordinator.lastInjectedCatalogOpen {
+            context.coordinator.pendingCatalogOpen = isCatalogOpen
+            if context.coordinator.pageLoaded {
+                context.coordinator.injectCatalogState(isCatalogOpen)
             }
         }
 
@@ -93,18 +137,34 @@ struct ChatWebView: NSViewRepresentable {
         }
     }
 
-    class Coordinator: NSObject, WKNavigationDelegate {
+    class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var onSessionStateChange: ((String?) -> Void)?
+        var onCatalogStateChange: ((Bool) -> Void)?
         weak var webView: WKWebView?
         var lastInjectedPort: Int?
         var pendingPort: Int?
+        var lastInjectedSelectedSessionToken: String?
+        var pendingSelectedSessionId: String?
+        var lastInjectedCatalogOpen: Bool?
+        var pendingCatalogOpen: Bool = false
         var lastDarkMode: Bool?
         var pageLoaded = false
+
+        init(
+            onSessionStateChange: ((String?) -> Void)?,
+            onCatalogStateChange: ((Bool) -> Void)?
+        ) {
+            self.onSessionStateChange = onSessionStateChange
+            self.onCatalogStateChange = onCatalogStateChange
+        }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             pageLoaded = true
             if let port = pendingPort ?? lastInjectedPort {
                 injectPort(port)
             }
+            injectSelectedSession(pendingSelectedSessionId)
+            injectCatalogState(pendingCatalogOpen)
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -113,6 +173,29 @@ struct ChatWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             print("[ChatWebView] Provisional navigation failed: \(error)")
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            guard let url = navigationAction.request.url else {
+                decisionHandler(.allow)
+                return
+            }
+
+            let scheme = url.scheme?.lowercased()
+            let isExternalWebURL = scheme == "http" || scheme == "https"
+            let isMainFrameNavigation = navigationAction.targetFrame?.isMainFrame ?? true
+
+            if isExternalWebURL && isMainFrameNavigation {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+
+            decisionHandler(.allow)
         }
 
         func injectPort(_ port: Int) {
@@ -137,5 +220,86 @@ struct ChatWebView: NSViewRepresentable {
             lastInjectedPort = port
             pendingPort = port
         }
+
+        func injectSelectedSession(_ sessionId: String?) {
+            guard let webView else { return }
+
+            let sessionLiteral = sessionId.map { "'\($0.jsEscaped)'" } ?? "null"
+            let js = """
+            (function() {
+              window.__vervoPendingSelectedSessionId = \(sessionLiteral);
+              if (typeof window.__vervoApplySelectedSession === 'function') {
+                window.__vervoApplySelectedSession(\(sessionLiteral));
+              }
+            })();
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    print("[ChatWebView] Failed to inject selected session: \(error.localizedDescription)")
+                }
+            }
+
+            pendingSelectedSessionId = sessionId
+            lastInjectedSelectedSessionToken = sessionId ?? "__vervo_nil_session__"
+        }
+
+        func injectCatalogState(_ open: Bool) {
+            guard let webView else { return }
+            let js = """
+            (function() {
+              window.__vervoPendingCatalogOpen = \(open ? "true" : "false");
+              if (typeof window.__vervoApplyCatalogState === 'function') {
+                window.__vervoApplyCatalogState(\(open ? "true" : "false"));
+              }
+            })();
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    print("[ChatWebView] Failed to inject catalog state: \(error.localizedDescription)")
+                }
+            }
+            pendingCatalogOpen = open
+            lastInjectedCatalogOpen = open
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "chatBridge",
+                  let body = message.body as? [String: Any],
+                  let type = body["type"] as? String else {
+                return
+            }
+
+            if type == "openExternalUrl",
+               let rawURL = body["url"] as? String,
+               let url = URL(string: rawURL) {
+                NSWorkspace.shared.open(url)
+                return
+            }
+
+            if type == "sessionStateChanged" {
+                let sessionId = body["sessionId"] as? String
+                DispatchQueue.main.async { [onSessionStateChange] in
+                    onSessionStateChange?(sessionId)
+                }
+                return
+            }
+
+            if type == "catalogStateChanged" {
+                let open = body["open"] as? Bool ?? false
+                DispatchQueue.main.async { [onCatalogStateChange] in
+                    onCatalogStateChange?(open)
+                }
+            }
+        }
+    }
+}
+
+private extension String {
+    var jsEscaped: String {
+        self
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 }

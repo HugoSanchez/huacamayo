@@ -8,11 +8,17 @@ describe('Chat HTTP Endpoints', () => {
   const envSnapshot = {
     VERVO_HERMES_MANAGED: process.env.VERVO_HERMES_MANAGED,
     VERVO_CHAT_STORE_PATH: process.env.VERVO_CHAT_STORE_PATH,
+    VERVO_COMPOSIO_BRIDGE_URL: process.env.VERVO_COMPOSIO_BRIDGE_URL,
+    VERVO_COMPOSIO_BRIDGE_TOKEN: process.env.VERVO_COMPOSIO_BRIDGE_TOKEN,
+    COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
   };
 
   beforeAll(async () => {
     process.env.VERVO_HERMES_MANAGED = 'false';
-    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-endpoint-${process.pid}.json`;
+    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-endpoint-${process.pid}.sqlite`;
+    delete process.env.VERVO_COMPOSIO_BRIDGE_URL;
+    delete process.env.VERVO_COMPOSIO_BRIDGE_TOKEN;
+    delete process.env.COMPOSIO_API_KEY;
     const result = await startServer({ port: 0 });
     server = result.server;
     port = result.port;
@@ -25,6 +31,9 @@ describe('Chat HTTP Endpoints', () => {
     }
     process.env.VERVO_HERMES_MANAGED = envSnapshot.VERVO_HERMES_MANAGED;
     process.env.VERVO_CHAT_STORE_PATH = envSnapshot.VERVO_CHAT_STORE_PATH;
+    process.env.VERVO_COMPOSIO_BRIDGE_URL = envSnapshot.VERVO_COMPOSIO_BRIDGE_URL;
+    process.env.VERVO_COMPOSIO_BRIDGE_TOKEN = envSnapshot.VERVO_COMPOSIO_BRIDGE_TOKEN;
+    process.env.COMPOSIO_API_KEY = envSnapshot.COMPOSIO_API_KEY;
   });
 
   function url(path: string): string {
@@ -45,6 +54,13 @@ describe('Chat HTTP Endpoints', () => {
     expect(body.hasActiveRequest).toBe(false);
   });
 
+  it('reports composio bridge as unavailable without an API key', async () => {
+    const { status, body } = await fetchJson('/composio/session');
+    expect(status).toBe(503);
+    expect(body.error).toBe('request_failed');
+    expect(body.message).toContain('COMPOSIO_API_KEY');
+  });
+
   it('creates and reads a session', async () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
@@ -54,6 +70,7 @@ describe('Chat HTTP Endpoints', () => {
 
     expect(created.status).toBe(201);
     expect(created.body.session.title).toBe('Inflation thread');
+    expect(created.body.session.archivedAt).toBeNull();
 
     const sessionId = created.body.session.id as string;
 
@@ -64,6 +81,47 @@ describe('Chat HTTP Endpoints', () => {
     const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
     expect(messages.status).toBe(200);
     expect(messages.body.messages).toEqual([]);
+  });
+
+  it('archives and restores a session', async () => {
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Archive me' }),
+    });
+
+    const sessionId = created.body.session.id as string;
+
+    const archived = await fetchJson(`/chat/sessions/${sessionId}/archive`, {
+      method: 'POST',
+    });
+    expect(archived.status).toBe(200);
+    expect(archived.body.session.archivedAt).toEqual(expect.any(String));
+
+    const restored = await fetchJson(`/chat/sessions/${sessionId}/unarchive`, {
+      method: 'POST',
+    });
+    expect(restored.status).toBe(200);
+    expect(restored.body.session.archivedAt).toBeNull();
+  });
+
+  it('renames a session', async () => {
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Draft title' }),
+    });
+
+    const sessionId = created.body.session.id as string;
+
+    const renamed = await fetchJson(`/chat/sessions/${sessionId}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Renamed session' }),
+    });
+
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.session.title).toBe('Renamed session');
   });
 
   it('rejects missing message content', async () => {

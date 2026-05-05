@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import { delimiter, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import YAML from 'yaml';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -77,7 +78,7 @@ function getHermesLaunchConfig(): HermesLaunchConfig {
     command,
     args: command === process.env.VERVO_HERMES_COMMAND?.trim()
       ? parseLaunchArgs(process.env.VERVO_HERMES_ARGS)
-      : ['gateway', 'run'],
+      : ['gateway', 'run', '--replace'],
     cwd,
     startupTimeoutMs,
   };
@@ -140,6 +141,7 @@ export class HermesSupervisor {
   private readonly templateHermesHome: string;
 
   private config: HermesGatewayConfig;
+  private orchestratorBaseUrl: string | null = null;
   private baseUrlResolved: boolean;
   private resolveBaseUrlPromise: Promise<void> | null = null;
   private child: ChildProcess | null = null;
@@ -166,6 +168,10 @@ export class HermesSupervisor {
       this.lastError = error instanceof Error ? error.message : String(error);
       this.state = 'error';
     });
+  }
+
+  setOrchestratorBaseUrl(baseUrl: string): void {
+    this.orchestratorBaseUrl = normalizeBaseUrl(baseUrl);
   }
 
   async ensureReady(signal?: AbortSignal): Promise<HermesGatewayConfig> {
@@ -398,6 +404,7 @@ export class HermesSupervisor {
       API_SERVER_PORT: port,
       HERMES_HOME: this.managedHermesHome,
       VERVO_HERMES_GATEWAY_URL: this.config.baseUrl,
+      ...(this.orchestratorBaseUrl ? { VERVO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {
@@ -427,6 +434,46 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'SOUL.md');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
+    this.configureManagedMcpServers();
+  }
+
+  private configureManagedMcpServers(): void {
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    if (!existsSync(configPath)) return;
+
+    let config: Record<string, unknown> = {};
+    try {
+      const raw = readFileSync(configPath, 'utf8');
+      const parsed = YAML.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        config = parsed as Record<string, unknown>;
+      }
+    } catch {
+      config = {};
+    }
+
+    const mcpServers = asRecord(config.mcp_servers) ?? {};
+
+    if (this.orchestratorBaseUrl) {
+      const pythonPath = resolveHermesPython(this.templateHermesHome);
+      const serverPath = resolveVervoMcpServerPath();
+      if (pythonPath && serverPath) {
+        mcpServers.vervo = {
+          command: pythonPath,
+          args: [serverPath],
+          env: {
+            VERVO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
+          },
+          timeout: 120,
+          connect_timeout: 60,
+        };
+      }
+    }
+
+    delete mcpServers.composio;
+
+    config.mcp_servers = mcpServers;
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
   private captureLog(stream: 'stdout' | 'stderr', chunk: string): void {
@@ -595,10 +642,38 @@ function resolveHermesRoot(home: string): string {
   return index >= 0 ? home.slice(0, index) : home;
 }
 
+function resolveHermesPython(templateHome: string): string | null {
+  const candidate = join(resolveHermesRoot(templateHome), 'hermes-agent', 'venv', 'bin', 'python');
+  return existsSync(candidate) ? candidate : null;
+}
+
+function resolveVervoMcpServerPath(): string | null {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const candidate = join(currentDir, '..', '..', 'mcp', 'vervo_server.py');
+  return existsSync(candidate) ? candidate : null;
+}
+
 function seedHermesHomeFile(sourceHome: string, targetHome: string, fileName: string): void {
   const sourcePath = join(sourceHome, fileName);
   const targetPath = join(targetHome, fileName);
-  if (!existsSync(sourcePath) || existsSync(targetPath)) return;
+  if (!existsSync(sourcePath)) return;
+  if (existsSync(targetPath) && !shouldRefreshManagedFile(sourcePath, targetPath, fileName)) return;
   mkdirSync(dirname(targetPath), { recursive: true });
   copyFileSync(sourcePath, targetPath);
+}
+
+function shouldRefreshManagedFile(sourcePath: string, targetPath: string, fileName: string): boolean {
+  if (fileName !== 'auth.json') return false;
+
+  try {
+    return statSync(sourcePath).mtimeMs > statSync(targetPath).mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }

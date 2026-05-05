@@ -13,6 +13,7 @@ export interface ChatSessionSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null;
   messageCount: number;
   lastMessagePreview: string | null;
 }
@@ -25,9 +26,45 @@ export interface StoredChatMessage {
   createdAt: string;
 }
 
+export interface ConnectionRequestView {
+  id: string;
+  toolkitSlug: string;
+  toolkitName: string;
+  logoUrl: string | null;
+  status: 'pending' | 'connected' | 'failed' | 'expired';
+  redirectUrl: string | null;
+  connectedAccountId: string | null;
+  errorMessage: string | null;
+}
+
+export interface ConnectionView {
+  connectedAccountId: string;
+  toolkitSlug: string;
+  toolkitName: string;
+  logoUrl: string | null;
+  status: 'active' | 'inactive';
+}
+
+export interface ToolkitView {
+  slug: string;
+  name: string;
+  description: string | null;
+  logoUrl: string | null;
+  connected: boolean;
+  connectedAccountId: string | null;
+  noAuth: boolean;
+}
+
 export type ActivityStep =
   | { type: 'text'; text: string }
-  | { type: 'tool'; id?: string; name: string; input?: unknown; result?: string };
+  | {
+      type: 'tool';
+      id?: string;
+      name: string;
+      input?: unknown;
+      result?: string;
+      connection?: ConnectionRequestView;
+    };
 
 export interface ChatSSEEvent {
   type: string;

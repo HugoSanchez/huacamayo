@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -18,8 +19,8 @@ export interface ChatSessionRecord {
   title: string;
   createdAt: string;
   updatedAt: string;
-  lastResponseId: string | null;
-  messages: ChatMessageRecord[];
+  hermesSessionId: string | null;
+  archivedAt: string | null;
 }
 
 export interface ChatSessionSummary {
@@ -27,26 +28,49 @@ export interface ChatSessionSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null;
   messageCount: number;
   lastMessagePreview: string | null;
 }
 
-interface ChatStoreShape {
-  sessions: ChatSessionRecord[];
-}
-
 function defaultStorePath(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Vervo', 'chat-sessions.json');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'Vervo', 'chat-sessions.sqlite');
 }
 
 export class ChatStore {
   private readonly storePath: string;
-
-  private state: ChatStoreShape;
+  private readonly db: DatabaseSync;
 
   constructor(storePath = process.env.VERVO_CHAT_STORE_PATH?.trim() || defaultStorePath()) {
     this.storePath = storePath;
-    this.state = this.load();
+    mkdirSync(path.dirname(this.storePath), { recursive: true });
+    this.db = new DatabaseSync(this.storePath);
+    this.db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        hermes_session_id TEXT,
+        archived_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS local_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at
+        ON chat_sessions(updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_local_messages_session_id
+        ON local_messages(session_id, created_at ASC);
+    `);
   }
 
   get path(): string {
@@ -54,107 +78,217 @@ export class ChatStore {
   }
 
   listSessions(): ChatSessionSummary[] {
-    return [...this.state.sessions]
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((session) => toSessionSummary(session));
+    return this.listSessionRecords().map((session) => ({
+      id: session.id,
+      title: session.title,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      archivedAt: session.archivedAt,
+      messageCount: 0,
+      lastMessagePreview: null,
+    }));
+  }
+
+  listSessionRecords(): ChatSessionRecord[] {
+    const rows = this.db.prepare(`
+      SELECT id, title, created_at, updated_at, hermes_session_id, archived_at
+      FROM chat_sessions
+      ORDER BY updated_at DESC
+    `).all() as unknown as SessionRow[];
+
+    return rows.map(rowToSessionRecord);
+  }
+
+  getSession(sessionId: string): ChatSessionSummary | null {
+    const session = this.getSessionRecord(sessionId);
+    if (!session) return null;
+
+    return {
+      id: session.id,
+      title: session.title,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      archivedAt: session.archivedAt,
+      messageCount: 0,
+      lastMessagePreview: null,
+    };
+  }
+
+  getSessionRecord(sessionId: string): ChatSessionRecord | null {
+    const row = this.db.prepare(`
+      SELECT id, title, created_at, updated_at, hermes_session_id, archived_at
+      FROM chat_sessions
+      WHERE id = ?
+    `).get(sessionId) as SessionRow | undefined;
+
+    return row ? rowToSessionRecord(row) : null;
   }
 
   createSession(title?: string): ChatSessionSummary {
     const now = new Date().toISOString();
-    const session: ChatSessionRecord = {
-      id: randomUUID(),
-      title: normalizeTitle(title) || 'New chat',
+    const id = randomUUID();
+    const resolvedTitle = normalizeTitle(title) || 'New chat';
+
+    this.db.prepare(`
+      INSERT INTO chat_sessions (id, title, created_at, updated_at, hermes_session_id, archived_at)
+      VALUES (?, ?, ?, ?, NULL, NULL)
+    `).run(id, resolvedTitle, now, now);
+
+    return {
+      id,
+      title: resolvedTitle,
       createdAt: now,
       updatedAt: now,
-      lastResponseId: null,
-      messages: [],
+      archivedAt: null,
+      messageCount: 0,
+      lastMessagePreview: null,
     };
-    this.state.sessions.push(session);
-    this.save();
-    return toSessionSummary(session);
-  }
-
-  getSession(sessionId: string): ChatSessionSummary | null {
-    const session = this.findSession(sessionId);
-    return session ? toSessionSummary(session) : null;
-  }
-
-  getMessages(sessionId: string): ChatMessageRecord[] | null {
-    const session = this.findSession(sessionId);
-    if (!session) return null;
-    return [...session.messages];
   }
 
   appendMessage(sessionId: string, role: ChatRole, content: string): ChatMessageRecord | null {
-    const session = this.findSession(sessionId);
+    const session = this.getSessionRecord(sessionId);
     if (!session) return null;
 
     const now = new Date().toISOString();
-    const message: ChatMessageRecord = {
-      id: randomUUID(),
+    const messageId = randomUUID();
+    this.db.prepare(`
+      INSERT INTO local_messages (id, session_id, role, content, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(messageId, sessionId, role, content, now);
+    this.touchSession(sessionId, now);
+
+    return {
+      id: messageId,
       sessionId,
       role,
       content,
       createdAt: now,
     };
-
-    session.messages.push(message);
-    session.updatedAt = now;
-    if (role === 'user' && session.messages.filter((item) => item.role === 'user').length === 1) {
-      session.title = normalizeTitle(content) || session.title;
-    }
-    this.save();
-    return message;
   }
 
-  getLastResponseId(sessionId: string): string | null {
-    return this.findSession(sessionId)?.lastResponseId ?? null;
+  getMessages(sessionId: string): ChatMessageRecord[] | null {
+    const exists = this.db.prepare(`
+      SELECT 1
+      FROM chat_sessions
+      WHERE id = ?
+    `).get(sessionId);
+    if (!exists) return null;
+
+    const rows = this.db.prepare(`
+      SELECT id, session_id, role, content, created_at
+      FROM local_messages
+      WHERE session_id = ?
+      ORDER BY created_at ASC, id ASC
+    `).all(sessionId) as unknown as MessageRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      sessionId: row.session_id,
+      role: row.role,
+      content: row.content,
+      createdAt: row.created_at,
+    }));
   }
 
-  setLastResponseId(sessionId: string, responseId: string | null): void {
-    const session = this.findSession(sessionId);
+  linkHermesSession(sessionId: string, hermesSessionId: string): void {
+    const session = this.getSessionRecord(sessionId);
     if (!session) return;
-    session.lastResponseId = responseId;
-    session.updatedAt = new Date().toISOString();
-    this.save();
+
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE chat_sessions
+      SET hermes_session_id = ?, updated_at = ?
+      WHERE id = ?
+    `).run(hermesSessionId, now, sessionId);
   }
 
-  private findSession(sessionId: string): ChatSessionRecord | undefined {
-    return this.state.sessions.find((session) => session.id === sessionId);
+  touchSession(sessionId: string, updatedAt = new Date().toISOString()): void {
+    this.db.prepare(`
+      UPDATE chat_sessions
+      SET updated_at = ?
+      WHERE id = ?
+    `).run(updatedAt, sessionId);
   }
 
-  private load(): ChatStoreShape {
-    if (!existsSync(this.storePath)) {
-      return { sessions: [] };
-    }
+  renameSession(sessionId: string, title: string): ChatSessionRecord | null {
+    const session = this.getSessionRecord(sessionId);
+    if (!session) return null;
 
-    try {
-      const raw = readFileSync(this.storePath, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<ChatStoreShape>;
-      if (!parsed || !Array.isArray(parsed.sessions)) {
-        return { sessions: [] };
-      }
+    const resolvedTitle = normalizeTitle(title);
+    if (!resolvedTitle) return session;
 
-      return {
-        sessions: parsed.sessions
-          .filter(isValidSessionRecord)
-          .map((session) => ({
-            ...session,
-            lastResponseId: typeof session.lastResponseId === 'string' ? session.lastResponseId : null,
-            messages: session.messages.filter(isValidMessageRecord),
-          })),
-      };
-    } catch {
-      return { sessions: [] };
-    }
+    this.db.prepare(`
+      UPDATE chat_sessions
+      SET title = ?
+      WHERE id = ?
+    `).run(resolvedTitle, sessionId);
+
+    return {
+      ...session,
+      title: resolvedTitle,
+    };
   }
 
-  private save(): void {
-    mkdirSync(path.dirname(this.storePath), { recursive: true });
-    const tmpPath = `${this.storePath}.${process.pid}.tmp`;
-    writeFileSync(tmpPath, `${JSON.stringify(this.state, null, 2)}\n`, 'utf8');
-    renameSync(tmpPath, this.storePath);
+  archiveSession(sessionId: string): ChatSessionRecord | null {
+    const session = this.getSessionRecord(sessionId);
+    if (!session) return null;
+
+    const archivedAt = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE chat_sessions
+      SET archived_at = ?
+      WHERE id = ?
+    `).run(archivedAt, sessionId);
+
+    return {
+      ...session,
+      archivedAt,
+    };
   }
+
+  unarchiveSession(sessionId: string): ChatSessionRecord | null {
+    const session = this.getSessionRecord(sessionId);
+    if (!session) return null;
+
+    this.db.prepare(`
+      UPDATE chat_sessions
+      SET archived_at = NULL
+      WHERE id = ?
+    `).run(sessionId);
+
+    return {
+      ...session,
+      archivedAt: null,
+    };
+  }
+}
+
+interface SessionRow {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  hermes_session_id: string | null;
+  archived_at: string | null;
+}
+
+interface MessageRow {
+  id: string;
+  session_id: string;
+  role: ChatRole;
+  content: string;
+  created_at: string;
+}
+
+function rowToSessionRecord(row: SessionRow): ChatSessionRecord {
+  return {
+    id: row.id,
+    title: row.title,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    hermesSessionId: row.hermes_session_id,
+    archivedAt: row.archived_at,
+  };
 }
 
 function normalizeTitle(input: string | undefined): string {
@@ -162,42 +296,4 @@ function normalizeTitle(input: string | undefined): string {
   const compact = input.replace(/\s+/g, ' ').trim();
   if (!compact) return '';
   return compact.length > 80 ? `${compact.slice(0, 80)}...` : compact;
-}
-
-function toSessionSummary(session: ChatSessionRecord): ChatSessionSummary {
-  const lastMessage = session.messages[session.messages.length - 1];
-  return {
-    id: session.id,
-    title: session.title,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    messageCount: session.messages.length,
-    lastMessagePreview: lastMessage ? preview(lastMessage.content) : null,
-  };
-}
-
-function preview(content: string): string {
-  const compact = content.replace(/\s+/g, ' ').trim();
-  if (compact.length <= 120) return compact;
-  return `${compact.slice(0, 120)}...`;
-}
-
-function isValidSessionRecord(value: unknown): value is ChatSessionRecord {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<ChatSessionRecord>;
-  return typeof candidate.id === 'string'
-    && typeof candidate.title === 'string'
-    && typeof candidate.createdAt === 'string'
-    && typeof candidate.updatedAt === 'string'
-    && Array.isArray(candidate.messages);
-}
-
-function isValidMessageRecord(value: unknown): value is ChatMessageRecord {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Partial<ChatMessageRecord>;
-  return typeof candidate.id === 'string'
-    && typeof candidate.sessionId === 'string'
-    && (candidate.role === 'user' || candidate.role === 'assistant')
-    && typeof candidate.content === 'string'
-    && typeof candidate.createdAt === 'string';
 }
