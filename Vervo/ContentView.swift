@@ -90,6 +90,8 @@ struct ContentView: View {
     @AppStorage("isLeftSidebarExpanded") private var isLeftSidebarExpanded = true
     @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = true
     @AppStorage("isConnectionsCatalogExpanded") private var isConnectionsCatalogExpanded = false
+    @AppStorage("isConnectionsListExpanded") private var isConnectionsListExpanded = true
+    @AppStorage("isSessionsListExpanded") private var isSessionsListExpanded = true
     @AppStorage("selectedChatSessionId") private var persistedSelectedSessionId = ""
     @State private var sessions: [SidebarChatSession] = []
     @State private var selectedSessionId: String?
@@ -97,6 +99,7 @@ struct ContentView: View {
     @State private var sessionError: String?
     @State private var sidebarToast: SidebarToast?
     @State private var connections: [SidebarConnection] = []
+    @State private var hasCompletedInitialSelection = false
     private let sidebarRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     init(sidecar: SidecarManager) {
@@ -141,6 +144,8 @@ struct ContentView: View {
                         sidecarReady: sidecarPort != nil,
                         connections: connections,
                         isCatalogOpen: isConnectionsCatalogExpanded,
+                        isConnectionsExpanded: $isConnectionsListExpanded,
+                        isSessionsExpanded: $isSessionsListExpanded,
                         onCreateSession: {
                             Task { await createSession() }
                         },
@@ -308,7 +313,16 @@ struct ContentView: View {
             let decoded = try JSONDecoder().decode(SidebarChatSessionsResponse.self, from: data)
             let nextSessions = sortSessions(decoded.sessions)
             sessions = nextSessions
-            setSelectedSession(resolveSelectedSessionId(in: nextSessions, preferredSelection: preferredSelection))
+
+            let resolved = resolveSelectedSessionId(in: nextSessions, preferredSelection: preferredSelection)
+            if resolved != nil {
+                setSelectedSession(resolved)
+            } else if !hasCompletedInitialSelection {
+                let fallback = nextSessions.first(where: { $0.archivedAt == nil })?.id
+                    ?? nextSessions.first?.id
+                setSelectedSession(fallback)
+            }
+            hasCompletedInitialSelection = true
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
@@ -384,7 +398,7 @@ struct ContentView: View {
             let nextSessions = sortSessions(replacing(decoded.session, in: sessions))
             sessions = nextSessions
             if selectedSessionId == decoded.session.id {
-                setSelectedSession(resolveSelectedSessionId(in: nextSessions, preferredSelection: nil))
+                setSelectedSession(nil)
             }
             sessionError = nil
             showSidebarToast("Session archived")
@@ -488,7 +502,7 @@ struct ContentView: View {
             return candidate
         }
 
-        return sessions.first(where: { $0.archivedAt == nil })?.id ?? sessions.first?.id
+        return nil
     }
 
     private func showSidebarToast(_ message: String) {
@@ -516,6 +530,8 @@ private struct SessionSidebar: View {
     let sidecarReady: Bool
     let connections: [SidebarConnection]
     let isCatalogOpen: Bool
+    @Binding var isConnectionsExpanded: Bool
+    @Binding var isSessionsExpanded: Bool
     let onCreateSession: () -> Void
     let onArchiveSession: (String) -> Void
     let onRenameSession: (String, String) -> Void
@@ -539,23 +555,6 @@ private struct SessionSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Button(action: onCreateSession) {
-                HStack(spacing: 8) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("New Session")
-                        .font(.system(size: 13, weight: .medium))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(primaryText)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.clear)
-            }
-            .buttonStyle(.plain)
-            .disabled(!sidecarReady)
-
             if let sessionError, !sessionError.isEmpty {
                 Text(sessionError)
                     .font(.system(size: 11))
@@ -573,64 +572,118 @@ private struct SessionSidebar: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
-                    SessionSidebarSection(
-                        title: "SESSIONS",
-                        emptyText: sidecarReady ? "No sessions yet." : "Sessions will appear once the sidecar is ready.",
-                        sessions: activeSessions,
-                        selectedSessionId: selectedSessionId,
-                        isDarkMode: isDarkMode,
-                        renamingSessionId: renamingSessionId,
-                        draftTitle: draftTitle,
-                        onDraftTitleChange: { draftTitle = $0 },
-                        onSelectSession: onSelectSession,
-                        onArchiveSession: onArchiveSession,
-                        onBeginRename: beginRename,
-                        onCommitRename: commitRename
-                    )
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    isSessionsExpanded.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Text("SESSIONS")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .tracking(0.8)
+                                        .foregroundStyle(secondaryText)
+                                    Image(systemName: isSessionsExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .foregroundStyle(secondaryText)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: onCreateSession) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(secondaryText)
+                                    .frame(width: 18, height: 18)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!sidecarReady)
+                            .help("New session")
+                        }
+
+                        if isSessionsExpanded {
+                            SessionSidebarSection(
+                                title: nil,
+                                emptyText: sidecarReady ? "No sessions yet." : "Sessions will appear once the sidecar is ready.",
+                                sessions: activeSessions,
+                                selectedSessionId: selectedSessionId,
+                                isDarkMode: isDarkMode,
+                                renamingSessionId: renamingSessionId,
+                                draftTitle: draftTitle,
+                                onDraftTitleChange: { draftTitle = $0 },
+                                onSelectSession: onSelectSession,
+                                onArchiveSession: onArchiveSession,
+                                onBeginRename: beginRename,
+                                onCommitRename: commitRename
+                            )
+                        }
+                    }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Button(action: onToggleCatalog) {
-                            HStack(spacing: 6) {
-                                Text("CONNECTIONS")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .tracking(0.8)
-                                    .foregroundStyle(secondaryText)
-                                Image(systemName: isCatalogOpen ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 8, weight: .semibold))
-                                    .foregroundStyle(secondaryText)
-                                Spacer(minLength: 0)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!sidecarReady)
-
-                        if connections.isEmpty {
-                            Text("No connected tools")
-                                .font(.system(size: 12))
-                                .foregroundStyle(secondaryText)
-                                .padding(.horizontal, 10)
-                        } else {
-                            ForEach(connections) { connection in
-                                HStack(spacing: 10) {
-                                    ConnectionLogo(
-                                        logoUrl: connection.logoUrl,
-                                        toolkitName: connection.toolkitName,
-                                        isDarkMode: isDarkMode
-                                    )
-
-                                    Text(connection.toolkitName)
-                                        .font(.system(size: 13, weight: .regular))
-                                        .foregroundStyle(primaryText)
-
-                                    Spacer(minLength: 0)
-
-                                    Text(connection.status.capitalized)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(secondaryText)
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    isConnectionsExpanded.toggle()
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
+                            }) {
+                                HStack(spacing: 6) {
+                                    Text("CONNECTIONS")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .tracking(0.8)
+                                        .foregroundStyle(secondaryText)
+                                    Image(systemName: isConnectionsExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .foregroundStyle(secondaryText)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: onToggleCatalog) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(secondaryText)
+                                    .frame(width: 18, height: 18)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!sidecarReady)
+                            .help("Browse connections")
+                        }
+
+                        if isConnectionsExpanded {
+                            if connections.isEmpty {
+                                Text("No connected tools")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(secondaryText)
+                                    .padding(.horizontal, 10)
+                            } else {
+                                ForEach(connections) { connection in
+                                    HStack(spacing: 10) {
+                                        ConnectionLogo(
+                                            logoUrl: connection.logoUrl,
+                                            toolkitName: connection.toolkitName,
+                                            isDarkMode: isDarkMode
+                                        )
+
+                                        Text(connection.toolkitName)
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(primaryText)
+
+                                        Spacer(minLength: 0)
+
+                                        Text(connection.status.capitalized)
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(secondaryText)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                }
                             }
                         }
                     }
@@ -1187,13 +1240,13 @@ struct WindowControlButton: View {
 
     var body: some View {
         Circle()
-            .fill(isHovered ? color : color.opacity(0.85))
-            .frame(width: 12, height: 12)
+            .fill(isHovered ? color : color.opacity(0.9))
+            .frame(width: 14, height: 14)
             .overlay {
                 if isHovered {
                     Image(systemName: iconName)
-                        .font(.system(size: 6, weight: .bold))
-                        .foregroundStyle(.black.opacity(0.5))
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.black.opacity(0.55))
                 }
             }
             .onHover { isHovered = $0 }
