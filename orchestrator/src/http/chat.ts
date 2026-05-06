@@ -147,6 +147,9 @@ export function buildChatRoutes(
         return json(res, 409, { error: 'conflict', message: 'A chat request is already running' });
       }
 
+      const priorMessageCount = store.getMessages(params.id)?.length ?? 0;
+      const isFirstUserMessage = priorMessageCount === 0;
+
       store.appendMessage(params.id, 'user', content);
 
       const session = await hydrateSessionSummary(record, store, hermes);
@@ -165,6 +168,7 @@ export function buildChatRoutes(
           session,
           sessionRecord: record,
           userPrompt: content,
+          isFirstUserMessage,
           res,
           requestBaseUrl: requestBaseUrl(req),
         }, store, hermes, connections);
@@ -356,6 +360,7 @@ async function runHermesMessage(
     session: ChatSessionSummary;
     sessionRecord: ChatSessionRecord;
     userPrompt: string;
+    isFirstUserMessage: boolean;
     res: ServerResponse;
     requestBaseUrl: string;
   },
@@ -537,7 +542,63 @@ async function runHermesMessage(
     });
   }
 
+  if (opts.isFirstUserMessage && assistantText) {
+    const currentTitle = store.getSessionRecord(opts.session.id)?.title ?? '';
+    if (currentTitle === DEFAULT_SESSION_TITLE) {
+      const title = await generateSessionTitle(config, opts.userPrompt, assistantText)
+        .catch(() => null);
+      if (title) {
+        store.renameSession(opts.session.id, title);
+        sendSSE(opts.res, { type: 'session_title', session_id: opts.session.id, title });
+      }
+    }
+  }
+
   sendSSE(opts.res, { type: 'done', session_id: opts.session.id });
+}
+
+const DEFAULT_SESSION_TITLE = 'New chat';
+const TITLE_GEN_TIMEOUT_MS = 8_000;
+const TITLE_PROMPT_TEMPLATE = (userPrompt: string, assistantText: string) =>
+  `Generate a concise title (4-8 words) summarizing this conversation. Respond with ONLY the title — no quotes, no trailing punctuation, no "Title:" prefix.\n\nUser: ${userPrompt}\nAssistant: ${assistantText}`;
+
+async function generateSessionTitle(
+  config: HermesGatewayConfig,
+  userPrompt: string,
+  assistantText: string,
+): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TITLE_GEN_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${config.baseUrl}/v1/responses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: TITLE_PROMPT_TEMPLATE(userPrompt, assistantText),
+        truncation: 'auto',
+        stream: false,
+        store: false,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as Record<string, unknown>;
+    const raw = extractFinalResponseText({ response: data });
+    return sanitizeGeneratedTitle(raw);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function sanitizeGeneratedTitle(raw: string): string | null {
+  const collapsed = raw.replace(/\s+/g, ' ').trim();
+  const stripped = collapsed.replace(/^["'`“”‘’\s]+|["'`“”‘’\s.!?]+$/g, '').trim();
+  if (!stripped) return null;
+  const words = stripped.split(' ').filter(Boolean).slice(0, 8);
+  const title = words.join(' ');
+  return title.length > 0 ? title.slice(0, 80) : null;
 }
 
 async function streamHermesConversation(

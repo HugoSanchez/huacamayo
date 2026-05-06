@@ -62,14 +62,18 @@ function MessageBubble({
       marginBottom: isUser ? '28px' : '12px',
       marginTop: isUser ? '28px' : '0',
     }}>
-      <div style={{
-        maxWidth: isUser ? '70%' : '100%',
-        padding: isUser ? '10px 16px' : '4px 0',
-        borderRadius: isUser ? '14px' : '0',
-        background: isUser ? 'var(--user-bubble)' : 'var(--assistant-bg)',
-        wordBreak: 'break-word',
-        width: isUser ? 'auto' : '100%',
-      }}>
+      <div
+        className={isUser ? 'user-message-bubble' : undefined}
+        style={{
+          maxWidth: isUser ? '70%' : '100%',
+          padding: isUser ? '10px 16px' : '4px 0',
+          borderRadius: isUser ? '14px' : '0',
+          background: isUser ? 'var(--user-bubble)' : 'var(--assistant-bg)',
+          color: isUser ? 'var(--user-bubble-text)' : undefined,
+          wordBreak: 'break-word',
+          width: isUser ? 'auto' : '100%',
+        }}
+      >
         {!isUser && <AssistantActivity message={message} onConnect={onConnect} />}
 
         <div className="message-content">
