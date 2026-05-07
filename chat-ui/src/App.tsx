@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { MessageList } from './MessageList';
 import { InputBar } from './InputBar';
 import { CatalogOverlay } from './CatalogOverlay';
+import { SkillsCatalogOverlay } from './SkillsCatalogOverlay';
+import { SkillDetailPage } from './SkillDetailPage';
 import {
   archiveChatSession,
   cancelChatRequest,
@@ -40,6 +42,7 @@ declare global {
     __vervoShellMode?: 'native' | 'browser';
     __vervoPendingSelectedSessionId?: string | null;
     __vervoPendingCatalogOpen?: boolean;
+    __vervoPendingSkillsCatalogOpen?: boolean;
   }
 }
 
@@ -59,6 +62,10 @@ export function App() {
   const [isCatalogOpen, setIsCatalogOpen] = useState<boolean>(
     Boolean(typeof window !== 'undefined' && window.__vervoPendingCatalogOpen),
   );
+  const [isSkillsCatalogOpen, setIsSkillsCatalogOpen] = useState<boolean>(
+    Boolean(typeof window !== 'undefined' && window.__vervoPendingSkillsCatalogOpen),
+  );
+  const [selectedSkillSlug, setSelectedSkillSlug] = useState<string | null>(null);
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const abortRef = useRef<(() => void) | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -251,11 +258,45 @@ export function App() {
     };
   }, [isCatalogOpen]);
 
+  useEffect(() => {
+    const handleSkillsCatalogToggle = (event: Event) => {
+      const detail = (event as CustomEvent<{ open?: unknown }>).detail;
+      const open = typeof detail?.open === 'boolean' ? detail.open : !isSkillsCatalogOpen;
+      setIsSkillsCatalogOpen(open);
+    };
+
+    window.addEventListener('vervo:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
+    return () => {
+      window.removeEventListener('vervo:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
+    };
+  }, [isSkillsCatalogOpen]);
+
   const handleCloseCatalog = useCallback(() => {
     setIsCatalogOpen(false);
     if (isNativeShell) {
       window.webkit?.messageHandlers?.chatBridge?.postMessage({
         type: 'catalogStateChanged',
+        open: false,
+      });
+    }
+  }, [isNativeShell]);
+
+  const handleCloseSkillsCatalog = useCallback(() => {
+    setIsSkillsCatalogOpen(false);
+    if (isNativeShell) {
+      window.webkit?.messageHandlers?.chatBridge?.postMessage({
+        type: 'skillsCatalogStateChanged',
+        open: false,
+      });
+    }
+  }, [isNativeShell]);
+
+  const handleSelectSkill = useCallback((slug: string) => {
+    setSelectedSkillSlug(slug);
+    setIsSkillsCatalogOpen(false);
+    if (isNativeShell) {
+      window.webkit?.messageHandlers?.chatBridge?.postMessage({
+        type: 'skillsCatalogStateChanged',
         open: false,
       });
     }
@@ -339,6 +380,7 @@ export function App() {
 
   const handleSelectSession = useCallback((sessionId: string) => {
     if (isStreaming || isHydratingSession || sessionId === selectedSessionId) return;
+    setSelectedSkillSlug(null);
     void hydrateSession(sessionId);
   }, [hydrateSession, isHydratingSession, isStreaming, selectedSessionId]);
 
@@ -435,6 +477,26 @@ export function App() {
     })();
   }, [connected, ensureSession, isNativeShell, isStreaming, refreshSessionList]);
 
+  const handleOpenSkillInNewSession = useCallback((slug: string) => {
+    if (!connected || isStreaming || isHydratingSession) return;
+
+    sessionIdRef.current = null;
+    setSelectedSessionId(null);
+    setSelectedSkillSlug(null);
+    setMessages([]);
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    handleCloseSkillsCatalog();
+    void (async () => {
+      try {
+        const session = normalizeSession(await createChatSession(slug.replace(/-/g, ' ')));
+        adoptSession(session, false);
+        handleSend(`/${slug}`);
+      } catch (error: unknown) {
+        setSessionError(error instanceof Error ? error.message : String(error));
+      }
+    })();
+  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, isStreaming]);
+
   const handleStop = useCallback(() => {
     abortRef.current?.();
     abortRef.current = null;
@@ -475,7 +537,7 @@ export function App() {
   const mainPanel = (
     <main className="chat-panel">
       {isNativeShell && <ChatHeaderScaffold />}
-      {!isNativeShell && (
+      {!isNativeShell && !selectedSkillSlug && (
         <div className="chat-toolbar">
           <div>
             <div className="chat-toolbar-title">{selectedSession?.title ?? 'New Chat'}</div>
@@ -494,16 +556,25 @@ export function App() {
         </div>
       )}
 
-      <div className="chat-thread">
-        <MessageList messages={messages} onConnect={handleConnect} />
-      </div>
+      {selectedSkillSlug ? (
+        <SkillDetailPage
+          slug={selectedSkillSlug}
+          onOpenInNewSession={handleOpenSkillInNewSession}
+        />
+      ) : (
+        <>
+          <div className="chat-thread">
+            <MessageList messages={messages} onConnect={handleConnect} />
+          </div>
 
-      <InputBar
-        onSend={handleSend}
-        onStop={handleStop}
-        isStreaming={isStreaming}
-        disabled={!connected || isHydratingSession || !!selectedSession?.archivedAt}
-      />
+          <InputBar
+            onSend={handleSend}
+            onStop={handleStop}
+            isStreaming={isStreaming}
+            disabled={!connected || isHydratingSession || !!selectedSession?.archivedAt}
+          />
+        </>
+      )}
     </main>
   );
 
@@ -516,11 +587,20 @@ export function App() {
     />
   );
 
+  const skillsCatalog = (
+    <SkillsCatalogOverlay
+      isOpen={isSkillsCatalogOpen}
+      onClose={handleCloseSkillsCatalog}
+      onSelectSkill={handleSelectSkill}
+    />
+  );
+
   if (isNativeShell) {
     return (
       <div className="chat-shell-native">
         {mainPanel}
         {catalog}
+        {skillsCatalog}
       </div>
     );
   }
@@ -572,6 +652,7 @@ export function App() {
 
       {mainPanel}
       {catalog}
+      {skillsCatalog}
     </div>
   );
 }

@@ -9,6 +9,12 @@ import {
 } from './chat-store.ts';
 import { HermesSessionsClient } from './hermes-sessions.ts';
 import { HermesSupervisor, type HermesGatewayConfig } from './hermes-supervisor.ts';
+import {
+  buildSkillInvocationPrompt,
+  extractSlashSkillRequest,
+  findSkillBySlug,
+} from './skills.ts';
+import type { SkillsStore } from './skills-store.ts';
 import { ConnectionsService, type ConnectionRequestView } from '../integrations/composio.ts';
 
 type ChatStatus = 'idle' | 'running' | 'error';
@@ -43,6 +49,7 @@ export function buildChatRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
   connections: ConnectionsService,
+  _skills: SkillsStore,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
@@ -152,6 +159,12 @@ export function buildChatRoutes(
 
       store.appendMessage(params.id, 'user', content);
 
+      const slashRequest = extractSlashSkillRequest(content);
+      const skill = slashRequest ? findSkillBySlug(slashRequest.slug) : null;
+      const promptForHermes = skill && slashRequest
+        ? buildSkillInvocationPrompt(skill, slashRequest.remainder)
+        : content;
+
       const session = await hydrateSessionSummary(record, store, hermes);
 
       res.writeHead(200, {
@@ -167,7 +180,7 @@ export function buildChatRoutes(
         await runHermesMessage({
           session,
           sessionRecord: record,
-          userPrompt: content,
+          userPrompt: promptForHermes,
           isFirstUserMessage,
           res,
           requestBaseUrl: requestBaseUrl(req),

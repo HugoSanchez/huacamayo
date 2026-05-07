@@ -16,6 +16,10 @@ dist/
 .env.local
 .env.*.local
 
+# Next.js
+.next/
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.pyc
