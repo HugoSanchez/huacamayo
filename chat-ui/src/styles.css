@@ -960,6 +960,56 @@ textarea {
   font-size: 12px;
 }
 
+/* Skill chip inside the input bar (when a skill is attached) */
+.input-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 6px 0 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  user-select: none;
+}
+
+.input-skill-chip-slug {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.input-skill-chip-remove {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  margin: 0;
+  padding: 2px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.input-skill-chip-remove:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+@media (prefers-color-scheme: light) {
+  .input-skill-chip {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  .input-skill-chip-remove:hover {
+    background: rgba(0, 0, 0, 0.08);
+  }
+}
+
 /* Skill chip in user messages */
 .skill-chip {
   display: inline-flex;
@@ -1161,10 +1211,10 @@ textarea {
 .skill-page-inner {
   width: 100%;
   max-width: 720px;
-  padding: 32px 28px 48px;
+  padding: 36px 28px 56px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 22px;
 }
 
 .skill-detail-header {
@@ -1173,17 +1223,118 @@ textarea {
   gap: 12px;
 }
 
+.skill-detail-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.skill-detail-pin {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  margin: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+
+.skill-detail-pin:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.skill-detail-pin.is-pinned {
+  color: var(--text);
+}
+
+.skill-detail-pin:active {
+  transform: scale(0.92);
+}
+
+.skill-detail-pin.is-loading {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.skill-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .skill-detail-title {
   font-size: 16px;
   font-weight: 600;
   color: var(--text);
 }
 
+.skill-detail-copy {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  margin: 0;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 22px;
+  height: 22px;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.skill-detail-copy:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.skill-detail-copy-icon {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.skill-detail-copy-icon-check {
+  opacity: 0;
+  transform: scale(0.6);
+  color: #1aa971;
+}
+
+.skill-detail-copy.is-copied .skill-detail-copy-icon-default {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+.skill-detail-copy.is-copied .skill-detail-copy-icon-check {
+  opacity: 1;
+  transform: scale(1);
+  animation: skill-copy-pop 320ms ease;
+}
+
+@keyframes skill-copy-pop {
+  0%   { transform: scale(0.4); opacity: 0; }
+  55%  { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 .skill-detail-subtitle {
-  margin-top: 4px;
+  margin-top: 8px;
   font-size: 12px;
   color: var(--text-dim);
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .skill-detail-meta {
@@ -1219,28 +1370,25 @@ textarea {
   padding: 8px 12px;
   border-radius: 4px;
   cursor: pointer;
-  transition: background 0.1s ease, border-color 0.1s ease;
+  transition: background 0.1s ease, border-color 0.1s ease, transform 0.1s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .skill-detail-action.is-primary {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--text);
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  color: #111;
+  border: 1px solid rgba(255, 255, 255, 0.92);
 }
 
 .skill-detail-action.is-primary:hover {
-  background: rgba(0, 0, 0, 0.1);
-  border-color: rgba(0, 0, 0, 0.14);
+  background: #fff;
+  border-color: #fff;
 }
 
-.skill-detail-action.is-secondary {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.skill-detail-action.is-secondary:hover {
-  background: rgba(0, 0, 0, 0.05);
+.skill-detail-action.is-primary:active {
+  transform: translateY(1px);
 }
 
 .skill-detail-hint {
@@ -1271,14 +1419,19 @@ textarea {
   .skill-row-toggle { background: rgba(255, 255, 255, 0.16); }
   .skill-detail-tag,
   .skill-detail-prereq { background: rgba(255, 255, 255, 0.06); }
-  .skill-detail-action.is-secondary:hover { background: rgba(255, 255, 255, 0.08); }
+  .skill-detail-copy:hover { background: rgba(255, 255, 255, 0.08); }
+  .skill-detail-pin:hover { background: rgba(255, 255, 255, 0.08); }
+  .skill-detail-hint code { background: rgba(255, 255, 255, 0.08); }
+}
+
+@media (prefers-color-scheme: light) {
   .skill-detail-action.is-primary {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.12);
+    background: #111;
+    color: #fff;
+    border-color: #111;
   }
   .skill-detail-action.is-primary:hover {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.18);
+    background: #000;
+    border-color: #000;
   }
-  .skill-detail-hint code { background: rgba(255, 255, 255, 0.08); }
 }

@@ -170,6 +170,9 @@ export function App() {
       setConnected(true);
       void bootstrapSessions();
       void refreshConnections();
+      // Re-broadcast so descendants (InputBar etc.) that mount before
+      // App's effect runs can hear about the now-available port.
+      window.dispatchEvent(new CustomEvent('vervo:sidecar-port-ready', { detail: { port } }));
     };
 
     window.setSidecarPort = (port: number) => {

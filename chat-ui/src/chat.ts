@@ -220,6 +220,19 @@ export async function toggleSkill(slug: string, enabled: boolean): Promise<Skill
   return body.skill;
 }
 
+export async function pinSkill(slug: string, pinned: boolean): Promise<SkillSummaryView> {
+  const res = await fetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to pin skill'));
+  }
+  const body = await res.json() as { skill: SkillSummaryView };
+  return body.skill;
+}
+
 export async function getConnectionRequest(requestId: string): Promise<ConnectionRequestView> {
   const res = await fetch(`${baseURL()}/connections/requests/${encodeURIComponent(requestId)}`);
   if (!res.ok) {

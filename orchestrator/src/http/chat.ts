@@ -14,7 +14,6 @@ import {
   extractSlashSkillRequest,
   findSkillBySlug,
 } from './skills.ts';
-import type { SkillsStore } from './skills-store.ts';
 import { ConnectionsService, type ConnectionRequestView } from '../integrations/composio.ts';
 
 type ChatStatus = 'idle' | 'running' | 'error';
@@ -49,7 +48,6 @@ export function buildChatRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
   connections: ConnectionsService,
-  _skills: SkillsStore,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
@@ -162,7 +160,7 @@ export function buildChatRoutes(
       const slashRequest = extractSlashSkillRequest(content);
       const skill = slashRequest ? findSkillBySlug(slashRequest.slug) : null;
       const promptForHermes = skill && slashRequest
-        ? buildSkillInvocationPrompt(skill, slashRequest.remainder)
+        ? buildSkillInvocationPrompt(skill, slashRequest.remainder, params.id)
         : content;
 
       const session = await hydrateSessionSummary(record, store, hermes);
