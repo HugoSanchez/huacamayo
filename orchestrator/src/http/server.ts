@@ -7,7 +7,8 @@ import { buildConnectionsRoutes } from './connections.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
 import { dispatch, json, route, type Route } from './router.ts';
 import { buildSkillsRoutes } from './skills.ts';
-import { SkillsStore } from './skills-store.ts';
+import { HermesSkillsConfig } from './skills-store.ts';
+import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
 import { ConnectionsService } from '../integrations/composio.ts';
 
@@ -42,13 +43,14 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const hermes = new HermesSupervisor();
   const connections = new ConnectionsService();
   const composioBridge = new ComposioBridgeService();
-  const skills = new SkillsStore();
+  const skillsConfig = new HermesSkillsConfig();
+  const pinnedSkills = new PinnedSkillsStore();
   const routes = [
     ...buildRoutes(store, hermes),
     ...buildComposioBridgeRoutes(composioBridge),
     ...buildConnectionsRoutes(connections),
-    ...buildSkillsRoutes(skills),
-    ...buildChatRoutes(store, hermes, connections, skills),
+    ...buildSkillsRoutes(skillsConfig, pinnedSkills),
+    ...buildChatRoutes(store, hermes, connections),
   ];
 
   const server = http.createServer((req, res) => {

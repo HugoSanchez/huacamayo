@@ -64,6 +64,7 @@ export interface SkillSummaryView {
   prerequisites: string[];
   platforms: string[];
   enabled: boolean;
+  pinned: boolean;
 }
 
 export interface SkillDetailView extends SkillSummaryView {

@@ -2,7 +2,8 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { json, route, type Route } from './router.ts';
-import type { SkillsStore } from './skills-store.ts';
+import type { HermesSkillsConfig } from './skills-store.ts';
+import type { PinnedSkillsStore } from './pinned-skills-store.ts';
 
 export interface SkillSummary {
   slug: string;
@@ -13,6 +14,7 @@ export interface SkillSummary {
   prerequisites: string[];
   platforms: string[];
   enabled: boolean;
+  pinned: boolean;
 }
 
 export interface SkillDetail extends SkillSummary {
@@ -23,56 +25,106 @@ export interface SkillDetail extends SkillSummary {
 
 interface ParsedSkill {
   slug: string;
+  name: string;
   category: string | null;
   path: string;
+  dirPath: string;
   frontmatter: Record<string, unknown>;
   content: string;
 }
 
 const HERMES_SKILLS_DIR = path.join(os.homedir(), '.hermes', 'skills');
 
-export function buildSkillsRoutes(store: SkillsStore): Route[] {
+export function buildSkillsRoutes(config: HermesSkillsConfig, pins: PinnedSkillsStore): Route[] {
   return [
     route('GET', '/skills', async (_req, res) => {
-      const skills = scanSkills().map((skill) => toSummary(skill, store.isEnabled(skill.slug)));
+      const skills = scanSkills().map((skill) =>
+        toSummary(skill, config.isEnabled(skill.name), pins.isPinned(skill.name)),
+      );
       json(res, 200, { skills });
     }),
 
     route('GET', '/skills/:slug', async (_req, res, params) => {
-      const skill = scanSkills().find((candidate) => candidate.slug === params.slug);
+      const skill = findSkillBySlug(params.slug);
       if (!skill) {
         return json(res, 404, { error: 'not_found', message: `Unknown skill: ${params.slug}` });
       }
-      json(res, 200, { skill: toDetail(skill, store.isEnabled(skill.slug)) });
+      json(res, 200, {
+        skill: toDetail(skill, config.isEnabled(skill.name), pins.isPinned(skill.name)),
+      });
     }),
 
     route('POST', '/skills/:slug/toggle', async (_req, res, params, body) => {
-      const skill = scanSkills().find((candidate) => candidate.slug === params.slug);
+      const skill = findSkillBySlug(params.slug);
       if (!skill) {
         return json(res, 404, { error: 'not_found', message: `Unknown skill: ${params.slug}` });
       }
       const requested = (body as { enabled?: unknown } | null)?.enabled;
-      const next = typeof requested === 'boolean' ? requested : !store.isEnabled(skill.slug);
-      store.setEnabled(skill.slug, next);
-      json(res, 200, { skill: toSummary(skill, next) });
+      const next = typeof requested === 'boolean' ? requested : !config.isEnabled(skill.name);
+      config.setEnabled(skill.name, next);
+      json(res, 200, { skill: toSummary(skill, next, pins.isPinned(skill.name)) });
+    }),
+
+    route('POST', '/skills/:slug/pin', async (_req, res, params, body) => {
+      const skill = findSkillBySlug(params.slug);
+      if (!skill) {
+        return json(res, 404, { error: 'not_found', message: `Unknown skill: ${params.slug}` });
+      }
+      const requested = (body as { pinned?: unknown } | null)?.pinned;
+      const next = typeof requested === 'boolean' ? requested : !pins.isPinned(skill.name);
+      pins.setPinned(skill.name, next);
+      json(res, 200, { skill: toSummary(skill, config.isEnabled(skill.name), next) });
     }),
   ];
 }
 
 export function findSkillBySlug(slug: string): ParsedSkill | null {
-  return scanSkills().find((candidate) => candidate.slug === slug) ?? null;
+  const normalized = normalizeSlug(slug);
+  if (!normalized) return null;
+  return scanSkills().find((candidate) => candidate.slug === normalized) ?? null;
 }
 
-export function buildSkillInvocationPrompt(skill: ParsedSkill, userPrompt: string): string {
-  const skillBody = skill.content.trim();
-  const intro = `The user has invoked the "${skill.slug}" skill. Use the skill instructions below to guide your response. Do not repeat the skill content back to the user verbatim — apply it.`;
-  const sections = [intro, '--- BEGIN SKILL: ' + skill.slug + ' ---', skillBody, '--- END SKILL ---'];
-  if (userPrompt.trim().length > 0) {
-    sections.push('User prompt:', userPrompt.trim());
-  } else {
-    sections.push('No additional prompt was provided. Greet the user briefly and explain what the skill can do.');
+// Mirrors ~/.hermes/hermes-agent/agent/skill_commands.py:build_skill_invocation_message
+// so the message Hermes' agent sees from our /v1/responses path is shaped the
+// same as the messages other Hermes platforms (CLI, gateway, webhook) build for
+// the same /skill-name flow. Hermes' api_server.py does not run this rewrite;
+// we are the gateway-equivalent for the HTTP path.
+export function buildSkillInvocationPrompt(
+  skill: ParsedSkill,
+  userInstruction: string,
+  sessionId: string | null,
+): string {
+  const body = substituteTemplateVars(skill.content.trim(), skill.dirPath, sessionId);
+  const parts: string[] = [
+    `[SYSTEM: The user has invoked the "${skill.name}" skill, indicating they want you to follow its instructions. The full skill content is loaded below.]`,
+    '',
+    body,
+  ];
+
+  parts.push(
+    '',
+    `[Skill directory: ${skill.dirPath}]`,
+    'Resolve any relative paths in this skill (e.g. `scripts/foo.js`, `templates/config.yaml`) against that directory, then run them with the terminal tool using the absolute path.',
+  );
+
+  const supporting = collectSupportingFiles(skill.dirPath);
+  if (supporting.length > 0) {
+    const skillViewTarget = skillViewTargetForDir(skill.dirPath);
+    parts.push('', '[This skill has supporting files:]');
+    for (const rel of supporting) {
+      parts.push(`- ${rel}  ->  ${path.join(skill.dirPath, rel)}`);
+    }
+    parts.push(
+      `\nLoad any of these with skill_view(name="${skillViewTarget}", file_path="<path>"), or run scripts directly by absolute path (e.g. \`node ${skill.dirPath}/scripts/foo.js\`).`,
+    );
   }
-  return sections.join('\n\n');
+
+  const trimmedInstruction = userInstruction.trim();
+  if (trimmedInstruction.length > 0) {
+    parts.push('', `The user has provided the following instruction alongside the skill invocation: ${trimmedInstruction}`);
+  }
+
+  return parts.join('\n');
 }
 
 const SLASH_SKILL_PATTERN = /^\/([a-z0-9][a-z0-9_-]*)\b/i;
@@ -80,19 +132,30 @@ const SLASH_SKILL_PATTERN = /^\/([a-z0-9][a-z0-9_-]*)\b/i;
 export function extractSlashSkillRequest(input: string): { slug: string; remainder: string } | null {
   const match = input.match(SLASH_SKILL_PATTERN);
   if (!match) return null;
-  const slug = match[1].toLowerCase();
+  // Hermes treats - and _ interchangeably (resolve_skill_command_key).
+  const slug = normalizeSlug(match[1]);
+  if (!slug) return null;
   const remainder = input.slice(match[0].length).trim();
   return { slug, remainder };
 }
 
+function normalizeSlug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]+/g, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function scanSkills(): ParsedSkill[] {
-  return walk(HERMES_SKILLS_DIR, [])
+  return walk(HERMES_SKILLS_DIR)
     .map((filePath) => parseSkillFile(filePath))
     .filter((skill): skill is ParsedSkill => skill !== null)
     .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-function walk(dir: string, segments: string[]): string[] {
+function walk(dir: string): string[] {
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
@@ -101,6 +164,7 @@ function walk(dir: string, segments: string[]): string[] {
   }
   const found: string[] = [];
   for (const entry of entries) {
+    if (entry === '.git' || entry === '.github' || entry === '.hub') continue;
     const full = path.join(dir, entry);
     let info;
     try {
@@ -109,7 +173,7 @@ function walk(dir: string, segments: string[]): string[] {
       continue;
     }
     if (info.isDirectory()) {
-      found.push(...walk(full, [...segments, entry]));
+      found.push(...walk(full));
     } else if (info.isFile() && entry === 'SKILL.md') {
       found.push(full);
     }
@@ -125,12 +189,14 @@ function parseSkillFile(filePath: string): ParsedSkill | null {
     return null;
   }
   const { frontmatter, body } = parseFrontmatter(raw);
+  const dirPath = path.dirname(filePath);
   const nameField = typeof frontmatter.name === 'string' ? frontmatter.name.trim() : '';
-  const directorySlug = path.basename(path.dirname(filePath));
-  const slug = (nameField || directorySlug).toLowerCase();
+  const name = nameField || path.basename(dirPath);
+  if (!name) return null;
+  const slug = normalizeSlug(name);
   if (!slug) return null;
   const category = inferCategory(filePath);
-  return { slug, category, path: filePath, frontmatter, content: body };
+  return { slug, name, category, path: filePath, dirPath, frontmatter, content: body };
 }
 
 function inferCategory(filePath: string): string | null {
@@ -138,6 +204,67 @@ function inferCategory(filePath: string): string | null {
   const segments = relative.split(path.sep).filter(Boolean);
   if (segments.length <= 1) return null;
   return segments[0] || null;
+}
+
+const TEMPLATE_VAR_RE = /\$\{(HERMES_SKILL_DIR|HERMES_SESSION_ID)\}/g;
+
+function substituteTemplateVars(content: string, skillDir: string | null, sessionId: string | null): string {
+  if (!content) return content;
+  return content.replace(TEMPLATE_VAR_RE, (match, token: string) => {
+    if (token === 'HERMES_SKILL_DIR' && skillDir) return skillDir;
+    if (token === 'HERMES_SESSION_ID' && sessionId) return sessionId;
+    return match;
+  });
+}
+
+const SUPPORTING_DIRS = ['references', 'templates', 'scripts', 'assets'];
+
+function collectSupportingFiles(skillDir: string): string[] {
+  const out: string[] = [];
+  for (const sub of SUPPORTING_DIRS) {
+    const subPath = path.join(skillDir, sub);
+    let stat;
+    try {
+      stat = statSync(subPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+    walkFiles(subPath, skillDir, out);
+  }
+  return out.sort();
+}
+
+function walkFiles(dir: string, baseDir: string, out: string[]): void {
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry);
+    let info;
+    try {
+      info = statSync(full);
+    } catch {
+      continue;
+    }
+    if (info.isSymbolicLink()) continue;
+    if (info.isDirectory()) {
+      walkFiles(full, baseDir, out);
+    } else if (info.isFile()) {
+      out.push(path.relative(baseDir, full));
+    }
+  }
+}
+
+function skillViewTargetForDir(skillDir: string): string {
+  const rel = path.relative(HERMES_SKILLS_DIR, skillDir);
+  if (!rel || rel.startsWith('..')) {
+    return path.basename(skillDir);
+  }
+  return rel;
 }
 
 function parseFrontmatter(raw: string): { frontmatter: Record<string, unknown>; body: string } {
@@ -180,7 +307,6 @@ function parseSimpleYaml(input: string): Record<string, unknown> {
 
     if (!Array.isArray(top.container)) {
       if (!valueStr) {
-        // Possible nested map or list — peek next line.
         const next = lines.slice(i + 1).find((candidate) => candidate.trim().length > 0);
         const nextIndent = next ? next.match(/^\s*/)?.[0].length ?? 0 : indent + 2;
         if (next && next.trim().startsWith('- ') && nextIndent > indent) {
@@ -216,23 +342,24 @@ function parseScalar(value: string): string | number | boolean {
   return stripped;
 }
 
-function toSummary(skill: ParsedSkill, enabled: boolean): SkillSummary {
+function toSummary(skill: ParsedSkill, enabled: boolean, pinned: boolean): SkillSummary {
   const fm = skill.frontmatter;
   return {
     slug: skill.slug,
-    name: typeof fm.name === 'string' ? (fm.name as string) : skill.slug,
+    name: typeof fm.name === 'string' ? (fm.name as string) : skill.name,
     description: typeof fm.description === 'string' ? (fm.description as string) : '',
     category: skill.category,
     tags: extractTags(fm),
     prerequisites: extractPrerequisites(fm),
     platforms: extractStringArray(fm.platforms),
     enabled,
+    pinned,
   };
 }
 
-function toDetail(skill: ParsedSkill, enabled: boolean): SkillDetail {
+function toDetail(skill: ParsedSkill, enabled: boolean, pinned: boolean): SkillDetail {
   return {
-    ...toSummary(skill, enabled),
+    ...toSummary(skill, enabled, pinned),
     content: skill.content,
     frontmatter: skill.frontmatter,
     path: skill.path,

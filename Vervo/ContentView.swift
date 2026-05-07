@@ -715,14 +715,14 @@ private struct SessionSidebar: View {
                         }
 
                         if isSkillsExpanded {
-                            let enabledSkills = skills.filter { $0.enabled }
-                            if enabledSkills.isEmpty {
-                                Text("No skills enabled")
+                            let pinnedSkills = skills.filter { $0.pinned }
+                            if pinnedSkills.isEmpty {
+                                Text("No skills pinned")
                                     .font(.system(size: 12))
                                     .foregroundStyle(secondaryText)
                                     .padding(.horizontal, 10)
                             } else {
-                                ForEach(enabledSkills) { skill in
+                                ForEach(pinnedSkills) { skill in
                                     HStack(spacing: 10) {
                                         Image(systemName: "sparkles")
                                             .font(.system(size: 11, weight: .medium))
@@ -1013,6 +1013,7 @@ private struct SidebarSkill: Decodable, Identifiable, Equatable {
     let prerequisites: [String]
     let platforms: [String]
     let enabled: Bool
+    let pinned: Bool
 
     var id: String { slug }
 }

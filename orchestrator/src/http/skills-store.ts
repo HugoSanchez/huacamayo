@@ -1,58 +1,60 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import YAML from 'yaml';
 
-interface SkillsStoreShape {
-  enabledSlugs: string[];
+function defaultConfigPath(): string {
+  return path.join(os.homedir(), '.hermes', 'config.yaml');
 }
 
-function defaultStorePath(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Vervo', 'skills.json');
+// Source of truth for skill enable/disable is Hermes' own config:
+// ~/.hermes/config.yaml under `skills.disabled`. Hermes filters its
+// auto-injected skills index against this list at request time, so
+// editing it here means our toggle surfaces a real Hermes setting
+// instead of a Vervo-side parallel store.
+//
+// Note the inversion: Hermes tracks *disabled* names; our UI presents
+// an enabled toggle, so callers pass `enabled` and we translate.
+export class HermesSkillsConfig {
+  private readonly configPath: string;
+
+  constructor(configPath = process.env.VERVO_HERMES_CONFIG_PATH?.trim() || defaultConfigPath()) {
+    this.configPath = configPath;
+  }
+
+  isEnabled(name: string): boolean {
+    return !this.listDisabled().includes(name);
+  }
+
+  setEnabled(name: string, enabled: boolean): void {
+    const doc = this.loadDoc();
+    const next = new Set(readDisabled(doc));
+    if (enabled) next.delete(name);
+    else next.add(name);
+    doc.setIn(['skills', 'disabled'], [...next].sort());
+    this.persist(doc);
+  }
+
+  listDisabled(): string[] {
+    return readDisabled(this.loadDoc());
+  }
+
+  private loadDoc(): YAML.Document.Parsed {
+    if (!existsSync(this.configPath)) {
+      return YAML.parseDocument('');
+    }
+    const raw = readFileSync(this.configPath, 'utf-8');
+    return YAML.parseDocument(raw);
+  }
+
+  private persist(doc: YAML.Document.Parsed): void {
+    mkdirSync(path.dirname(this.configPath), { recursive: true });
+    writeFileSync(this.configPath, doc.toString());
+  }
 }
 
-export class SkillsStore {
-  private readonly storePath: string;
-  private state: SkillsStoreShape;
-
-  constructor(storePath = process.env.VERVO_SKILLS_STORE_PATH?.trim() || defaultStorePath()) {
-    this.storePath = storePath;
-    this.state = this.load();
-  }
-
-  isEnabled(slug: string): boolean {
-    return this.state.enabledSlugs.includes(slug);
-  }
-
-  listEnabled(): string[] {
-    return [...this.state.enabledSlugs];
-  }
-
-  setEnabled(slug: string, enabled: boolean): void {
-    const set = new Set(this.state.enabledSlugs);
-    if (enabled) set.add(slug);
-    else set.delete(slug);
-    this.state = { enabledSlugs: [...set].sort() };
-    this.persist();
-  }
-
-  private load(): SkillsStoreShape {
-    if (!existsSync(this.storePath)) {
-      return { enabledSlugs: [] };
-    }
-    try {
-      const raw = readFileSync(this.storePath, 'utf-8');
-      const parsed = JSON.parse(raw) as Partial<SkillsStoreShape>;
-      const slugs = Array.isArray(parsed.enabledSlugs)
-        ? parsed.enabledSlugs.filter((s): s is string => typeof s === 'string')
-        : [];
-      return { enabledSlugs: slugs };
-    } catch {
-      return { enabledSlugs: [] };
-    }
-  }
-
-  private persist(): void {
-    mkdirSync(path.dirname(this.storePath), { recursive: true });
-    writeFileSync(this.storePath, JSON.stringify(this.state, null, 2));
-  }
+function readDisabled(doc: YAML.Document.Parsed): string[] {
+  const value = doc.toJS()?.skills?.disabled;
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
 }
