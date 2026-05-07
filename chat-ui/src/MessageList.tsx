@@ -78,7 +78,7 @@ function MessageBubble({
 
         <div className="message-content">
           {isUser ? (
-            <span>{message.content}</span>
+            <UserMessageBody content={message.content} />
           ) : message.content ? (
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -515,4 +515,26 @@ function previewInput(input: unknown): string {
     try { return JSON.stringify(obj).slice(0, 120); } catch { return ''; }
   }
   return '';
+}
+
+const SLASH_SKILL_MATCH = /^\/([a-z0-9][a-z0-9_-]*)\b\s*/i;
+
+function UserMessageBody({ content }: { content: string }) {
+  const match = content.match(SLASH_SKILL_MATCH);
+  if (!match) {
+    return <span style={{ whiteSpace: 'pre-wrap' }}>{content}</span>;
+  }
+  const slug = match[1].toLowerCase();
+  const remainder = content.slice(match[0].length);
+  return (
+    <span style={{ whiteSpace: 'pre-wrap' }}>
+      <span className="skill-chip">
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M5 1 L6 4 L9 5 L6 6 L5 9 L4 6 L1 5 L4 4 Z" fill="currentColor" />
+        </svg>
+        <span className="skill-chip-slug">/{slug}</span>
+      </span>
+      {remainder.length > 0 && <span> {remainder}</span>}
+    </span>
+  );
 }

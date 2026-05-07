@@ -55,6 +55,21 @@ export interface ToolkitView {
   noAuth: boolean;
 }
 
+export interface SkillSummaryView {
+  slug: string;
+  name: string;
+  description: string;
+  category: string | null;
+  tags: string[];
+  prerequisites: string[];
+  platforms: string[];
+  enabled: boolean;
+}
+
+export interface SkillDetailView extends SkillSummaryView {
+  content: string;
+}
+
 export type ActivityStep =
   | { type: 'text'; text: string }
   | {

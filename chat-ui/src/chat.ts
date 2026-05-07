@@ -3,6 +3,8 @@ import type {
   ChatSSEEvent,
   ConnectionRequestView,
   ConnectionView,
+  SkillDetailView,
+  SkillSummaryView,
   StoredChatMessage,
   ToolkitView,
 } from './types';
@@ -185,6 +187,37 @@ export async function getToolkits(opts: {
     toolkits: body.toolkits ?? [],
     nextCursor: body.nextCursor ?? null,
   };
+}
+
+export async function getSkills(): Promise<SkillSummaryView[]> {
+  const res = await fetch(`${baseURL()}/skills`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load skills'));
+  }
+  const body = await res.json() as { skills: SkillSummaryView[] };
+  return Array.isArray(body.skills) ? body.skills : [];
+}
+
+export async function getSkill(slug: string): Promise<SkillDetailView> {
+  const res = await fetch(`${baseURL()}/skills/${encodeURIComponent(slug)}`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load skill'));
+  }
+  const body = await res.json() as { skill: SkillDetailView };
+  return body.skill;
+}
+
+export async function toggleSkill(slug: string, enabled: boolean): Promise<SkillSummaryView> {
+  const res = await fetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to toggle skill'));
+  }
+  const body = await res.json() as { skill: SkillSummaryView };
+  return body.skill;
 }
 
 export async function getConnectionRequest(requestId: string): Promise<ConnectionRequestView> {

@@ -8,13 +8,16 @@ struct ChatWebView: NSViewRepresentable {
     let selectedSessionId: String?
     let isDarkMode: Bool
     let isCatalogOpen: Bool
+    let isSkillsCatalogOpen: Bool
     let onSessionStateChange: ((String?) -> Void)?
     let onCatalogStateChange: ((Bool) -> Void)?
+    let onSkillsCatalogStateChange: ((Bool) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onSessionStateChange: onSessionStateChange,
-            onCatalogStateChange: onCatalogStateChange
+            onCatalogStateChange: onCatalogStateChange,
+            onSkillsCatalogStateChange: onSkillsCatalogStateChange
         )
     }
 
@@ -66,6 +69,15 @@ struct ChatWebView: NSViewRepresentable {
                 var next = !!open;
                 window.__vervoPendingCatalogOpen = next;
                 window.dispatchEvent(new CustomEvent('vervo:toggle-catalog', {
+                  detail: { open: next }
+                }));
+              };
+
+              window.__vervoPendingSkillsCatalogOpen = false;
+              window.__vervoApplySkillsCatalogState = function(open) {
+                var next = !!open;
+                window.__vervoPendingSkillsCatalogOpen = next;
+                window.dispatchEvent(new CustomEvent('vervo:toggle-skills-catalog', {
                   detail: { open: next }
                 }));
               };
@@ -126,6 +138,13 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
+        if isSkillsCatalogOpen != context.coordinator.lastInjectedSkillsCatalogOpen {
+            context.coordinator.pendingSkillsCatalogOpen = isSkillsCatalogOpen
+            if context.coordinator.pageLoaded {
+                context.coordinator.injectSkillsCatalogState(isSkillsCatalogOpen)
+            }
+        }
+
         // Update color scheme
         if isDarkMode != context.coordinator.lastDarkMode {
             context.coordinator.lastDarkMode = isDarkMode
@@ -140,6 +159,7 @@ struct ChatWebView: NSViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var onSessionStateChange: ((String?) -> Void)?
         var onCatalogStateChange: ((Bool) -> Void)?
+        var onSkillsCatalogStateChange: ((Bool) -> Void)?
         weak var webView: WKWebView?
         var lastInjectedPort: Int?
         var pendingPort: Int?
@@ -147,15 +167,19 @@ struct ChatWebView: NSViewRepresentable {
         var pendingSelectedSessionId: String?
         var lastInjectedCatalogOpen: Bool?
         var pendingCatalogOpen: Bool = false
+        var lastInjectedSkillsCatalogOpen: Bool?
+        var pendingSkillsCatalogOpen: Bool = false
         var lastDarkMode: Bool?
         var pageLoaded = false
 
         init(
             onSessionStateChange: ((String?) -> Void)?,
-            onCatalogStateChange: ((Bool) -> Void)?
+            onCatalogStateChange: ((Bool) -> Void)?,
+            onSkillsCatalogStateChange: ((Bool) -> Void)?
         ) {
             self.onSessionStateChange = onSessionStateChange
             self.onCatalogStateChange = onCatalogStateChange
+            self.onSkillsCatalogStateChange = onSkillsCatalogStateChange
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -165,6 +189,7 @@ struct ChatWebView: NSViewRepresentable {
             }
             injectSelectedSession(pendingSelectedSessionId)
             injectCatalogState(pendingCatalogOpen)
+            injectSkillsCatalogState(pendingSkillsCatalogOpen)
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -262,6 +287,25 @@ struct ChatWebView: NSViewRepresentable {
             lastInjectedCatalogOpen = open
         }
 
+        func injectSkillsCatalogState(_ open: Bool) {
+            guard let webView else { return }
+            let js = """
+            (function() {
+              window.__vervoPendingSkillsCatalogOpen = \(open ? "true" : "false");
+              if (typeof window.__vervoApplySkillsCatalogState === 'function') {
+                window.__vervoApplySkillsCatalogState(\(open ? "true" : "false"));
+              }
+            })();
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    print("[ChatWebView] Failed to inject skills catalog state: \(error.localizedDescription)")
+                }
+            }
+            pendingSkillsCatalogOpen = open
+            lastInjectedSkillsCatalogOpen = open
+        }
+
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "chatBridge",
                   let body = message.body as? [String: Any],
@@ -288,6 +332,14 @@ struct ChatWebView: NSViewRepresentable {
                 let open = body["open"] as? Bool ?? false
                 DispatchQueue.main.async { [onCatalogStateChange] in
                     onCatalogStateChange?(open)
+                }
+                return
+            }
+
+            if type == "skillsCatalogStateChanged" {
+                let open = body["open"] as? Bool ?? false
+                DispatchQueue.main.async { [onSkillsCatalogStateChange] in
+                    onSkillsCatalogStateChange?(open)
                 }
             }
         }

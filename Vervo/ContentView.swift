@@ -92,6 +92,8 @@ struct ContentView: View {
     @AppStorage("isConnectionsCatalogExpanded") private var isConnectionsCatalogExpanded = false
     @AppStorage("isConnectionsListExpanded") private var isConnectionsListExpanded = true
     @AppStorage("isSessionsListExpanded") private var isSessionsListExpanded = true
+    @AppStorage("isSkillsListExpanded") private var isSkillsListExpanded = true
+    @AppStorage("isSkillsCatalogExpanded") private var isSkillsCatalogExpanded = false
     @AppStorage("selectedChatSessionId") private var persistedSelectedSessionId = ""
     @State private var sessions: [SidebarChatSession] = []
     @State private var selectedSessionId: String?
@@ -99,6 +101,7 @@ struct ContentView: View {
     @State private var sessionError: String?
     @State private var sidebarToast: SidebarToast?
     @State private var connections: [SidebarConnection] = []
+    @State private var skills: [SidebarSkill] = []
     @State private var hasCompletedInitialSelection = false
     private let sidebarRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
@@ -143,9 +146,12 @@ struct ContentView: View {
                         sessionError: sessionError,
                         sidecarReady: sidecarPort != nil,
                         connections: connections,
+                        skills: skills,
                         isCatalogOpen: isConnectionsCatalogExpanded,
+                        isSkillsCatalogOpen: isSkillsCatalogExpanded,
                         isConnectionsExpanded: $isConnectionsListExpanded,
                         isSessionsExpanded: $isSessionsListExpanded,
+                        isSkillsExpanded: $isSkillsListExpanded,
                         onCreateSession: {
                             Task { await createSession() }
                         },
@@ -160,6 +166,9 @@ struct ContentView: View {
                         },
                         onToggleCatalog: {
                             isConnectionsCatalogExpanded.toggle()
+                        },
+                        onToggleSkillsCatalog: {
+                            isSkillsCatalogExpanded.toggle()
                         }
                     )
                 }
@@ -207,9 +216,13 @@ struct ContentView: View {
                 selectedSessionId: selectedSessionId,
                 isDarkMode: isDarkMode,
                 isCatalogOpen: isConnectionsCatalogExpanded,
+                isSkillsCatalogOpen: isSkillsCatalogExpanded,
                 onSessionStateChange: handleWebSessionStateChange,
                 onCatalogStateChange: { open in
                     isConnectionsCatalogExpanded = open
+                },
+                onSkillsCatalogStateChange: { open in
+                    isSkillsCatalogExpanded = open
                 }
             )
             .overlay(alignment: .topLeading) {
@@ -280,12 +293,14 @@ struct ContentView: View {
         .task(id: sidecarPort) {
             await refreshSessions()
             await refreshConnections()
+            await refreshSkills()
         }
         .onReceive(sidebarRefreshTimer) { _ in
             guard sidecarPort != nil else { return }
             Task {
                 await refreshSessions()
                 await refreshConnections()
+                await refreshSkills()
             }
         }
     }
@@ -350,6 +365,45 @@ struct ContentView: View {
             connections = decoded.connections
         } catch {
             // Keep the last known list when refresh fails.
+        }
+    }
+
+    @MainActor
+    private func refreshSkills() async {
+        guard let baseURL = sidecar.baseURL else {
+            skills = []
+            return
+        }
+
+        do {
+            let url = baseURL.appendingPathComponent("skills")
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                return
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarSkillsResponse.self, from: data)
+            skills = decoded.skills
+        } catch {
+            // Keep the last known list when refresh fails.
+        }
+    }
+
+    @MainActor
+    private func toggleSkill(_ slug: String, enabled: Bool) async {
+        guard let baseURL = sidecar.baseURL else { return }
+        do {
+            var request = URLRequest(
+                url: baseURL.appendingPathComponent("skills/\(slug)/toggle")
+            )
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(SidebarSkillToggleRequest(enabled: enabled))
+            _ = try await URLSession.shared.data(for: request)
+            await refreshSkills()
+        } catch {
+            // Best-effort; fall back to next refresh tick.
         }
     }
 
@@ -529,14 +583,18 @@ private struct SessionSidebar: View {
     let sessionError: String?
     let sidecarReady: Bool
     let connections: [SidebarConnection]
+    let skills: [SidebarSkill]
     let isCatalogOpen: Bool
+    let isSkillsCatalogOpen: Bool
     @Binding var isConnectionsExpanded: Bool
     @Binding var isSessionsExpanded: Bool
+    @Binding var isSkillsExpanded: Bool
     let onCreateSession: () -> Void
     let onArchiveSession: (String) -> Void
     let onRenameSession: (String, String) -> Void
     let onSelectSession: (String) -> Void
     let onToggleCatalog: () -> Void
+    let onToggleSkillsCatalog: () -> Void
 
     @State private var renamingSessionId: String?
     @State private var draftTitle = ""
@@ -620,6 +678,73 @@ private struct SessionSidebar: View {
                                 onBeginRename: beginRename,
                                 onCommitRename: commitRename
                             )
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    isSkillsExpanded.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Text("SKILLS")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .tracking(0.8)
+                                        .foregroundStyle(secondaryText)
+                                    Image(systemName: isSkillsExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .foregroundStyle(secondaryText)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: onToggleSkillsCatalog) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(secondaryText)
+                                    .frame(width: 18, height: 18)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!sidecarReady)
+                            .help("Browse skills")
+                        }
+
+                        if isSkillsExpanded {
+                            let enabledSkills = skills.filter { $0.enabled }
+                            if enabledSkills.isEmpty {
+                                Text("No skills enabled")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(secondaryText)
+                                    .padding(.horizontal, 10)
+                            } else {
+                                ForEach(enabledSkills) { skill in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "sparkles")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(secondaryText)
+                                            .frame(width: 18, height: 18)
+
+                                        Text(skill.name)
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(primaryText)
+                                            .lineLimit(1)
+
+                                        Spacer(minLength: 0)
+
+                                        Text("/" + skill.slug)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(secondaryText)
+                                            .lineLimit(1)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                }
+                            }
                         }
                     }
 
@@ -877,6 +1002,27 @@ private struct SessionSidebarRow: View {
         }
         return .clear
     }
+}
+
+private struct SidebarSkill: Decodable, Identifiable, Equatable {
+    let slug: String
+    let name: String
+    let description: String
+    let category: String?
+    let tags: [String]
+    let prerequisites: [String]
+    let platforms: [String]
+    let enabled: Bool
+
+    var id: String { slug }
+}
+
+private struct SidebarSkillsResponse: Decodable {
+    let skills: [SidebarSkill]
+}
+
+private struct SidebarSkillToggleRequest: Encodable {
+    let enabled: Bool
 }
 
 private struct SidebarConnection: Decodable, Identifiable {
