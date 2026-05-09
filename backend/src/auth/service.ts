@@ -26,6 +26,8 @@ export interface ExchangeAuthInput {
   privyAccessToken: string;
   deviceLabel: string;
   platform: string;
+  email?: string | null;
+  displayName?: string | null;
 }
 
 export interface ExchangeAuthResult {
@@ -65,19 +67,26 @@ export class AuthService {
     const nowIso = now.toISOString();
 
     let user = await this.store.getUserByPrivyUserId(claims.userId);
+    const normalizedEmail = normalizeOptionalString(input.email);
+    const normalizedDisplayName = normalizeOptionalString(input.displayName);
     if (!user) {
       user = {
         id: createId('usr'),
         privyUserId: claims.userId,
-        email: null,
-        displayName: null,
+        email: normalizedEmail,
+        displayName: normalizedDisplayName,
         createdAt: nowIso,
         updatedAt: nowIso,
       };
       await this.store.insertUser(user);
       await this.ensureDefaultManagedEntitlement(user.id, nowIso);
     } else {
-      user = { ...user, updatedAt: nowIso };
+      user = {
+        ...user,
+        email: normalizedEmail ?? user.email,
+        displayName: normalizedDisplayName ?? user.displayName,
+        updatedAt: nowIso,
+      };
       await this.store.updateUser(user);
     }
 
@@ -173,4 +182,9 @@ function createSessionToken(): string {
 
 function hashSessionToken(sessionToken: string): string {
   return createHash('sha256').update(sessionToken).digest('hex');
+}
+
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }

@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { ChatMessage, ActivityStep, ConnectionRequestView } from './types';
-import { openExternalUrl } from './chat';
+import { generateCronDescription, openExternalUrl } from './chat';
 
 interface Props {
   messages: ChatMessage[];
@@ -55,6 +55,23 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user';
 
+  // Connection cards live alongside the assistant's response text, not inside
+  // the "N tool calls" collapsible. Pull them out of the activity stream and
+  // render them as siblings of the message body so the user always sees the
+  // call-to-action without expanding the activity log.
+  const allSteps = message.steps ?? [];
+  const connectionRequests: ConnectionRequestView[] = [];
+  const stepsForActivity: ActivityStep[] = [];
+  for (const step of allSteps) {
+    if (step.type === 'tool' && step.connection) {
+      connectionRequests.push(step.connection);
+    } else {
+      stepsForActivity.push(step);
+    }
+  }
+
+  const assistantMessage = !isUser ? { ...message, steps: stepsForActivity } : message;
+
   return (
     <div style={{
       display: 'flex',
@@ -74,7 +91,7 @@ function MessageBubble({
           width: isUser ? 'auto' : '100%',
         }}
       >
-        {!isUser && <AssistantActivity message={message} onConnect={onConnect} />}
+        {!isUser && <AssistantActivity message={assistantMessage} onConnect={onConnect} />}
 
         <div className="message-content">
           {isUser ? (
@@ -102,6 +119,18 @@ function MessageBubble({
             </ReactMarkdown>
           ) : null}
         </div>
+
+        {!isUser && connectionRequests.length > 0 && (
+          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {connectionRequests.map((request, idx) => (
+              <ConnectionCard
+                key={request.id || `${idx}-${request.toolkitSlug}`}
+                request={request}
+                onConnect={onConnect}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -116,20 +145,16 @@ function AssistantActivity({
 }) {
   const steps = message.steps ?? [];
   const hasActivity = steps.length > 0;
-  const hasConnectionCard = steps.some((step) => step.type === 'tool' && !!step.connection);
-  const hasPendingConnection = steps.some((step) =>
-    step.type === 'tool' && !!step.connection && (step.connection.status === 'pending' || step.connection.status === 'failed'),
-  );
-  const [expanded, setExpanded] = useState<boolean>(!!message.isStreaming || hasPendingConnection);
+  const [expanded, setExpanded] = useState<boolean>(!!message.isStreaming);
 
   // When streaming stops, auto-collapse
   const wasStreaming = useRef<boolean>(!!message.isStreaming);
   useEffect(() => {
-    if (wasStreaming.current && !message.isStreaming && !hasPendingConnection) {
+    if (wasStreaming.current && !message.isStreaming) {
       setExpanded(false);
     }
     wasStreaming.current = !!message.isStreaming;
-  }, [hasPendingConnection, message.isStreaming]);
+  }, [message.isStreaming]);
 
   if (!hasActivity && !message.isStreaming) return null;
 
@@ -145,7 +170,7 @@ function AssistantActivity({
         expanded={expanded}
         onToggle={() => setExpanded(e => !e)}
       />
-      {(expanded || hasConnectionCard) && hasActivity && (
+      {expanded && hasActivity && (
         <div style={{ marginTop: '6px', paddingLeft: '18px' }}>
           {steps.map((step, i) => <StepView key={i} step={step} onConnect={onConnect} />)}
         </div>
@@ -231,11 +256,127 @@ function StepView({
     );
   }
 
-  if (step.connection) {
-    return <ConnectionCard request={step.connection} onConnect={onConnect} />;
+  // Connection cards are pulled out of `steps` upstream and rendered next to
+  // the assistant's response, not inside the activity collapsible. Anything
+  // still tagged with a connection here is unexpected — fall through to the
+  // generic ToolStep rather than rendering a card in the wrong place.
+
+  if (step.name === 'cronjob') {
+    const card = parseCronToolStep(step);
+    if (card) return <CronToolCard {...card} />;
   }
 
   return <ToolStep step={step} />;
+}
+
+interface CronToolCardProps {
+  action: 'create' | 'update' | 'remove' | 'pause' | 'resume' | 'run';
+  jobId: string | null;
+  name: string | null;
+  scheduleDisplay: string | null;
+}
+
+function parseCronToolStep(step: Extract<ActivityStep, { type: 'tool' }>): CronToolCardProps | null {
+  // The agent's request is the function-call's input; the tool's response
+  // is the function-call-output. We render a card only after the result
+  // arrives so we can confirm it succeeded.
+  if (typeof step.result !== 'string' || step.result.length === 0) return null;
+  let parsedResult: unknown;
+  try {
+    parsedResult = JSON.parse(step.result);
+  } catch {
+    return null;
+  }
+  if (!parsedResult || typeof parsedResult !== 'object') return null;
+  const resultObj = parsedResult as Record<string, unknown>;
+  if (resultObj.success !== true) return null;
+
+  const inputObj = (typeof step.input === 'object' && step.input !== null
+    ? step.input as Record<string, unknown>
+    : null);
+  const action = typeof inputObj?.action === 'string' ? inputObj.action : null;
+  if (
+    action !== 'create'
+    && action !== 'update'
+    && action !== 'remove'
+    && action !== 'pause'
+    && action !== 'resume'
+    && action !== 'run'
+  ) {
+    return null;
+  }
+
+  const job = (resultObj.job && typeof resultObj.job === 'object'
+    ? resultObj.job as Record<string, unknown>
+    : null);
+
+  const jobId = action === 'remove'
+    ? (typeof inputObj?.job_id === 'string' ? inputObj.job_id : null)
+    : (typeof job?.id === 'string' ? job.id : null);
+  const name = typeof job?.name === 'string'
+    ? job.name
+    : typeof inputObj?.name === 'string' ? inputObj.name : null;
+  const scheduleDisplay = typeof job?.schedule_display === 'string'
+    ? job.schedule_display
+    : typeof inputObj?.schedule === 'string' ? inputObj.schedule : null;
+
+  return { action, jobId, name, scheduleDisplay };
+}
+
+const CRON_ACTION_LABELS: Record<CronToolCardProps['action'], string> = {
+  create: 'Scheduled',
+  update: 'Updated',
+  remove: 'Removed',
+  pause: 'Paused',
+  resume: 'Resumed',
+  run: 'Triggered',
+};
+
+function CronToolCard({ action, jobId, name, scheduleDisplay }: CronToolCardProps) {
+  // Bump the sidebar exactly once per card mount — every cron mutation that
+  // produced this tool result is a reason for the Swift sidebar to refetch.
+  // For freshly-created routines, also kick off the LLM-generated subtitle
+  // in the background so it's already cached by the time the user opens
+  // the detail page. Failures here are silent — the detail page has its
+  // own backstop generator for crons we somehow missed.
+  useEffect(() => {
+    window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'cronsChanged' });
+    if (action === 'create' && jobId) {
+      void generateCronDescription(jobId).catch(() => {
+        /* best-effort — detail page will retry on first view */
+      });
+    }
+  }, [action, jobId]);
+
+  const canView = action !== 'remove' && jobId !== null;
+  const handleView = () => {
+    if (!canView || jobId === null) return;
+    window.dispatchEvent(new CustomEvent('vervo:open-cron-detail', { detail: { id: jobId } }));
+  };
+
+  return (
+    <div className="cron-tool-card">
+      <div className="cron-tool-card-icon" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="7" cy="7" r="5.5" />
+          <polyline points="7,4 7,7 9.5,8.5" />
+        </svg>
+      </div>
+      <div className="cron-tool-card-body">
+        <div className="cron-tool-card-title">
+          {CRON_ACTION_LABELS[action]} routine {name ? <strong>{name}</strong> : ''}
+        </div>
+        {scheduleDisplay && action !== 'remove' && (
+          <div className="cron-tool-card-subtitle">{scheduleDisplay}</div>
+        )}
+      </div>
+      {canView && (
+        <button type="button" className="cron-tool-card-view" onClick={handleView}>
+          View
+        </button>
+      )}
+    </div>
+  );
 }
 
 function ToolStep({ step }: { step: Extract<ActivityStep, { type: 'tool' }> }) {

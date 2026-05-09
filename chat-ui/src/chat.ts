@@ -83,15 +83,23 @@ export function streamChatMessage(
   onEvent: (event: ChatSSEEvent) => void,
   onDone: () => void,
   onError: (err: string) => void,
+  options: { attached?: import('./types').AttachedContext | null } = {},
 ): () => void {
   const controller = new AbortController();
+
+  // Skills travel via the slash text (`/skill body`), so we only forward the
+  // structured `attached` field for cron context — the orchestrator does the
+  // Hermes round-trip to inject the cron's current state.
+  const attached = options.attached?.kind === 'cron'
+    ? { kind: 'cron' as const, id: options.attached.id }
+    : undefined;
 
   (async () => {
     try {
       const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify(attached ? { content, attached } : { content }),
         signal: controller.signal,
       });
 
@@ -218,6 +226,93 @@ export async function toggleSkill(slug: string, enabled: boolean): Promise<Skill
   }
   const body = await res.json() as { skill: SkillSummaryView };
   return body.skill;
+}
+
+export async function getCronDetail(id: string): Promise<import('./types').CronDetailView> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load cron job'));
+  }
+  return res.json() as Promise<import('./types').CronDetailView>;
+}
+
+export async function getCronRunOutput(id: string, filename: string): Promise<string> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load run output'));
+  }
+  const body = await res.json() as { content: string };
+  return body.content;
+}
+
+export async function generateCronDescription(id: string, force = false): Promise<import('./types').CronDescriptionView | null> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to generate description'));
+  }
+  const body = await res.json() as { description: import('./types').CronDescriptionView | null };
+  return body.description;
+}
+
+export async function patchCronDescription(id: string, description: string): Promise<import('./types').CronDescriptionView | null> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to update description'));
+  }
+  const body = await res.json() as { description: import('./types').CronDescriptionView | null };
+  return body.description;
+}
+
+export async function getCronRunTranscript(id: string, filename: string): Promise<import('./types').CronRunTranscriptView | null> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}/transcript`);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load run transcript'));
+  }
+  return res.json() as Promise<import('./types').CronRunTranscriptView>;
+}
+
+export async function patchCron(id: string, payload: Partial<{
+  name: string;
+  schedule: string;
+  prompt: string;
+  deliver: string;
+  skills: string[];
+}>): Promise<import('./types').CronJobView> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to update cron job'));
+  }
+  const body = await res.json() as { cron: import('./types').CronJobView };
+  return body.cron;
+}
+
+export async function deleteCron(id: string): Promise<void> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to delete cron job'));
+  }
+}
+
+export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Promise<import('./types').CronJobView> {
+  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/${op}`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readError(res, `Failed to ${op} cron job`));
+  }
+  const body = await res.json() as { cron: import('./types').CronJobView };
+  return body.cron;
 }
 
 export async function pinSkill(slug: string, pinned: boolean): Promise<SkillSummaryView> {

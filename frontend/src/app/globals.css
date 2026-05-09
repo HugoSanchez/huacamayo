@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  --bg: #0f1113;
+  --bg: #141618;
   --panel: rgba(255, 255, 255, 0.04);
   --panel-strong: rgba(255, 255, 255, 0.08);
   --border: rgba(255, 255, 255, 0.08);
@@ -18,10 +18,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background:
-    radial-gradient(circle at top left, rgba(76, 166, 255, 0.12), transparent 26%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 20%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
 }
@@ -162,6 +159,66 @@ a {
 .mono {
   font-family: "SF Mono", "Menlo", "Monaco", monospace;
   font-size: 12px;
+}
+
+.login-shell {
+  width: 100%;
+  min-height: 100vh;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.login-error {
+  width: min(420px, calc(100vw - 32px));
+  text-align: center;
+  display: grid;
+  gap: 16px;
+}
+
+.login-error .actions {
+  justify-content: center;
+}
+
+.mac-spinner {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: inline-block;
+}
+
+.mac-spinner span {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 8px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.85);
+  transform-origin: 1px 14px;
+  animation: mac-spinner-fade 1s linear infinite;
+}
+
+.mac-spinner span:nth-child(1)  { transform: rotate(0deg);   animation-delay: -0.916s; }
+.mac-spinner span:nth-child(2)  { transform: rotate(30deg);  animation-delay: -0.833s; }
+.mac-spinner span:nth-child(3)  { transform: rotate(60deg);  animation-delay: -0.75s; }
+.mac-spinner span:nth-child(4)  { transform: rotate(90deg);  animation-delay: -0.666s; }
+.mac-spinner span:nth-child(5)  { transform: rotate(120deg); animation-delay: -0.583s; }
+.mac-spinner span:nth-child(6)  { transform: rotate(150deg); animation-delay: -0.5s; }
+.mac-spinner span:nth-child(7)  { transform: rotate(180deg); animation-delay: -0.416s; }
+.mac-spinner span:nth-child(8)  { transform: rotate(210deg); animation-delay: -0.333s; }
+.mac-spinner span:nth-child(9)  { transform: rotate(240deg); animation-delay: -0.25s; }
+.mac-spinner span:nth-child(10) { transform: rotate(270deg); animation-delay: -0.166s; }
+.mac-spinner span:nth-child(11) { transform: rotate(300deg); animation-delay: -0.083s; }
+.mac-spinner span:nth-child(12) { transform: rotate(330deg); animation-delay: 0s; }
+
+@keyframes mac-spinner-fade {
+  0%   { opacity: 1; }
+  100% { opacity: 0.2; }
 }
 
 @media (max-width: 640px) {

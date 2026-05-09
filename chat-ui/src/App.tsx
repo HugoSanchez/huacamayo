@@ -4,6 +4,7 @@ import { InputBar } from './InputBar';
 import { CatalogOverlay } from './CatalogOverlay';
 import { SkillsCatalogOverlay } from './SkillsCatalogOverlay';
 import { SkillDetailPage } from './SkillDetailPage';
+import { CronDetailPage } from './CronDetailPage';
 import {
   archiveChatSession,
   cancelChatRequest,
@@ -21,6 +22,7 @@ import {
   unarchiveChatSession,
 } from './chat';
 import type {
+  AttachedContext,
   ChatMessage,
   ChatSSEEvent,
   ActivityStep,
@@ -66,6 +68,8 @@ export function App() {
     Boolean(typeof window !== 'undefined' && window.__vervoPendingSkillsCatalogOpen),
   );
   const [selectedSkillSlug, setSelectedSkillSlug] = useState<string | null>(null);
+  const [selectedCronId, setSelectedCronId] = useState<string | null>(null);
+  const [inputDrafts, setInputDrafts] = useState<Record<string, { text: string; attached: AttachedContext | null }>>({});
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const abortRef = useRef<(() => void) | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -227,6 +231,10 @@ export function App() {
           ? requestedSessionId
           : null;
 
+        if (resolvedSessionId) {
+          setSelectedSkillSlug(null);
+        }
+
         if (resolvedSessionId === sessionIdRef.current) {
           sessionIdRef.current = resolvedSessionId;
           setSelectedSessionId(resolvedSessionId);
@@ -273,6 +281,41 @@ export function App() {
       window.removeEventListener('vervo:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
     };
   }, [isSkillsCatalogOpen]);
+
+  useEffect(() => {
+    const handleOpenCron = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: unknown }>).detail;
+      const id = typeof detail?.id === 'string' ? detail.id : null;
+      if (!id) return;
+      setSelectedCronId(id);
+      setSelectedSkillSlug(null);
+      setIsCatalogOpen(false);
+      setIsSkillsCatalogOpen(false);
+    };
+    window.addEventListener('vervo:open-cron-detail', handleOpenCron as EventListener);
+    return () => {
+      window.removeEventListener('vervo:open-cron-detail', handleOpenCron as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleAttachCron = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: unknown; name?: unknown; sessionId?: unknown }>).detail;
+      const id = typeof detail?.id === 'string' ? detail.id : null;
+      const name = typeof detail?.name === 'string' ? detail.name : id;
+      const sessionId = typeof detail?.sessionId === 'string' ? detail.sessionId : null;
+      if (!id || !name) return;
+      const targetKey = sessionId ?? selectedSessionId ?? '__none__';
+      setInputDrafts((prev) => ({
+        ...prev,
+        [targetKey]: { text: prev[targetKey]?.text ?? '', attached: { kind: 'cron', id, name } },
+      }));
+    };
+    window.addEventListener('vervo:attach-cron', handleAttachCron as EventListener);
+    return () => {
+      window.removeEventListener('vervo:attach-cron', handleAttachCron as EventListener);
+    };
+  }, [selectedSessionId]);
 
   const handleCloseCatalog = useCallback(() => {
     setIsCatalogOpen(false);
@@ -406,10 +449,15 @@ export function App() {
     })();
   }, [isHydratingSession, isStreaming, selectedSessionId, sessions]);
 
-  const handleSend = useCallback((text: string) => {
-    if (!text.trim() || isStreaming || !connected) return;
+  const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
+    const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
+    if (!hasContent || isStreaming || !connected) return;
 
-    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text };
+    const displayText = attached?.kind === 'cron' && text.trim().length === 0
+      ? `[Reviewing routine: ${attached.name}]`
+      : text;
+
+    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: displayText };
     const assistantMsg: ChatMessage = {
       id: nextId(),
       role: 'assistant',
@@ -465,6 +513,7 @@ export function App() {
               notifyNativeSessionState(isNativeShell, sessionIdRef.current);
             });
           },
+          { attached },
         );
 
         abortRef.current = abort;
@@ -537,10 +586,25 @@ export function App() {
             ? 'Create a new chat in the sidebar or start typing.'
             : 'Start a new chat or resume an existing session';
 
+  const draftKey = selectedSessionId ?? '__none__';
+  const currentDraft = inputDrafts[draftKey] ?? { text: '', attached: null };
+  const handleDraftTextChange = useCallback((next: string) => {
+    setInputDrafts((prev) => ({
+      ...prev,
+      [draftKey]: { text: next, attached: prev[draftKey]?.attached ?? null },
+    }));
+  }, [draftKey]);
+  const handleDraftAttachedChange = useCallback((attached: AttachedContext | null) => {
+    setInputDrafts((prev) => ({
+      ...prev,
+      [draftKey]: { text: prev[draftKey]?.text ?? '', attached },
+    }));
+  }, [draftKey]);
+
   const mainPanel = (
     <main className="chat-panel">
       {isNativeShell && <ChatHeaderScaffold />}
-      {!isNativeShell && !selectedSkillSlug && (
+      {!isNativeShell && !selectedSkillSlug && !selectedCronId && (
         <div className="chat-toolbar">
           <div>
             <div className="chat-toolbar-title">{selectedSession?.title ?? 'New Chat'}</div>
@@ -559,7 +623,12 @@ export function App() {
         </div>
       )}
 
-      {selectedSkillSlug ? (
+      {selectedCronId ? (
+        <CronDetailPage
+          id={selectedCronId}
+          onBack={() => setSelectedCronId(null)}
+        />
+      ) : selectedSkillSlug ? (
         <SkillDetailPage
           slug={selectedSkillSlug}
           onOpenInNewSession={handleOpenSkillInNewSession}
@@ -571,6 +640,10 @@ export function App() {
           </div>
 
           <InputBar
+            text={currentDraft.text}
+            attached={currentDraft.attached}
+            onTextChange={handleDraftTextChange}
+            onAttachedChange={handleDraftAttachedChange}
             onSend={handleSend}
             onStop={handleStop}
             isStreaming={isStreaming}

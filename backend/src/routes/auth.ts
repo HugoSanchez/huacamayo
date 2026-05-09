@@ -6,6 +6,8 @@ const exchangeSchema = z.object({
   privyAccessToken: z.string().min(1),
   deviceLabel: z.string().trim().min(1).max(120).default('Vervo for macOS'),
   platform: z.string().trim().min(1).max(60).default('macos'),
+  email: z.string().trim().email().optional().nullable(),
+  displayName: z.string().trim().max(120).optional().nullable(),
 });
 
 export async function registerAuthRoutes(app: FastifyInstance, authService: AuthService): Promise<void> {

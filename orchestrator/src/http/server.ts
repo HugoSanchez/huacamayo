@@ -9,10 +9,14 @@ import { dispatch, json, route, type Route } from './router.ts';
 import { buildSkillsRoutes } from './skills.ts';
 import { HermesSkillsConfig } from './skills-store.ts';
 import { PinnedSkillsStore } from './pinned-skills-store.ts';
+import { buildCronsRoutes } from './crons.ts';
+import { CronDescriptionsStore } from './cron-descriptions-store.ts';
 import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
 import { ConnectionsService } from '../integrations/composio.ts';
+import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
+import { buildManagedAccountRoutes } from './managed-account.ts';
 
-function buildRoutes(store: ChatStore, hermes: HermesSupervisor): Route[] {
+function buildRoutes(store: ChatStore, hermes: HermesSupervisor, managedBackend: ManagedBackendClient): Route[] {
   return [
     route('GET', '/health', async (_req, res) => {
       json(res, 200, { status: 'ok', timestamp: Date.now() });
@@ -29,6 +33,7 @@ function buildRoutes(store: ChatStore, hermes: HermesSupervisor): Route[] {
         },
         chat: buildChatDiagnostics(store),
         hermes: await hermes.getStatus(500),
+        managed: await managedBackend.getAccount(),
       });
     }),
   ];
@@ -43,14 +48,18 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const hermes = new HermesSupervisor();
   const connections = new ConnectionsService();
   const composioBridge = new ComposioBridgeService();
+  const managedBackend = new ManagedBackendClient();
   const skillsConfig = new HermesSkillsConfig();
   const pinnedSkills = new PinnedSkillsStore();
+  const cronDescriptions = new CronDescriptionsStore();
   const routes = [
-    ...buildRoutes(store, hermes),
+    ...buildRoutes(store, hermes, managedBackend),
     ...buildComposioBridgeRoutes(composioBridge),
+    ...buildManagedAccountRoutes(managedBackend),
     ...buildConnectionsRoutes(connections),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
-    ...buildChatRoutes(store, hermes, connections),
+    ...buildCronsRoutes(hermes, cronDescriptions),
+    ...buildChatRoutes(store, hermes),
   ];
 
   const server = http.createServer((req, res) => {
@@ -89,6 +98,8 @@ const isMain = process.argv[1] && (
 );
 
 if (isMain) {
+  installDiagnosticHandlers();
+
   startServer().then(({ close, port }) => {
     console.log(JSON.stringify({
       port,
@@ -96,16 +107,110 @@ if (isMain) {
       pid: process.pid,
     }));
 
-    const shutdown = () => {
+    const shutdown = (reason: string) => {
+      console.error(`[sidecar] ${reason}, shutting down`);
       void close().finally(() => process.exit(0));
     };
 
-    process.on('SIGTERM', shutdown);
-    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', () => shutdown('received SIGTERM'));
+    process.on('SIGINT', () => shutdown('received SIGINT'));
+    process.on('SIGHUP', () => shutdown('received SIGHUP'));
+    process.on('beforeExit', (code) => {
+      console.error(`[sidecar] beforeExit code=${code} — event loop drained`);
+    });
+    process.on('exit', (code) => {
+      console.error(`[sidecar] exit code=${code}`);
+    });
+
+    installParentDeathWatcher(() => shutdown('parent process gone'));
   }).catch((error: unknown) => {
     console.error(JSON.stringify(classifyStartupError(error)));
     process.exit(1);
   });
+}
+
+/**
+ * macOS has no equivalent of Linux's PR_SET_PDEATHSIG, so we poll the parent
+ * pid every couple of seconds. If the parent disappears (Vervo crashed,
+ * was force-quit, or Xcode's Stop button delivered SIGKILL), this process
+ * exits cleanly instead of getting re-parented to launchd and spinning
+ * forever — which is exactly what was cooking the user's laptop with three
+ * orphaned orchestrators pinning CPU cores at 100%.
+ */
+function installParentDeathWatcher(onParentGone: () => void): void {
+  const raw = process.env.VERVO_PARENT_PID;
+  const parentPid = raw ? Number.parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(parentPid) || parentPid <= 1) {
+    console.error('[sidecar] VERVO_PARENT_PID not set; parent-death detection disabled');
+    return;
+  }
+
+  console.error(`[sidecar] watching parent pid=${parentPid}`);
+  const interval = setInterval(() => {
+    try {
+      // Signal 0 doesn't actually deliver anything — it just throws ESRCH if
+      // no process with that pid exists, or EPERM if we can't signal it (in
+      // which case the process is alive, just under a different uid). Either
+      // way, only ESRCH means the parent is gone.
+      process.kill(parentPid, 0);
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === 'ESRCH') {
+        clearInterval(interval);
+        console.error(`[sidecar] parent pid=${parentPid} no longer exists, exiting`);
+        onParentGone();
+      }
+      // EPERM/other → parent is alive in another user context; keep watching.
+    }
+  }, 2_000);
+  // Don't keep the event loop alive just for this watcher.
+  interval.unref();
+}
+
+function installDiagnosticHandlers(): void {
+  // Defensive: when our parent (the Vervo Mac app) dies, the read end of our
+  // stdout/stderr pipes closes. Subsequent writes fail with EPIPE. Without an
+  // 'error' handler the writable stream's internal retry loop can pin a CPU
+  // core indefinitely — exactly the symptom we saw with the orphaned orchestrators
+  // running for 19 hours at 100% CPU. The parent-pid watcher should make us
+  // exit within a few seconds anyway, but during that window we don't want to
+  // burn a core, and these listeners cost nothing.
+  process.stdout.on('error', () => { /* swallow EPIPE */ });
+  process.stderr.on('error', () => { /* swallow EPIPE */ });
+
+
+  // We deliberately do NOT call process.exit() in either handler — Node's
+  // default for unhandled rejections is to terminate the process, which
+  // is what we suspect is causing the silent disappearance of the sidebar.
+  // Catching and logging keeps the process alive; the next request will
+  // either work or surface a real error.
+  process.on('unhandledRejection', (reason, promise) => {
+    const message = reason instanceof Error
+      ? `${reason.name}: ${reason.message}\n${reason.stack ?? ''}`
+      : String(reason);
+    console.error(`[sidecar] unhandledRejection ${new Date().toISOString()}\n${message}`);
+    // Best-effort: log promise stringification too
+    try {
+      console.error(`[sidecar] unhandledRejection promise: ${String(promise)}`);
+    } catch { /* ignore */ }
+  });
+
+  process.on('uncaughtException', (error, origin) => {
+    const message = error instanceof Error
+      ? `${error.name}: ${error.message}\n${error.stack ?? ''}`
+      : String(error);
+    console.error(`[sidecar] uncaughtException origin=${origin} ${new Date().toISOString()}\n${message}`);
+  });
+
+  // Cheap heartbeat so a long stderr log shows we were alive, then the
+  // last line before death tells us roughly when things went south.
+  const heartbeatInterval = 60_000;
+  setInterval(() => {
+    const memory = process.memoryUsage();
+    const rssMb = Math.round(memory.rss / 1024 / 1024);
+    const heapMb = Math.round(memory.heapUsed / 1024 / 1024);
+    console.error(`[sidecar] heartbeat ${new Date().toISOString()} pid=${process.pid} rss=${rssMb}MB heap=${heapMb}MB`);
+  }, heartbeatInterval).unref();
 }
 
 function classifyStartupError(error: unknown): {

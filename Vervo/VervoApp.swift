@@ -5,18 +5,49 @@ import AppKit
 struct VervoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var sidecar = SidecarManager()
+    @StateObject private var managedSessionStore = ManagedSessionStore()
 
     var body: some Scene {
-        WindowGroup {
-            ContentView(sidecar: sidecar)
-                .onAppear { sidecar.start() }
+        Window("Vervo", id: "main") {
+            RootView(sidecar: sidecar, managedSessionStore: managedSessionStore)
+                .onAppear {
+                    appDelegate.sidecar = sidecar
+                    sidecar.updateManagedSession(managedSessionStore.currentSession)
+                    sidecar.start()
+                }
+                .onChange(of: managedSessionStore.currentSession) { _, session in
+                    sidecar.updateManagedSession(session)
+                }
+                .onOpenURL { url in
+                    NSApp.activate(ignoringOtherApps: true)
+                    managedSessionStore.handleCallbackURL(url)
+                }
         }
         .defaultSize(width: 1200, height: 750)
         .windowStyle(.hiddenTitleBar)
     }
 }
 
+private struct RootView: View {
+    @ObservedObject var sidecar: SidecarManager
+    @ObservedObject var managedSessionStore: ManagedSessionStore
+
+    var body: some View {
+        if let session = managedSessionStore.currentSession, !session.isExpired {
+            ContentView(sidecar: sidecar, managedSessionStore: managedSessionStore)
+        } else {
+            SignInView(managedSessionStore: managedSessionStore)
+        }
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by VervoApp once the sidecar manager is constructed. We grab a
+    /// reference here so applicationWillTerminate can stop it cleanly even
+    /// when the @StateObject's deinit doesn't run (which is most of the time
+    /// on macOS app shutdown).
+    weak var sidecar: SidecarManager?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Configure already-created windows immediately.
         configureExistingWindows()
@@ -28,6 +59,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWindow.didBecomeMainNotification,
             object: nil
         )
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Belt to the orchestrator's parent-pid watcher's suspenders: if the
+        // app is quitting normally, kill the child outright instead of waiting
+        // for the watcher's 2s polling cycle.
+        sidecar?.stop()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Quit when the last window closes so the sidecar exits with us.
+        return true
     }
 
     @objc func windowDidBecomeMain(_ notification: Notification) {

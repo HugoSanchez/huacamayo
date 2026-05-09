@@ -9,15 +9,18 @@ struct ChatWebView: NSViewRepresentable {
     let isDarkMode: Bool
     let isCatalogOpen: Bool
     let isSkillsCatalogOpen: Bool
+    let pendingCronOpen: CronOpenRequest?
     let onSessionStateChange: ((String?) -> Void)?
     let onCatalogStateChange: ((Bool) -> Void)?
     let onSkillsCatalogStateChange: ((Bool) -> Void)?
+    let onCronsChanged: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onSessionStateChange: onSessionStateChange,
             onCatalogStateChange: onCatalogStateChange,
-            onSkillsCatalogStateChange: onSkillsCatalogStateChange
+            onSkillsCatalogStateChange: onSkillsCatalogStateChange,
+            onCronsChanged: onCronsChanged
         )
     }
 
@@ -145,6 +148,15 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
+        // Cron-open requests are nonced (UUID per click) so re-clicking the
+        // same cron after navigating away still re-fires the JS event.
+        if let request = pendingCronOpen, request.token != context.coordinator.lastInjectedCronToken {
+            context.coordinator.pendingCronOpen = request
+            if context.coordinator.pageLoaded {
+                context.coordinator.injectOpenCron(request)
+            }
+        }
+
         // Update color scheme
         if isDarkMode != context.coordinator.lastDarkMode {
             context.coordinator.lastDarkMode = isDarkMode
@@ -160,6 +172,7 @@ struct ChatWebView: NSViewRepresentable {
         var onSessionStateChange: ((String?) -> Void)?
         var onCatalogStateChange: ((Bool) -> Void)?
         var onSkillsCatalogStateChange: ((Bool) -> Void)?
+        var onCronsChanged: (() -> Void)?
         weak var webView: WKWebView?
         var lastInjectedPort: Int?
         var pendingPort: Int?
@@ -169,17 +182,21 @@ struct ChatWebView: NSViewRepresentable {
         var pendingCatalogOpen: Bool = false
         var lastInjectedSkillsCatalogOpen: Bool?
         var pendingSkillsCatalogOpen: Bool = false
+        var lastInjectedCronToken: UUID?
+        var pendingCronOpen: CronOpenRequest?
         var lastDarkMode: Bool?
         var pageLoaded = false
 
         init(
             onSessionStateChange: ((String?) -> Void)?,
             onCatalogStateChange: ((Bool) -> Void)?,
-            onSkillsCatalogStateChange: ((Bool) -> Void)?
+            onSkillsCatalogStateChange: ((Bool) -> Void)?,
+            onCronsChanged: (() -> Void)?
         ) {
             self.onSessionStateChange = onSessionStateChange
             self.onCatalogStateChange = onCatalogStateChange
             self.onSkillsCatalogStateChange = onSkillsCatalogStateChange
+            self.onCronsChanged = onCronsChanged
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -190,6 +207,9 @@ struct ChatWebView: NSViewRepresentable {
             injectSelectedSession(pendingSelectedSessionId)
             injectCatalogState(pendingCatalogOpen)
             injectSkillsCatalogState(pendingSkillsCatalogOpen)
+            if let request = pendingCronOpen {
+                injectOpenCron(request)
+            }
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -287,6 +307,26 @@ struct ChatWebView: NSViewRepresentable {
             lastInjectedCatalogOpen = open
         }
 
+        func injectOpenCron(_ request: CronOpenRequest) {
+            guard let webView else { return }
+            let escapedId = request.id
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+            let js = """
+            (function() {
+              window.dispatchEvent(new CustomEvent('vervo:open-cron-detail', {
+                detail: { id: '\(escapedId)' }
+              }));
+            })();
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    print("[ChatWebView] Failed to inject open-cron-detail: \(error.localizedDescription)")
+                }
+            }
+            lastInjectedCronToken = request.token
+        }
+
         func injectSkillsCatalogState(_ open: Bool) {
             guard let webView else { return }
             let js = """
@@ -341,6 +381,14 @@ struct ChatWebView: NSViewRepresentable {
                 DispatchQueue.main.async { [onSkillsCatalogStateChange] in
                     onSkillsCatalogStateChange?(open)
                 }
+                return
+            }
+
+            if type == "cronsChanged" {
+                DispatchQueue.main.async { [onCronsChanged] in
+                    onCronsChanged?()
+                }
+                return
             }
         }
     }

@@ -14,6 +14,8 @@
 		A10000010000000000000005 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000006 /* SidecarManager.swift */; };
 		A1000001000000000000000B /* ChatWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000C /* ChatWebView.swift */; };
 		A1000001000000000000000C /* chat-ui in Resources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000D /* chat-ui */; };
+		A1000001000000000000000D /* ManagedSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000E /* ManagedSessionStore.swift */; };
+		A1000001000000000000000F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000010 /* SignInView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +27,9 @@
 		A10000020000000000000006 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		A1000002000000000000000C /* ChatWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebView.swift; sourceTree = "<group>"; };
 		A1000002000000000000000D /* chat-ui */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "chat-ui"; sourceTree = "<group>"; };
+		A1000002000000000000000E /* ManagedSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedSessionStore.swift; sourceTree = "<group>"; };
+		A10000020000000000000010 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
+		A1000002000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000030000000000000001 /* Vervo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Vervo.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -54,6 +59,9 @@
 					A10000020000000000000002 /* ContentView.swift */,
 					A10000020000000000000006 /* SidecarManager.swift */,
 					A1000002000000000000000C /* ChatWebView.swift */,
+					A1000002000000000000000E /* ManagedSessionStore.swift */,
+					A10000020000000000000010 /* SignInView.swift */,
+					A1000002000000000000000F /* Info.plist */,
 					A1000002000000000000000D /* chat-ui */,
 				A10000020000000000000003 /* Assets.xcassets */,
 				A10000020000000000000005 /* Vervo.entitlements */,
@@ -172,6 +180,8 @@
 					A10000010000000000000001 /* VervoApp.swift in Sources */,
 					A10000010000000000000005 /* SidecarManager.swift in Sources */,
 					A1000001000000000000000B /* ChatWebView.swift in Sources */,
+					A1000001000000000000000D /* ManagedSessionStore.swift in Sources */,
+					A1000001000000000000000F /* SignInView.swift in Sources */,
 				);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -305,7 +315,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Vervo/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Vervo/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -330,7 +341,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"Vervo/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Vervo/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

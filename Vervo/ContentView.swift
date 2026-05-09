@@ -86,6 +86,7 @@ private enum ConductorThemes {
 
 struct ContentView: View {
     @ObservedObject var sidecar: SidecarManager
+    @ObservedObject var managedSessionStore: ManagedSessionStore
     @AppStorage("isDarkMode") private var isDarkMode = true
     @AppStorage("isLeftSidebarExpanded") private var isLeftSidebarExpanded = true
     @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = true
@@ -94,6 +95,7 @@ struct ContentView: View {
     @AppStorage("isSessionsListExpanded") private var isSessionsListExpanded = true
     @AppStorage("isSkillsListExpanded") private var isSkillsListExpanded = true
     @AppStorage("isSkillsCatalogExpanded") private var isSkillsCatalogExpanded = false
+    @AppStorage("isCronsListExpanded") private var isCronsListExpanded = true
     @AppStorage("selectedChatSessionId") private var persistedSelectedSessionId = ""
     @State private var sessions: [SidebarChatSession] = []
     @State private var selectedSessionId: String?
@@ -102,11 +104,14 @@ struct ContentView: View {
     @State private var sidebarToast: SidebarToast?
     @State private var connections: [SidebarConnection] = []
     @State private var skills: [SidebarSkill] = []
+    @State private var crons: [SidebarCron] = []
+    @State private var pendingCronOpen: CronOpenRequest?
     @State private var hasCompletedInitialSelection = false
     private let sidebarRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
-    init(sidecar: SidecarManager) {
+    init(sidecar: SidecarManager, managedSessionStore: ManagedSessionStore) {
         self.sidecar = sidecar
+        self.managedSessionStore = managedSessionStore
     }
 
     private var theme: ConductorThemePalette {
@@ -147,11 +152,13 @@ struct ContentView: View {
                         sidecarReady: sidecarPort != nil,
                         connections: connections,
                         skills: skills,
+                        crons: crons,
                         isCatalogOpen: isConnectionsCatalogExpanded,
                         isSkillsCatalogOpen: isSkillsCatalogExpanded,
                         isConnectionsExpanded: $isConnectionsListExpanded,
                         isSessionsExpanded: $isSessionsListExpanded,
                         isSkillsExpanded: $isSkillsListExpanded,
+                        isCronsExpanded: $isCronsListExpanded,
                         onCreateSession: {
                             Task { await createSession() }
                         },
@@ -169,6 +176,12 @@ struct ContentView: View {
                         },
                         onToggleSkillsCatalog: {
                             isSkillsCatalogExpanded.toggle()
+                        },
+                        onOpenCron: { cronId in
+                            pendingCronOpen = CronOpenRequest(id: cronId, token: UUID())
+                        },
+                        onDeleteCron: { cronId in
+                            Task { await deleteCron(cronId) }
                         }
                     )
                 }
@@ -176,7 +189,14 @@ struct ContentView: View {
                 Spacer(minLength: 0)
 
                 if isLeftSidebarExpanded {
-                    SidebarFooter(isDarkMode: $isDarkMode, sidecarState: sidecar.state, theme: theme)
+                    SidebarFooter(
+                        isDarkMode: $isDarkMode,
+                        sidecarState: sidecar.state,
+                        managedAccount: sidecar.managedAccount,
+                        managedSession: managedSessionStore.currentSession,
+                        theme: theme,
+                        onSignOut: { managedSessionStore.clearSession() }
+                    )
                 }
             }
             .background(
@@ -217,12 +237,16 @@ struct ContentView: View {
                 isDarkMode: isDarkMode,
                 isCatalogOpen: isConnectionsCatalogExpanded,
                 isSkillsCatalogOpen: isSkillsCatalogExpanded,
+                pendingCronOpen: pendingCronOpen,
                 onSessionStateChange: handleWebSessionStateChange,
                 onCatalogStateChange: { open in
                     isConnectionsCatalogExpanded = open
                 },
                 onSkillsCatalogStateChange: { open in
                     isSkillsCatalogExpanded = open
+                },
+                onCronsChanged: {
+                    Task { await refreshCrons() }
                 }
             )
             .overlay(alignment: .topLeading) {
@@ -294,6 +318,7 @@ struct ContentView: View {
             await refreshSessions()
             await refreshConnections()
             await refreshSkills()
+            await refreshCrons()
         }
         .onReceive(sidebarRefreshTimer) { _ in
             guard sidecarPort != nil else { return }
@@ -301,16 +326,21 @@ struct ContentView: View {
                 await refreshSessions()
                 await refreshConnections()
                 await refreshSkills()
+                await refreshCrons()
             }
+        }
+        .onChange(of: managedSessionStore.latestEvent?.id) { _, _ in
+            guard let event = managedSessionStore.latestEvent else { return }
+            showSidebarToast(event.message)
         }
     }
 
     @MainActor
     private func refreshSessions(preferredSelection: String? = nil) async {
+        // Don't wipe the sidebar when the sidecar is briefly unreachable
+        // (it auto-restarts; clearing creates a jarring "everything's gone"
+        // moment for what is in practice a 1–2 second blip).
         guard let baseURL = sidecar.baseURL else {
-            sessions = []
-            setSelectedSession(nil)
-            sessionError = nil
             isLoadingSessions = false
             return
         }
@@ -348,10 +378,7 @@ struct ContentView: View {
 
     @MainActor
     private func refreshConnections() async {
-        guard let baseURL = sidecar.baseURL else {
-            connections = []
-            return
-        }
+        guard let baseURL = sidecar.baseURL else { return }
 
         do {
             let url = baseURL.appendingPathComponent("connections")
@@ -369,11 +396,50 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func refreshSkills() async {
-        guard let baseURL = sidecar.baseURL else {
-            skills = []
-            return
+    private func deleteCron(_ id: String) async {
+        guard let baseURL = sidecar.baseURL else { return }
+        let original = crons
+        // Optimistic: remove from sidebar immediately so the row dismiss
+        // feels instant. If the server rejects, restore on next refresh.
+        crons.removeAll { $0.id == id }
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("crons/\(id)"))
+            request.httpMethod = "DELETE"
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+        } catch {
+            // Roll back the optimistic removal and let the periodic refresh
+            // re-sync the canonical state.
+            crons = original
         }
+        await refreshCrons()
+    }
+
+    @MainActor
+    private func refreshCrons() async {
+        guard let baseURL = sidecar.baseURL else { return }
+
+        do {
+            let url = baseURL.appendingPathComponent("crons")
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                return
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarCronsResponse.self, from: data)
+            crons = decoded.crons
+        } catch {
+            // Keep the last known list when refresh fails.
+        }
+    }
+
+    @MainActor
+    private func refreshSkills() async {
+        guard let baseURL = sidecar.baseURL else { return }
 
         do {
             let url = baseURL.appendingPathComponent("skills")
@@ -584,17 +650,21 @@ private struct SessionSidebar: View {
     let sidecarReady: Bool
     let connections: [SidebarConnection]
     let skills: [SidebarSkill]
+    let crons: [SidebarCron]
     let isCatalogOpen: Bool
     let isSkillsCatalogOpen: Bool
     @Binding var isConnectionsExpanded: Bool
     @Binding var isSessionsExpanded: Bool
     @Binding var isSkillsExpanded: Bool
+    @Binding var isCronsExpanded: Bool
     let onCreateSession: () -> Void
     let onArchiveSession: (String) -> Void
     let onRenameSession: (String, String) -> Void
     let onSelectSession: (String) -> Void
     let onToggleCatalog: () -> Void
     let onToggleSkillsCatalog: () -> Void
+    let onOpenCron: (String) -> Void
+    let onDeleteCron: (String) -> Void
 
     @State private var renamingSessionId: String?
     @State private var draftTitle = ""
@@ -609,6 +679,34 @@ private struct SessionSidebar: View {
 
     private var activeSessions: [SidebarChatSession] {
         sessions.filter { $0.archivedAt == nil }
+    }
+
+    private func cronSubtitle(_ cron: SidebarCron) -> String? {
+        if cron.state == "paused" { return "paused" }
+        if cron.lastStatus == "error" { return "last run failed" }
+        if let next = cron.nextRunAt, let date = parseISODate(next) {
+            // After "Run now" (or any overdue tick) `next_run_at` lives in the
+            // past until Hermes' scheduler ticks again — render that window
+            // as "starting…" instead of nonsensical "next 15 sec ago".
+            if date.timeIntervalSinceNow < 0 { return "starting…" }
+            return "next " + relativeTime(date)
+        }
+        return cron.scheduleDisplay
+    }
+
+    private func parseISODate(_ raw: String) -> Date? {
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFractional.date(from: raw) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: raw)
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     var body: some View {
@@ -685,6 +783,71 @@ private struct SessionSidebar: View {
                         HStack(spacing: 6) {
                             Button(action: {
                                 withAnimation(.easeInOut(duration: 0.18)) {
+                                    isConnectionsExpanded.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Text("CONNECTIONS")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .tracking(0.8)
+                                        .foregroundStyle(secondaryText)
+                                    Image(systemName: isConnectionsExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .foregroundStyle(secondaryText)
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: onToggleCatalog) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(secondaryText)
+                                    .frame(width: 18, height: 18)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!sidecarReady)
+                            .help("Browse connections")
+                        }
+
+                        if isConnectionsExpanded {
+                            if connections.isEmpty {
+                                Text("No connected tools")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(secondaryText)
+                                    .padding(.horizontal, 10)
+                            } else {
+                                ForEach(connections) { connection in
+                                    HStack(spacing: 10) {
+                                        ConnectionLogo(
+                                            logoUrl: connection.logoUrl,
+                                            toolkitName: connection.toolkitName,
+                                            isDarkMode: isDarkMode
+                                        )
+
+                                        Text(connection.toolkitName)
+                                            .font(.system(size: 13, weight: .regular))
+                                            .foregroundStyle(primaryText)
+
+                                        Spacer(minLength: 0)
+
+                                        Text(connection.status.capitalized)
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(secondaryText)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                }
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.18)) {
                                     isSkillsExpanded.toggle()
                                 }
                             }) {
@@ -749,65 +912,42 @@ private struct SessionSidebar: View {
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    isConnectionsExpanded.toggle()
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Text("CONNECTIONS")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .tracking(0.8)
-                                        .foregroundStyle(secondaryText)
-                                    Image(systemName: isConnectionsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 8, weight: .semibold))
-                                        .foregroundStyle(secondaryText)
-                                    Spacer(minLength: 0)
-                                }
-                                .contentShape(Rectangle())
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isCronsExpanded.toggle()
                             }
-                            .buttonStyle(.plain)
-
-                            Button(action: onToggleCatalog) {
-                                Image(systemName: "plus")
+                        }) {
+                            HStack(spacing: 6) {
+                                Text("ROUTINES")
                                     .font(.system(size: 11, weight: .semibold))
+                                    .tracking(0.8)
                                     .foregroundStyle(secondaryText)
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(Rectangle())
+                                Image(systemName: isCronsExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .foregroundStyle(secondaryText)
+                                Spacer(minLength: 0)
                             }
-                            .buttonStyle(.plain)
-                            .disabled(!sidecarReady)
-                            .help("Browse connections")
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
 
-                        if isConnectionsExpanded {
-                            if connections.isEmpty {
-                                Text("No connected tools")
+                        if isCronsExpanded {
+                            if crons.isEmpty {
+                                Text("No routines yet")
                                     .font(.system(size: 12))
                                     .foregroundStyle(secondaryText)
                                     .padding(.horizontal, 10)
                             } else {
-                                ForEach(connections) { connection in
-                                    HStack(spacing: 10) {
-                                        ConnectionLogo(
-                                            logoUrl: connection.logoUrl,
-                                            toolkitName: connection.toolkitName,
-                                            isDarkMode: isDarkMode
-                                        )
-
-                                        Text(connection.toolkitName)
-                                            .font(.system(size: 13, weight: .regular))
-                                            .foregroundStyle(primaryText)
-
-                                        Spacer(minLength: 0)
-
-                                        Text(connection.status.capitalized)
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(secondaryText)
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
+                                ForEach(crons) { cron in
+                                    SidebarCronRow(
+                                        cron: cron,
+                                        subtitle: cronSubtitle(cron),
+                                        primaryText: primaryText,
+                                        secondaryText: secondaryText,
+                                        isDarkMode: isDarkMode,
+                                        onOpen: { onOpenCron(cron.id) },
+                                        onDelete: { onDeleteCron(cron.id) }
+                                    )
                                 }
                             }
                         }
@@ -1002,6 +1142,178 @@ private struct SessionSidebarRow: View {
         }
         return .clear
     }
+}
+
+struct CronOpenRequest: Equatable {
+    let id: String
+    let token: UUID
+}
+
+private struct SidebarCronRow: View {
+    let cron: SidebarCron
+    let subtitle: String?
+    let primaryText: Color
+    let secondaryText: Color
+    let isDarkMode: Bool
+    let onOpen: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
+    @State private var confirmingDelete = false
+    @State private var confirmResetTask: Task<Void, Never>?
+
+    private var deleteIconColor: Color {
+        confirmingDelete
+            ? Color.red.opacity(isDarkMode ? 0.92 : 0.78)
+            : secondaryText
+    }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                CronStatusDot(state: cron.state, lastStatus: cron.lastStatus, nextRunAt: cron.nextRunAt, isDarkMode: isDarkMode)
+                    .frame(width: 18, height: 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(cron.name)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(primaryText)
+                        .lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(secondaryText)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if isHovered || confirmingDelete {
+                    Button(action: handleDeleteTap) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(deleteIconColor)
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(confirmingDelete ? "Click again to delete" : "Delete routine")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+            if !hovering {
+                resetConfirm()
+            }
+        }
+    }
+
+    private func handleDeleteTap() {
+        if confirmingDelete {
+            confirmResetTask?.cancel()
+            confirmResetTask = nil
+            confirmingDelete = false
+            onDelete()
+            return
+        }
+        confirmingDelete = true
+        confirmResetTask?.cancel()
+        confirmResetTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if !Task.isCancelled {
+                confirmingDelete = false
+            }
+        }
+    }
+
+    private func resetConfirm() {
+        confirmResetTask?.cancel()
+        confirmResetTask = nil
+        confirmingDelete = false
+    }
+}
+
+private struct CronStatusDot: View {
+    let state: String
+    let lastStatus: String?
+    let nextRunAt: String?
+    let isDarkMode: Bool
+
+    private var isRunning: Bool {
+        // Hermes pushes `next_run_at` to "now" when the run is queued, then
+        // advances it once the scheduler tick fires the run. That window is
+        // when the routine is effectively running — show a spinner.
+        guard state != "paused", let raw = nextRunAt, let date = parseCronISODate(raw) else {
+            return false
+        }
+        return date.timeIntervalSinceNow < 0
+    }
+
+    private var color: Color {
+        if state == "paused" {
+            return Color.orange.opacity(isDarkMode ? 0.85 : 0.78)
+        }
+        if lastStatus == "error" {
+            return Color.red.opacity(isDarkMode ? 0.85 : 0.78)
+        }
+        return Color.green.opacity(isDarkMode ? 0.78 : 0.7)
+    }
+
+    var body: some View {
+        if isRunning {
+            ProgressView()
+                .scaleEffect(0.45)
+                .frame(width: 7, height: 7)
+        } else {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+        }
+    }
+}
+
+// Top-level helper used by CronStatusDot. SessionSidebar has its own copy
+// because it's a member function — keeping them separate avoids exposing
+// formatter internals beyond what each call site needs.
+private func parseCronISODate(_ raw: String) -> Date? {
+    let withFractional = ISO8601DateFormatter()
+    withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = withFractional.date(from: raw) { return date }
+    let plain = ISO8601DateFormatter()
+    plain.formatOptions = [.withInternetDateTime]
+    return plain.date(from: raw)
+}
+
+struct SidebarCron: Decodable, Identifiable, Equatable {
+    let id: String
+    let name: String
+    let scheduleDisplay: String?
+    let nextRunAt: String?
+    let lastStatus: String?
+    let lastError: String?
+    let state: String
+    let enabled: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case scheduleDisplay = "schedule_display"
+        case nextRunAt = "next_run_at"
+        case lastStatus = "last_status"
+        case lastError = "last_error"
+        case state
+        case enabled
+    }
+}
+
+struct SidebarCronsResponse: Decodable {
+    let crons: [SidebarCron]
 }
 
 private struct SidebarSkill: Decodable, Identifiable, Equatable {
@@ -1424,7 +1736,10 @@ struct WindowControlButton: View {
 private struct SidebarFooter: View {
     @Binding var isDarkMode: Bool
     let sidecarState: SidecarManager.State
+    let managedAccount: SidecarManager.ManagedAccountSnapshot?
+    let managedSession: ManagedAppSession?
     let theme: ConductorThemePalette
+    let onSignOut: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1433,14 +1748,27 @@ private struct SidebarFooter: View {
                 .frame(height: 1)
 
             HStack(spacing: 14) {
-                // Sidecar status dot
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(sidecarStatusColor)
-                        .frame(width: 7, height: 7)
-                    Text(sidecarStatusText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.footerIcon)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(sidecarStatusColor)
+                            .frame(width: 7, height: 7)
+                        Text(sidecarStatusText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.footerIcon)
+                    }
+                    Menu {
+                        Button("Sign out", action: onSignOut)
+                    } label: {
+                        Text(managedSessionText)
+                            .font(.system(size: 10))
+                            .foregroundStyle(theme.footerIcon.opacity(0.84))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
                 }
                 .padding(.leading, 16)
 
@@ -1490,13 +1818,50 @@ private struct SidebarFooter: View {
         }
     }
 
+    private var managedSessionText: String {
+        if let managedAccount {
+            switch managedAccount.account.state {
+            case "authenticated":
+                if let email = managedAccount.account.user?.email, !email.isEmpty {
+                    return email
+                }
+                if let displayName = managedAccount.account.user?.displayName, !displayName.isEmpty {
+                    return displayName
+                }
+                if let userId = managedAccount.account.user?.id, !userId.isEmpty {
+                    return userId
+                }
+                return "Signed in"
+            case "expired":
+                return "Managed session expired"
+            case "invalid_session":
+                return "Sign-in expired"
+            case "backend_unavailable":
+                if let managedSession, !managedSession.isExpired {
+                    return managedSession.identityLabel
+                }
+                return "Managed backend unavailable"
+            case "signed_out":
+                break
+            default:
+                break
+            }
+        }
+
+        guard let managedSession else { return "Signed out" }
+        if managedSession.isExpired {
+            return "Managed session expired"
+        }
+        return managedSession.identityLabel
+    }
+
 }
 
 
 #if DEBUG
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView(sidecar: SidecarManager())
+        ContentView(sidecar: SidecarManager(), managedSessionStore: ManagedSessionStore())
             .frame(width: 1200, height: 750)
             .preferredColorScheme(.dark)
     }

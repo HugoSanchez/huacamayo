@@ -10,8 +10,8 @@
   --text: rgba(255, 255, 255, 0.88);
   --text-dim: rgba(255, 255, 255, 0.52);
   --accent: #6eb5ff;
-  --user-bubble: #44484e;
-  --user-bubble-text: rgba(255, 255, 255, 0.92);
+  --user-bubble: #25282B;
+  --user-bubble-text: rgba(255, 255, 255, 0.88);
   --assistant-bg: transparent;
   --tool-bg: rgba(255, 255, 255, 0.04);
   --tool-border: rgba(255, 255, 255, 0.08);
@@ -418,8 +418,8 @@ textarea {
     --text: rgba(0, 0, 0, 0.85);
     --text-dim: rgba(0, 0, 0, 0.52);
     --accent: #0066cc;
-    --user-bubble: #4a4e54;
-    --user-bubble-text: rgba(255, 255, 255, 0.94);
+    --user-bubble: #EBEEF2;
+    --user-bubble-text: rgba(0, 0, 0, 0.85);
     --assistant-bg: transparent;
     --tool-bg: rgba(0, 0, 0, 0.03);
     --tool-border: rgba(0, 0, 0, 0.08);
@@ -633,15 +633,27 @@ textarea {
   margin: 10px 0;
   padding: 14px;
   border-radius: 14px;
-  background: var(--card-bg);
+  /* Light mode: barely-there warm white over the chat bg. */
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid var(--card-border);
+  /* Light-mode shadow: barely-there, single soft layer. */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.035);
+}
+
+@media (prefers-color-scheme: dark) {
+  .connection-card {
+    /* Dark mode: low-opacity white wash gives the card a slight elevation
+       without competing with the input bar's darker fill. */
+    background: rgba(255, 255, 255, 0.035);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  }
 }
 
 .connection-card-head {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .connection-card-meta {
@@ -721,7 +733,7 @@ textarea {
 }
 
 .connection-pill.is-pending {
-  color: var(--accent, #0066cc);
+  color: #4caf6a;
 }
 
 .connection-pill.is-failed,
@@ -731,7 +743,7 @@ textarea {
 
 @media (prefers-color-scheme: dark) {
   .connection-pill.is-connected { color: #6fd08c; }
-  .connection-pill.is-pending { color: #e7c46a; }
+  .connection-pill.is-pending { color: #6fd08c; }
   .connection-pill.is-failed,
   .connection-pill.is-expired { color: #ff9a8b; }
   .connection-pill:hover:not(:disabled) {
@@ -1104,7 +1116,7 @@ textarea {
   appearance: none;
   background: transparent;
   border: 0;
-  padding: 4px 6px 4px 4px;
+  padding: 4px 0;
   color: var(--text-dim);
   font: inherit;
   font-size: 12px;
@@ -1113,11 +1125,13 @@ textarea {
   align-items: center;
   gap: 4px;
   cursor: pointer;
-  border-radius: 4px;
+  align-self: flex-start;
+  max-width: max-content;
+  transition: opacity 0.12s ease, color 0.12s ease;
 }
 
 .catalog-overlay-back:hover {
-  background: rgba(0, 0, 0, 0.05);
+  opacity: 0.7;
   color: var(--text);
 }
 
@@ -1209,8 +1223,7 @@ textarea {
 }
 
 .skill-page-inner {
-  width: 100%;
-  max-width: 720px;
+  width: clamp(0px, 92%, 1100px);
   padding: 36px 28px 56px;
   display: flex;
   flex-direction: column;
@@ -1414,7 +1427,6 @@ textarea {
 }
 
 @media (prefers-color-scheme: dark) {
-  .catalog-overlay-back:hover { background: rgba(255, 255, 255, 0.08); }
   .skill-row:hover { background: rgba(255, 255, 255, 0.04); }
   .skill-row-toggle { background: rgba(255, 255, 255, 0.16); }
   .skill-detail-tag,
@@ -1433,5 +1445,671 @@ textarea {
   .skill-detail-action.is-primary:hover {
     background: #000;
     border-color: #000;
+  }
+}
+
+/* Cron detail page — shares the .skill-page shell so layout, padding,
+   and header behaviour stay consistent across detail pages. */
+
+.cron-detail-name {
+  appearance: none;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  width: 100%;
+  outline: none;
+}
+
+.cron-detail-name:hover {
+  border-color: var(--border);
+}
+
+.cron-detail-name:focus {
+  border-color: var(--border);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.cron-description {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+
+.cron-description-text {
+  appearance: none;
+  font: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  text-align: left;
+  cursor: text;
+  flex: 1;
+  min-width: 0;
+}
+
+.cron-description-text:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.cron-description-action {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  margin: 0;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.cron-description-action:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.cron-description-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cron-description-input {
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  outline: none;
+  width: 100%;
+  resize: none;
+  line-height: 1.5;
+}
+
+.cron-description-input:focus {
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.cron-description.is-generating {
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.cron-description-shimmer {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  animation: cron-run-spinner-rotate 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+.cron-description-shimmer-label {
+  font-style: italic;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cron-description-action:hover { background: rgba(255, 255, 255, 0.07); }
+  .cron-description-input:focus { border-color: rgba(255, 255, 255, 0.25); }
+}
+
+.cron-state {
+  text-transform: capitalize;
+}
+
+.cron-state-paused {
+  color: #d68a00;
+}
+
+.cron-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cron-detail-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+}
+
+.cron-detail-input,
+.cron-detail-textarea {
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.1s ease;
+}
+
+.cron-detail-textarea {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 96px;
+}
+
+.cron-detail-input:focus,
+.cron-detail-textarea:focus {
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.cron-detail-input.has-error {
+  border-color: rgba(220, 60, 60, 0.55);
+}
+
+.cron-detail-field-error {
+  font-size: 11px;
+  color: #c62a2a;
+}
+
+.cron-detail-schedule-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  min-height: 1em;
+}
+
+.cron-detail-actions {
+  align-items: center;
+}
+
+.cron-detail-run-now {
+  margin-left: auto;
+}
+
+.cron-detail-secondary {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+
+.cron-detail-secondary:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.cron-detail-secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cron-detail-secondary:hover { background: rgba(255, 255, 255, 0.06); }
+}
+
+.cron-detail-delete {
+  appearance: none;
+  margin-left: auto;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+
+.cron-detail-delete:hover {
+  color: #c62a2a;
+  border-color: rgba(198, 42, 42, 0.4);
+}
+
+.cron-detail-delete.is-confirming {
+  color: #fff;
+  background: #c62a2a;
+  border-color: #c62a2a;
+}
+
+.cron-detail-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 6px 0;
+}
+
+.cron-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--border);
+}
+
+.cron-run-row {
+  border-bottom: 1px solid var(--border);
+}
+
+.cron-run-row-header {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 8px 4px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.cron-run-row-header:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.cron-run-row-chevron {
+  font-size: 10px;
+  color: var(--text-dim);
+  width: 10px;
+  text-align: center;
+}
+
+.cron-run-row-ts {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cron-run-row-size {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cron-run-row-body {
+  padding: 4px 18px 12px;
+}
+
+.cron-run-row.is-pending .cron-run-row-header {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.cron-run-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cron-run-status-dot.is-ok { background: #2bb673; }
+.cron-run-status-dot.is-error { background: #d14747; }
+.cron-run-status-dot.is-neutral { background: var(--text-dim); opacity: 0.5; }
+
+.cron-run-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-dim);
+  border-top-color: transparent;
+  animation: cron-run-spinner-rotate 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes cron-run-spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+
+.cron-run-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.cron-run-transcript-tool {
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+
+.cron-run-transcript-tool-row {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.cron-run-transcript-tool-chevron {
+  font-size: 9px;
+  color: var(--text-dim);
+  width: 10px;
+  text-align: center;
+}
+
+.cron-run-transcript-tool-name {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
+}
+
+.cron-run-transcript-tool-preview {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.cron-run-transcript-tool-detail {
+  margin: 4px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cron-run-transcript-payload {
+  position: relative;
+  margin: 0;
+  padding: 24px 10px 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.cron-run-transcript-payload-label {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.cron-run-transcript-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  padding: 6px 0;
+}
+
+.cron-run-raw {
+  margin-top: 10px;
+}
+
+.cron-run-raw > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cron-run-transcript-payload { background: rgba(255, 255, 255, 0.04); }
+  .cron-run-status-dot.is-neutral { opacity: 0.4; }
+}
+
+.cron-run-content {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+  .cron-detail-name:focus { background: rgba(255, 255, 255, 0.06); }
+  .cron-detail-input.has-error,
+  .cron-detail-field-error { color: #f97a7a; }
+  .cron-detail-input.has-error { border-color: rgba(249, 122, 122, 0.55); }
+  .cron-run-row-header:hover { background: rgba(255, 255, 255, 0.05); }
+  .cron-detail-delete:hover { color: #f97a7a; border-color: rgba(249, 122, 122, 0.45); }
+  .cron-detail-delete.is-confirming { background: #c62a2a; border-color: #c62a2a; color: #fff; }
+  .cron-state-paused { color: #f0a93a; }
+}
+
+/* App-wide toast system (Toaster.tsx) */
+.toaster {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+  max-width: 380px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toast-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.toast-description {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.toast-action {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #111;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toast-action:hover {
+  background: #fff;
+  border-color: #fff;
+}
+
+.toast-close {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast-close:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.toast-success::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2bb673;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.toast-error::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d14747;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (prefers-color-scheme: light) {
+  .toast-action {
+    background: #111;
+    color: #fff;
+    border-color: #111;
+  }
+  .toast-action:hover { background: #000; border-color: #000; }
+  .toast-close:hover { background: rgba(0, 0, 0, 0.06); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .toast-close:hover { background: rgba(255, 255, 255, 0.07); }
+}
+
+/* Inline confirmation card rendered in the chat when the agent's
+   `cronjob` tool returns success. Click "View" → cron detail page. */
+.cron-tool-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.cron-tool-card-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.cron-tool-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cron-tool-card-title {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.cron-tool-card-title strong {
+  font-weight: 600;
+}
+
+.cron-tool-card-subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.cron-tool-card-view {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+
+.cron-tool-card-view:hover {
+  background: rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  .cron-tool-card-icon { background: rgba(255, 255, 255, 0.07); }
+  .cron-tool-card-view {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+  .cron-tool-card-view:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.18);
   }
 }

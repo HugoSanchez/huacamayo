@@ -6,9 +6,11 @@ const host = process.env.API_SERVER_HOST || process.env.HOST || '127.0.0.1';
 let responseCounter = 0;
 let sessionCounter = 0;
 let messageCounter = 0;
+let jobCounter = 0;
 const responses = new Map();
 const conversations = new Map();
 const sessions = new Map();
+const jobs = new Map();
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${host}:${port}`);
@@ -128,9 +130,146 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/jobs' || url.pathname.startsWith('/api/jobs/')) {
+    handleJobsRequest(req, res, url);
+    return;
+  }
+
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'not_found' }));
 });
+
+function handleJobsRequest(req, res, url) {
+  // Optional Bearer-token check — only enforced when API_SERVER_KEY is set
+  // in the fixture's env, so existing tests without auth still pass.
+  const expectedKey = process.env.API_SERVER_KEY?.trim();
+  if (expectedKey) {
+    const auth = req.headers['authorization'] || '';
+    if (auth !== `Bearer ${expectedKey}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+  }
+
+  const listMatch = url.pathname === '/api/jobs';
+  const itemMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
+  const actionMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/(pause|resume|run)$/);
+
+  if (req.method === 'GET' && listMatch) {
+    const list = [...jobs.values()];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ jobs: list }));
+    return;
+  }
+
+  if (req.method === 'POST' && listMatch) {
+    readJsonBody(req, (parsed) => {
+      const id = `job-${++jobCounter}`;
+      const job = {
+        id,
+        name: typeof parsed.name === 'string' ? parsed.name : id,
+        prompt: typeof parsed.prompt === 'string' ? parsed.prompt : '',
+        skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+        schedule: { kind: 'interval', minutes: 60, display: parsed.schedule || 'every 60m' },
+        schedule_display: parsed.schedule || 'every 60m',
+        repeat: { times: null, completed: 0 },
+        enabled: true,
+        state: 'scheduled',
+        paused_at: null,
+        paused_reason: null,
+        created_at: new Date().toISOString(),
+        next_run_at: new Date(Date.now() + 60_000).toISOString(),
+        last_run_at: null,
+        last_status: null,
+        last_error: null,
+        last_delivery_error: null,
+        deliver: parsed.deliver || 'local',
+        origin: null,
+        enabled_toolsets: null,
+      };
+      jobs.set(id, job);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ job }));
+    });
+    return;
+  }
+
+  if (itemMatch) {
+    const id = decodeURIComponent(itemMatch[1]);
+    const existing = jobs.get(id);
+    if (!existing) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ job: existing }));
+      return;
+    }
+    if (req.method === 'PATCH') {
+      readJsonBody(req, (parsed) => {
+        const updated = { ...existing };
+        if (typeof parsed.name === 'string') updated.name = parsed.name;
+        if (typeof parsed.prompt === 'string') updated.prompt = parsed.prompt;
+        if (typeof parsed.deliver === 'string') updated.deliver = parsed.deliver;
+        if (Array.isArray(parsed.skills)) updated.skills = parsed.skills;
+        if (typeof parsed.schedule === 'string') {
+          updated.schedule = { kind: 'interval', minutes: 60, display: parsed.schedule };
+          updated.schedule_display = parsed.schedule;
+        }
+        jobs.set(id, updated);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ job: updated }));
+      });
+      return;
+    }
+    if (req.method === 'DELETE') {
+      jobs.delete(id);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+  }
+
+  if (req.method === 'POST' && actionMatch) {
+    const id = decodeURIComponent(actionMatch[1]);
+    const op = actionMatch[2];
+    const existing = jobs.get(id);
+    if (!existing) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+      return;
+    }
+    const updated = { ...existing };
+    if (op === 'pause') {
+      updated.state = 'paused';
+      updated.paused_at = new Date().toISOString();
+    } else if (op === 'resume') {
+      updated.state = 'scheduled';
+      updated.paused_at = null;
+    } else if (op === 'run') {
+      updated.next_run_at = new Date().toISOString();
+    }
+    jobs.set(id, updated);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ job: updated }));
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'not_found' }));
+}
+
+function readJsonBody(req, cb) {
+  let body = '';
+  req.on('data', (chunk) => { body += chunk.toString(); });
+  req.on('end', () => {
+    try { cb(JSON.parse(body || '{}')); }
+    catch { cb({}); }
+  });
+}
 
 server.listen(port, host, () => {
   console.log(JSON.stringify({ status: 'ready', port, host }));
