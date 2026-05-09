@@ -14,7 +14,7 @@ import {
   extractSlashSkillRequest,
   findSkillBySlug,
 } from './skills.ts';
-import { ConnectionsService, type ConnectionRequestView } from '../integrations/composio.ts';
+import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts';
 
 type ChatStatus = 'idle' | 'running' | 'error';
 
@@ -47,7 +47,6 @@ let lastError: string | null = null;
 export function buildChatRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
-  connections: ConnectionsService,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
@@ -157,11 +156,22 @@ export function buildChatRoutes(
 
       store.appendMessage(params.id, 'user', content);
 
-      const slashRequest = extractSlashSkillRequest(content);
-      const skill = slashRequest ? findSkillBySlug(slashRequest.slug) : null;
-      const promptForHermes = skill && slashRequest
-        ? buildSkillInvocationPrompt(skill, slashRequest.remainder, params.id)
-        : content;
+      const attached = parseAttached(body);
+      let promptForHermes = content;
+      if (attached?.kind === 'cron') {
+        // Fetch the cron's current state and prepend it as a system block so
+        // the agent can reason about — and edit — the job via its `cronjob`
+        // tool. If the fetch fails, fall through to the raw user text.
+        const cronContext = await buildCronContextPrompt(hermes, attached.id, content)
+          .catch(() => null);
+        if (cronContext) promptForHermes = cronContext;
+      } else {
+        const slashRequest = extractSlashSkillRequest(content);
+        const skill = slashRequest ? findSkillBySlug(slashRequest.slug) : null;
+        if (skill && slashRequest) {
+          promptForHermes = buildSkillInvocationPrompt(skill, slashRequest.remainder, params.id);
+        }
+      }
 
       const session = await hydrateSessionSummary(record, store, hermes);
 
@@ -182,7 +192,7 @@ export function buildChatRoutes(
           isFirstUserMessage,
           res,
           requestBaseUrl: requestBaseUrl(req),
-        }, store, hermes, connections);
+        }, store, hermes);
       } catch (error: unknown) {
         if (isAbortError(error)) {
           sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
@@ -240,6 +250,69 @@ export function buildChatDiagnostics(store: ChatStore): {
     sessionCount: store.listSessions().length,
     storePath: store.path,
   };
+}
+
+type AttachedContext = { kind: 'cron'; id: string };
+
+function parseAttached(body: unknown): AttachedContext | null {
+  if (!body || typeof body !== 'object') return null;
+  const raw = (body as Record<string, unknown>).attached;
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  if (obj.kind === 'cron' && typeof obj.id === 'string' && obj.id.length > 0) {
+    return { kind: 'cron', id: obj.id };
+  }
+  return null;
+}
+
+// Mirrors the spirit of buildSkillInvocationPrompt: prepend a system block
+// describing the cron's current state so Hermes' agent can reason about it
+// and (via its cronjob tool) make changes the user requests in plain text.
+async function buildCronContextPrompt(
+  hermes: HermesSupervisor,
+  cronId: string,
+  userText: string,
+): Promise<string | null> {
+  const config = await hermes.ensureReady();
+  const client = new HermesCronsClient(config.baseUrl);
+  const cron = await client.get(cronId);
+  if (!cron) return null;
+
+  const lines = formatCronContextLines(cron);
+  const trimmed = userText.trim();
+  const sections = [
+    `[SYSTEM: The user has attached the cron job "${cron.name}" (id: ${cron.id}) for review or editing. Its current state is below — to make changes, call the \`cronjob\` tool with action="update" (or "pause"/"resume"/"remove") and job_id="${cron.id}".]`,
+    '',
+    ...lines,
+  ];
+  if (trimmed.length > 0) {
+    sections.push('', `User instruction: ${trimmed}`);
+  } else {
+    sections.push('', 'No additional instruction was provided. Acknowledge the cron and wait for the user.');
+  }
+  return sections.join('\n');
+}
+
+function formatCronContextLines(cron: HermesCronJob): string[] {
+  const lines: string[] = [
+    `- Name: ${cron.name}`,
+    `- Schedule: ${cron.schedule_display ?? JSON.stringify(cron.schedule)}`,
+    `- State: ${cron.state}${cron.enabled ? '' : ' (disabled)'}`,
+  ];
+  if (cron.next_run_at) lines.push(`- Next run: ${cron.next_run_at}`);
+  if (cron.last_run_at) {
+    const status = cron.last_status ? ` (${cron.last_status})` : '';
+    lines.push(`- Last run: ${cron.last_run_at}${status}`);
+  }
+  if (cron.last_error) lines.push(`- Last error: ${cron.last_error}`);
+  if (Array.isArray(cron.skills) && cron.skills.length > 0) {
+    lines.push(`- Skills loaded on each run: ${cron.skills.join(', ')}`);
+  }
+  if (cron.deliver) lines.push(`- Deliver: ${cron.deliver}`);
+  lines.push('');
+  lines.push('Prompt:');
+  lines.push(cron.prompt);
+  return lines;
 }
 
 async function hydrateSessionSummaries(store: ChatStore, hermes: HermesSupervisor): Promise<ChatSessionSummary[]> {
@@ -377,7 +450,6 @@ async function runHermesMessage(
   },
   store: ChatStore,
   hermes: HermesSupervisor,
-  connections: ConnectionsService,
 ): Promise<void> {
   const controller = new AbortController();
   const runtime = await hermes.getStatus(500);
@@ -405,7 +477,6 @@ async function runHermesMessage(
   let streamedText = '';
   let finalText = '';
   let linkedHermesSessionId = opts.sessionRecord.hermesSessionId;
-  let sawConnectionToolCall = false;
 
   const handleEvent = (eventName: string, data: HermesEventPayload) => {
     if (eventName === 'response.created') {
@@ -442,9 +513,6 @@ async function runHermesMessage(
 
       if (item.type === 'function_call') {
         const toolName = typeof item.name === 'string' ? item.name : 'tool';
-        if (toolName === 'mcp_vervo_request_connection' || toolName === 'vervo_request_connection') {
-          sawConnectionToolCall = true;
-        }
         sendSSE(opts.res, {
           type: 'assistant',
           session_id: opts.session.id,
@@ -541,17 +609,6 @@ async function runHermesMessage(
   }
 
   store.touchSession(opts.session.id);
-
-  const fallbackToolkit = detectConnectionToolkit(opts.userPrompt);
-  if (fallbackToolkit && !sawConnectionToolCall) {
-    await emitConnectionFallback({
-      sessionId: opts.session.id,
-      toolkit: fallbackToolkit,
-      requestBaseUrl: opts.requestBaseUrl,
-      res: opts.res,
-      connections,
-    });
-  }
 
   if (opts.isFirstUserMessage && assistantText) {
     const currentTitle = store.getSessionRecord(opts.session.id)?.title ?? '';
@@ -817,73 +874,9 @@ function shouldRetryWithoutCursor(error: unknown): boolean {
   return /previous response not found/i.test(error.body);
 }
 
-function detectConnectionToolkit(content: string): string | null {
-  const normalized = content.toLowerCase();
-  const asksToConnect = /\b(connect|connection|link|authorize|authorise|access|sync)\b/.test(normalized);
-  const asksToDisconnect = /\b(disconnect|remove|unlink)\b/.test(normalized);
-
-  if (!asksToConnect || asksToDisconnect) {
-    return null;
-  }
-
-  const match = content.match(
-    /\b(?:connect|link|authorize|authorise|sync|give)\b(?:\s+\w+){0,4}?\s+(?:to\s+)?(?:my\s+)?([a-z0-9][a-z0-9 _-]{1,40}?)(?=(?:\s+(?:and|so|then|for|with)\b|[?.!,]|$))/i,
-  );
-  const candidate = match?.[1]?.trim();
-  return candidate && candidate.length > 1 ? candidate : null;
-}
-
 function requestBaseUrl(req: IncomingMessage): string {
   const host = req.headers.host || '127.0.0.1';
   return `http://${host}`;
-}
-
-async function emitConnectionFallback(opts: {
-  sessionId: string;
-  toolkit: string;
-  requestBaseUrl: string;
-  res: ServerResponse;
-  connections: ConnectionsService;
-}): Promise<void> {
-  const toolUseId = randomUUID();
-  let request: ConnectionRequestView;
-
-  try {
-    request = await opts.connections.requestConnection(opts.toolkit, opts.requestBaseUrl);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    request = opts.connections.createUnavailableRequest(opts.toolkit, message);
-  }
-
-  sendSSE(opts.res, {
-    type: 'assistant',
-    session_id: opts.sessionId,
-    message: {
-      role: 'assistant',
-      content: [{
-        type: 'tool_use',
-        id: toolUseId,
-        name: 'vervo_request_connection',
-        input: { toolkit: opts.toolkit, fallback: true },
-      }],
-    },
-  });
-
-  sendSSE(opts.res, {
-    type: 'user',
-    session_id: opts.sessionId,
-    message: {
-      role: 'user',
-      content: [{
-        type: 'tool_result',
-        tool_use_id: toolUseId,
-        content: {
-          kind: 'connection_request',
-          request: sanitizeConnectionRequestForAssistant(request),
-        },
-      }],
-    },
-  });
 }
 
 function sendSSE(res: ServerResponse, data: unknown): void {
@@ -933,13 +926,6 @@ function preview(content: string): string {
   const compact = content.replace(/\s+/g, ' ').trim();
   if (compact.length <= 120) return compact;
   return `${compact.slice(0, 120)}...`;
-}
-
-function sanitizeConnectionRequestForAssistant(request: ConnectionRequestView): ConnectionRequestView {
-  return {
-    ...request,
-    redirectUrl: null,
-  };
 }
 
 function timestampToIso(value: unknown): string | null {

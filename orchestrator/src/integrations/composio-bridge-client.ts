@@ -275,6 +275,10 @@ export class RemoteComposioBridgeClient {
       env: {
         ...process.env,
         PORT: url.port || '8787',
+        // Override whatever VERVO_PARENT_PID was inherited from our env
+        // (which points to the Vervo app) so the bridge watches *our* pid —
+        // if the orchestrator dies, the bridge should die with it.
+        VERVO_PARENT_PID: String(process.pid),
       },
       stdio: 'ignore',
     });

@@ -162,6 +162,13 @@ export class HermesSupervisor {
     this.state = launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
 
+  // The on-disk Hermes home for the gateway we manage (or the template path
+  // when the user pointed us at their own gateway). Cron output files and
+  // session JSON live under this directory, so the /crons routes need it.
+  get hermesHome(): string {
+    return this.manualMode ? this.templateHermesHome : this.managedHermesHome;
+  }
+
   prepare(): void {
     if (!this.launch.command) return;
     void this.ensureReady().catch((error: unknown) => {

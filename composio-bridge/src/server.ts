@@ -247,15 +247,40 @@ const isMain = process.argv[1] && (
 );
 
 if (isMain) {
+  // Match the orchestrator: swallow EPIPE so a closed parent pipe can't pin
+  // a CPU on stdio retries.
+  process.stdout.on('error', () => {});
+  process.stderr.on('error', () => {});
+
   startServer().then(({ close, port }) => {
     console.log(JSON.stringify({ port, status: 'ready', pid: process.pid }));
 
-    const shutdown = () => {
+    const shutdown = (reason: string) => {
+      console.error(`[composio-bridge] ${reason}, shutting down`);
       void close().finally(() => process.exit(0));
     };
 
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', () => shutdown('received SIGINT'));
+    process.on('SIGTERM', () => shutdown('received SIGTERM'));
+    process.on('SIGHUP', () => shutdown('received SIGHUP'));
+
+    // Match the orchestrator's parent-death watcher so this process can never
+    // outlive the orchestrator and re-parent to launchd as an orphan.
+    const raw = process.env.VERVO_PARENT_PID;
+    const parentPid = raw ? Number.parseInt(raw, 10) : NaN;
+    if (Number.isFinite(parentPid) && parentPid > 1) {
+      const interval = setInterval(() => {
+        try {
+          process.kill(parentPid, 0);
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException)?.code === 'ESRCH') {
+            clearInterval(interval);
+            shutdown(`parent pid=${parentPid} no longer exists`);
+          }
+        }
+      }, 2_000);
+      interval.unref();
+    }
   }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({

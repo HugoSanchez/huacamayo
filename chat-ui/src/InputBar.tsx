@@ -1,9 +1,13 @@
 import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect } from 'react';
 import { getSkills } from './chat';
-import type { SkillSummaryView } from './types';
+import type { AttachedContext, SkillSummaryView } from './types';
 
 interface Props {
-  onSend: (text: string) => void;
+  text: string;
+  attached: AttachedContext | null;
+  onTextChange: (text: string) => void;
+  onAttachedChange: (attached: AttachedContext | null) => void;
+  onSend: (text: string, attached: AttachedContext | null) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled: boolean;
@@ -12,9 +16,17 @@ interface Props {
 const SLASH_PATTERN = /^\/([a-z0-9-]*)/i;
 const MAX_SUGGESTIONS = 8;
 
-export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
-  const [text, setText] = useState('');
-  const [attachedSlug, setAttachedSlug] = useState<string | null>(null);
+export function InputBar({
+  text,
+  attached,
+  onTextChange,
+  onAttachedChange,
+  onSend,
+  onStop,
+  isStreaming,
+  disabled,
+}: Props) {
+  const isAttached = attached !== null;
   const [skills, setSkills] = useState<SkillSummaryView[]>([]);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [chipWidth, setChipWidth] = useState(0);
@@ -49,11 +61,11 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
   // with a slash — once a skill is attached the leading slash lives in
   // chip state, not text.
   const slashMatch = useMemo(() => {
-    if (attachedSlug) return null;
+    if (isAttached) return null;
     const match = text.match(SLASH_PATTERN);
     if (!match) return null;
     return { full: match[0], query: match[1].toLowerCase() };
-  }, [text, attachedSlug]);
+  }, [text, isAttached]);
 
   const suggestions = useMemo(() => {
     if (!slashMatch) return [];
@@ -83,7 +95,7 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
   // line 1, and wrapped lines start flush left, matching how the post-
   // send chip renders in the chat bubble.
   useLayoutEffect(() => {
-    if (!attachedSlug) {
+    if (!isAttached) {
       if (chipWidth !== 0) setChipWidth(0);
       return;
     }
@@ -91,31 +103,29 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
     if (!el) return;
     const w = el.getBoundingClientRect().width;
     setChipWidth(w + 6);
-  }, [attachedSlug, chipWidth]);
+  }, [isAttached, chipWidth]);
 
   const attachSkill = useCallback((slug: string) => {
-    setAttachedSlug(slug);
-    setText((prev) => {
-      const match = prev.match(SLASH_PATTERN);
-      return match ? prev.slice(match[0].length).trimStart() : prev;
-    });
+    onAttachedChange({ kind: 'skill', slug });
+    const match = text.match(SLASH_PATTERN);
+    onTextChange(match ? text.slice(match[0].length).trimStart() : text);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     });
-  }, []);
+  }, [onAttachedChange, onTextChange, text]);
 
-  const detachSkill = useCallback(() => {
-    setAttachedSlug(null);
+  const detachContext = useCallback(() => {
+    onAttachedChange(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
       el.focus();
       el.setSelectionRange(0, 0);
     });
-  }, []);
+  }, [onAttachedChange]);
 
   // Auto-promote `/slug` to a chip as soon as the typed slug uniquely
   // identifies a real skill — no need to pick from the popover or hit
@@ -127,7 +137,7 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
   // "apple-reminders" exist; typing "/apple-notes" does). Backspace at
   // the start of an empty body still pops the chip off.
   useEffect(() => {
-    if (attachedSlug || skills.length === 0) return;
+    if (isAttached || skills.length === 0) return;
     const match = text.match(/^\/([a-z0-9-]+)(\s|$)/i);
     if (!match) return;
     const slug = match[1].toLowerCase();
@@ -138,7 +148,7 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
     );
     if (hasLongerSibling) return;
     attachSkill(slug);
-  }, [text, attachedSlug, skills, attachSkill]);
+  }, [text, isAttached, skills, attachSkill]);
 
   const handleSubmit = useCallback(() => {
     if (isStreaming) {
@@ -147,17 +157,17 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
     }
     if (disabled) return;
     const trimmedBody = text.trim();
-    const payload = attachedSlug
-      ? trimmedBody.length > 0
-        ? `/${attachedSlug} ${trimmedBody}`
-        : `/${attachedSlug}`
-      : trimmedBody;
-    if (!payload) return;
-    onSend(payload);
-    setText('');
-    setAttachedSlug(null);
+    let payload = trimmedBody;
+    if (attached?.kind === 'skill') {
+      // Skills travel via slash text — orchestrator parses it back out.
+      payload = trimmedBody.length > 0 ? `/${attached.slug} ${trimmedBody}` : `/${attached.slug}`;
+    }
+    if (!payload && attached?.kind !== 'cron') return;
+    onSend(payload, attached);
+    onTextChange('');
+    onAttachedChange(null);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [text, attachedSlug, isStreaming, disabled, onSend, onStop]);
+  }, [text, attached, isStreaming, disabled, onSend, onStop, onTextChange, onAttachedChange]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (showSuggestions) {
@@ -178,7 +188,7 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        setText('');
+        onTextChange('');
         return;
       }
     }
@@ -186,13 +196,13 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
     // pops the chip off — same intuition as how chips work in mail/Slack.
     if (
       e.key === 'Backspace'
-      && attachedSlug
+      && isAttached
       && textareaRef.current
       && textareaRef.current.selectionStart === 0
       && textareaRef.current.selectionEnd === 0
     ) {
       e.preventDefault();
-      detachSkill();
+      detachContext();
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -202,18 +212,20 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
+    onTextChange(e.target.value);
     const el = e.target;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 160) + 'px';
   };
 
-  const canSend = isStreaming || text.trim().length > 0 || attachedSlug !== null;
+  const canSend = isStreaming || text.trim().length > 0 || isAttached;
   const placeholder = disabled
     ? 'Connecting... you can type while things load.'
-    : attachedSlug
-      ? `Message with /${attachedSlug}…`
-      : 'Write a message...';
+    : attached?.kind === 'skill'
+      ? `Message with /${attached.slug}…`
+      : attached?.kind === 'cron'
+        ? `Edit routine "${attached.name}" — describe the change`
+        : 'Write a message...';
 
   return (
     <div style={{ padding: '10px 12px', background: 'var(--bg)' }}>
@@ -235,31 +247,42 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
             onHover={setHighlightIndex}
           />
         )}
-        {attachedSlug && (
+        {attached && (
           <span
             ref={chipRef}
-            className="input-skill-chip"
+            className={`input-skill-chip${attached.kind === 'cron' ? ' is-cron' : ''}`}
             style={{
               position: 'absolute',
               top: '12px',
               left: '16px',
               pointerEvents: 'auto',
             }}
-            aria-label={`Skill attached: /${attachedSlug}`}
+            aria-label={attached.kind === 'skill'
+              ? `Skill attached: /${attached.slug}`
+              : `Routine attached: ${attached.name}`}
           >
-            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-              <path d="M5 1 L6 4 L9 5 L6 6 L5 9 L4 6 L1 5 L4 4 Z" fill="currentColor" />
-            </svg>
-            <span className="input-skill-chip-slug">/{attachedSlug}</span>
+            {attached.kind === 'skill' ? (
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path d="M5 1 L6 4 L9 5 L6 6 L5 9 L4 6 L1 5 L4 4 Z" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="5.5" cy="5.5" r="4.4" />
+                <polyline points="5.5,3 5.5,5.5 7.5,6.6" />
+              </svg>
+            )}
+            <span className="input-skill-chip-slug">
+              {attached.kind === 'skill' ? `/${attached.slug}` : attached.name}
+            </span>
             <button
               type="button"
               className="input-skill-chip-remove"
               onMouseDown={(event) => {
                 event.preventDefault();
-                detachSkill();
+                detachContext();
               }}
-              aria-label="Remove attached skill"
-              title="Remove attached skill"
+              aria-label={attached.kind === 'skill' ? 'Remove attached skill' : 'Remove attached routine'}
+              title={attached.kind === 'skill' ? 'Remove attached skill' : 'Remove attached routine'}
             >
               <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                 <line x1="1.5" y1="1.5" x2="6.5" y2="6.5" />
@@ -287,7 +310,7 @@ export function InputBar({ onSend, onStop, isStreaming, disabled }: Props) {
             fontFamily: 'inherit',
             maxHeight: '160px',
             minHeight: '48px',
-            textIndent: attachedSlug ? `${chipWidth}px` : 0,
+            textIndent: isAttached ? `${chipWidth}px` : 0,
           }}
         />
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: '4px' }}>

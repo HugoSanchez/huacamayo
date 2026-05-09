@@ -71,6 +71,69 @@ export interface SkillDetailView extends SkillSummaryView {
   content: string;
 }
 
+export interface CronJobView {
+  id: string;
+  name: string;
+  prompt: string;
+  skills: string[];
+  schedule: { kind?: string; display?: string; expr?: string; minutes?: number; run_at?: string } | null;
+  schedule_display: string | null;
+  enabled: boolean;
+  state: string;
+  paused_at: string | null;
+  paused_reason: string | null;
+  created_at: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  deliver: string | null;
+  origin: Record<string, unknown> | null;
+}
+
+export interface CronRunSummaryView {
+  filename: string;
+  ts: string;
+  size: number;
+  modified: string;
+}
+
+export interface CronDescriptionView {
+  text: string;
+  source: 'auto' | 'user';
+  generatedAt: number;
+}
+
+export interface CronDetailView {
+  cron: CronJobView;
+  runs: CronRunSummaryView[];
+  description: CronDescriptionView | null;
+}
+
+export interface CronRunTranscriptMessage {
+  role: string;
+  content: unknown;
+  reasoning?: string | null;
+  tool_calls?: Array<{
+    id?: string;
+    function?: { name?: string; arguments?: string };
+  }>;
+  tool_call_id?: string;
+  timestamp?: number | string | null;
+}
+
+export interface CronRunTranscriptView {
+  sessionId: string;
+  messages: CronRunTranscriptMessage[];
+}
+
+// Generalized "context attachment" for the chat input. Today the input bar
+// supports two flavours: a skill (auto-promoted from `/skill-name` text) and
+// a cron job (attached via the "Edit in chat" button on its detail page).
+export type AttachedContext =
+  | { kind: 'skill'; slug: string }
+  | { kind: 'cron'; id: string; name: string };
+
 export type ActivityStep =
   | { type: 'text'; text: string }
   | {
