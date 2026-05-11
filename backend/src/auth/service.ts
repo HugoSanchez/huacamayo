@@ -128,6 +128,26 @@ export class AuthService {
     };
   }
 
+  /**
+   * Revoke the session this bearer token represents. Idempotent: revoking an
+   * already-revoked session is a no-op (still returns success), so a client
+   * that retries on transient errors doesn't blow up. Expired tokens return
+   * 401 since there is nothing meaningful left to revoke.
+   */
+  async revokeAppSession(sessionToken: string): Promise<void> {
+    const normalized = sessionToken.trim();
+    if (!normalized) {
+      throw new AuthServiceError(401, 'missing_session', 'Missing app session token.');
+    }
+    const tokenHash = hashSessionToken(normalized);
+    const session = await this.store.getAuthSessionByTokenHash(tokenHash);
+    if (!session) {
+      throw new AuthServiceError(401, 'invalid_session', 'Invalid app session token.');
+    }
+    if (session.revokedAt) return; // already revoked — idempotent success
+    await this.store.revokeAuthSession(session.id, new Date().toISOString());
+  }
+
   async authenticateAppSession(sessionToken: string): Promise<AuthenticatedContext> {
     const normalized = sessionToken.trim();
     if (!normalized) {

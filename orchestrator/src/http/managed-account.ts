@@ -4,6 +4,7 @@ import {
   ManagedBackendError,
   type ManagedRuntimeConfig,
   type ManagedSessionRecord,
+  type ManagedUsageSummary,
 } from '../integrations/managed-backend-client.ts';
 import type { RuntimeMode } from '../integrations/runtime-mode.ts';
 
@@ -22,6 +23,20 @@ export function buildManagedAccountRoutes(
     route('GET', '/managed/account', async (_req, res) => {
       const account = await managedBackend.getAccount();
       json(res, 200, account);
+    }),
+
+    route('GET', '/managed/usage', async (_req, res) => {
+      try {
+        const summary: ManagedUsageSummary = await managedBackend.getUsageSummary();
+        json(res, 200, summary);
+      } catch (error) {
+        if (error instanceof ManagedBackendError) {
+          json(res, error.status, { error: error.code, message: error.message });
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        json(res, 500, { error: 'internal_error', message });
+      }
     }),
 
     route('GET', '/managed/runtime', async (_req, res) => {
@@ -63,6 +78,15 @@ export function buildManagedAccountRoutes(
     }),
 
     route('DELETE', '/managed/session', async (_req, res) => {
+      // Best-effort server-side revoke before we drop the in-memory token.
+      // If the backend is unreachable or rejects, we still clear locally so
+      // the user is effectively signed out from the app's perspective.
+      try {
+        await managedBackend.revokeSession();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[managed] revoke failed during sign-out (clearing local anyway):', message);
+      }
       managedBackend.setSession(null);
       json(res, 200, { ok: true });
     }),

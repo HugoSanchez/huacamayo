@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, sql } from 'drizzle-orm';
 import { getDb } from './client.ts';
 import { inferenceRequests } from './schema.ts';
 import type {
@@ -6,6 +6,7 @@ import type {
   InferenceRequestUsage,
   InferenceStatus,
   InferenceStore,
+  InferenceUsageTotals,
 } from '../inference/types.ts';
 
 type Db = ReturnType<typeof getDb>;
@@ -70,6 +71,40 @@ export class DrizzleInferenceStore implements InferenceStore {
     const rows = await this.db.select().from(inferenceRequests).where(eq(inferenceRequests.userId, userId));
     return rows.map(mapRow);
   }
+
+  async getUserUsageTotals(userId: string, now: Date): Promise<InferenceUsageTotals> {
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+    const monthRows = await this.db
+      .select({ total: sql<string | null>`coalesce(sum(${inferenceRequests.estimatedCostUsd}::numeric), 0)::text` })
+      .from(inferenceRequests)
+      .where(and(
+        eq(inferenceRequests.userId, userId),
+        isNotNull(inferenceRequests.estimatedCostUsd),
+        gte(inferenceRequests.requestStartedAt, startOfMonth),
+      ));
+
+    const dayRows = await this.db
+      .select({ total: sql<string | null>`coalesce(sum(${inferenceRequests.estimatedCostUsd}::numeric), 0)::text` })
+      .from(inferenceRequests)
+      .where(and(
+        eq(inferenceRequests.userId, userId),
+        isNotNull(inferenceRequests.estimatedCostUsd),
+        gte(inferenceRequests.requestStartedAt, startOfDay),
+      ));
+
+    return {
+      monthToDateUsd: parseSumNumber(monthRows[0]?.total),
+      dayToDateUsd: parseSumNumber(dayRows[0]?.total),
+    };
+  }
+}
+
+function parseSumNumber(value: string | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function mapRow(row: Row): InferenceRequestRecord {

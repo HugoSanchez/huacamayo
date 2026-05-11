@@ -72,6 +72,25 @@ export interface ManagedRuntimeConfig {
   allowedModels: string[];
 }
 
+export interface ManagedUsageSummary {
+  user: {
+    id: string;
+    email: string | null;
+    displayName: string | null;
+  };
+  mode: string;
+  usage: {
+    monthToDateUsd: number;
+    dayToDateUsd: number;
+    monthStart: string;
+    dayStart: string;
+  };
+  limits: {
+    monthlyUsdLimit: number | null;
+    dailyUsdLimit: number | null;
+  };
+}
+
 export interface InferenceRequestPayload {
   model: string;
   messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; name?: string }>;
@@ -223,6 +242,81 @@ export class ManagedBackendClient {
       view.account.error = error instanceof Error ? error.message : String(error);
       return view;
     }
+  }
+
+  /**
+   * Server-side sign-out: marks the current session token revoked on the
+   * backend so it can never be reused, even before its natural expiry. Safe
+   * to call when no session is loaded (no-op). Best-effort: callers should
+   * still clear their local session even if this throws.
+   */
+  async revokeSession(): Promise<void> {
+    if (!this.configured) return;
+    const stored = this.currentSession;
+    if (!stored) return;
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/auth/revoke`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${stored.token}` },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ManagedBackendError(502, 'backend_unreachable', message);
+    }
+
+    // 204 (revoked), 401 invalid_session (already gone, treat as success).
+    if (response.status === 204 || response.status === 401) return;
+
+    const body = await readErrorBody(response);
+    throw new ManagedBackendError(
+      response.status,
+      body.error ?? 'backend_error',
+      body.message ?? `Backend returned HTTP ${response.status}.`,
+    );
+  }
+
+  /**
+   * Auth'd GET /v1/usage/summary on the backend. Surfaces the current user's
+   * month-to-date / day-to-date spend, the active mode, and any monthly /
+   * daily caps from their entitlement.
+   */
+  async getUsageSummary(): Promise<ManagedUsageSummary> {
+    if (!this.configured) {
+      throw new ManagedBackendError(503, 'backend_unconfigured', 'Managed backend URL is not configured.');
+    }
+    const stored = this.currentSession;
+    if (!stored) {
+      throw new ManagedBackendError(401, 'missing_session', 'No managed session is loaded.');
+    }
+    if (isIsoExpired(stored.expiresAt)) {
+      throw new ManagedBackendError(401, 'expired_session', 'Managed session has expired locally.');
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/usage/summary`, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${stored.token}`,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ManagedBackendError(502, 'backend_unreachable', message);
+    }
+
+    if (!response.ok) {
+      const body = await readErrorBody(response);
+      throw new ManagedBackendError(
+        response.status,
+        body.error ?? 'backend_error',
+        body.message ?? `Backend returned HTTP ${response.status}.`,
+      );
+    }
+
+    return await response.json() as ManagedUsageSummary;
   }
 
   /**

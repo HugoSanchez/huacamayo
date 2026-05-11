@@ -42,6 +42,16 @@ export async function registerAuthRoutes(app: FastifyInstance, authService: Auth
     }
   });
 
+  app.post('/v1/auth/revoke', async (request, reply) => {
+    try {
+      const sessionToken = extractBearerToken(request);
+      await authService.revokeAppSession(sessionToken);
+      return reply.code(204).send();
+    } catch (error: unknown) {
+      return handleAuthError(reply, error);
+    }
+  });
+
   app.get('/v1/me', async (request, reply) => {
     try {
       const sessionToken = extractBearerToken(request);

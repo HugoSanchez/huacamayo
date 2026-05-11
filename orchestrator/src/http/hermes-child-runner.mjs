@@ -29,19 +29,18 @@ const shutdown = (signal = 'SIGTERM') => {
   }, 2_000).unref();
 };
 
-const parentWatcher = setInterval(() => {
-  if (process.ppid === 1 || process.ppid === 0) {
-    shutdown('SIGTERM');
-  }
-}, 1_000);
-parentWatcher.unref();
+// Parent-orphaning detection. The supervisor spawns us with an IPC stdio
+// slot — when the parent dies, the IPC channel closes and `disconnect`
+// fires. This replaces a previous setInterval(1s) that polled `process.ppid`
+// just to detect orphaning; the timer was waking the CPU once per second
+// even when the laptop was lid-closed and trying to sleep.
+process.on('disconnect', () => shutdown('SIGTERM'));
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('exit', () => shutdown('SIGTERM'));
 
 child.once('exit', (code, signal) => {
-  clearInterval(parentWatcher);
   if (signal) {
     process.kill(process.pid, signal);
     return;
