@@ -96,4 +96,72 @@ describe('auth routes', () => {
     expect(exchange.statusCode).toBe(503);
     expect(exchange.json().error).toBe('privy_unconfigured');
   });
+
+  test('rejects exchange with missing privyAccessToken as 400 bad_request', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const exchange = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/privy/exchange',
+      payload: { deviceLabel: 'Vervo', platform: 'macos' },
+    });
+
+    expect(exchange.statusCode).toBe(400);
+    expect(exchange.json().error).toBe('bad_request');
+  });
+
+  test('rejects exchange with malformed email as 400 bad_request', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const exchange = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/privy/exchange',
+      payload: {
+        privyAccessToken: 'privy-valid-token',
+        deviceLabel: 'Vervo',
+        platform: 'macos',
+        email: 'not-an-email',
+      },
+    });
+
+    expect(exchange.statusCode).toBe(400);
+    expect(exchange.json().error).toBe('bad_request');
+  });
+
+  test('rejects /v1/me without an Authorization header as 401 missing_session', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const me = await app.inject({ method: 'GET', url: '/v1/me' });
+    expect(me.statusCode).toBe(401);
+    expect(me.json().error).toBe('missing_session');
+  });
+
+  test('rejects /v1/me with a non-Bearer Authorization scheme as 401 invalid_session', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const me = await app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: 'Basic some-token' },
+    });
+    expect(me.statusCode).toBe(401);
+    expect(me.json().error).toBe('invalid_session');
+  });
+
+  test('rejects /v1/me with an unknown bearer token as 401 invalid_session', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const me = await app.inject({
+      method: 'GET',
+      url: '/v1/me',
+      headers: { authorization: 'Bearer v1_not_a_real_token' },
+    });
+    expect(me.statusCode).toBe(401);
+    expect(me.json().error).toBe('invalid_session');
+  });
 });

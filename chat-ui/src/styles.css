@@ -10,7 +10,7 @@
   --text: rgba(255, 255, 255, 0.88);
   --text-dim: rgba(255, 255, 255, 0.52);
   --accent: #6eb5ff;
-  --user-bubble: #25282B;
+  --user-bubble: #2A2D31;
   --user-bubble-text: rgba(255, 255, 255, 0.88);
   --assistant-bg: transparent;
   --tool-bg: rgba(255, 255, 255, 0.04);
@@ -418,7 +418,7 @@ textarea {
     --text: rgba(0, 0, 0, 0.85);
     --text-dim: rgba(0, 0, 0, 0.52);
     --accent: #0066cc;
-    --user-bubble: #EBEEF2;
+    --user-bubble: #E2E6EB;
     --user-bubble-text: rgba(0, 0, 0, 0.85);
     --assistant-bg: transparent;
     --tool-bg: rgba(0, 0, 0, 0.03);
@@ -1182,7 +1182,13 @@ textarea {
 }
 
 .skill-row-toggle.is-on {
-  background: var(--accent);
+  /* Dark in light mode, light in dark mode — flips with the theme so the
+     "active" state reads as a high-contrast pill instead of an accent blue. */
+  background: var(--text);
+}
+
+.skill-row-toggle.is-on .skill-row-toggle-thumb {
+  background: var(--bg);
 }
 
 .skill-row-toggle.is-loading {
@@ -1466,10 +1472,6 @@ textarea {
   outline: none;
 }
 
-.cron-detail-name:hover {
-  border-color: var(--border);
-}
-
 .cron-detail-name:focus {
   border-color: var(--border);
   background: rgba(0, 0, 0, 0.04);
@@ -1500,7 +1502,6 @@ textarea {
 }
 
 .cron-description-text:hover {
-  border-color: var(--border);
   color: var(--text);
 }
 
@@ -1642,7 +1643,7 @@ textarea {
   align-items: center;
 }
 
-.cron-detail-run-now {
+.cron-detail-edit-chat {
   margin-left: auto;
 }
 

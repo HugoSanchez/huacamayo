@@ -1,11 +1,55 @@
 import { json, route, type Route } from './router.ts';
-import { ManagedBackendClient, type ManagedSessionRecord } from '../integrations/managed-backend-client.ts';
+import {
+  ManagedBackendClient,
+  ManagedBackendError,
+  type ManagedRuntimeConfig,
+  type ManagedSessionRecord,
+} from '../integrations/managed-backend-client.ts';
+import type { RuntimeMode } from '../integrations/runtime-mode.ts';
 
-export function buildManagedAccountRoutes(managedBackend: ManagedBackendClient): Route[] {
+export interface ManagedRuntimeView {
+  mode: RuntimeMode;
+  backend: { configured: boolean; baseUrl: string | null };
+  runtimeConfig: ManagedRuntimeConfig | null;
+  error: string | null;
+}
+
+export function buildManagedAccountRoutes(
+  managedBackend: ManagedBackendClient,
+  runtimeMode: RuntimeMode,
+): Route[] {
   return [
     route('GET', '/managed/account', async (_req, res) => {
       const account = await managedBackend.getAccount();
       json(res, 200, account);
+    }),
+
+    route('GET', '/managed/runtime', async (_req, res) => {
+      const view: ManagedRuntimeView = {
+        mode: runtimeMode,
+        backend: {
+          configured: managedBackend.configured,
+          baseUrl: managedBackend.configured ? (await managedBackend.getAccount()).backend.baseUrl : null,
+        },
+        runtimeConfig: null,
+        error: null,
+      };
+
+      if (!managedBackend.configured) {
+        view.error = 'Managed backend URL is not configured.';
+        json(res, 200, view);
+        return;
+      }
+
+      try {
+        view.runtimeConfig = await managedBackend.getRuntimeConfig();
+      } catch (error) {
+        view.error = error instanceof ManagedBackendError
+          ? `${error.code}: ${error.message}`
+          : error instanceof Error ? error.message : String(error);
+      }
+
+      json(res, 200, view);
     }),
 
     route('POST', '/managed/session', async (_req, res, _params, body) => {
