@@ -113,7 +113,7 @@ export class AuthService {
       deviceId: device.id,
       tokenHash: hashSessionToken(sessionToken),
       issuedAt: nowIso,
-      expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      expiresAt: new Date(now.getTime() + this.config.authSessionLifetimeMs).toISOString(),
       revokedAt: null,
     };
     await this.store.insertAuthSession(session);
@@ -155,13 +155,26 @@ export class AuthService {
     }
 
     const tokenHash = hashSessionToken(normalized);
-    const session = await this.store.getAuthSessionByTokenHash(tokenHash);
+    let session = await this.store.getAuthSessionByTokenHash(tokenHash);
     if (!session || session.revokedAt) {
       throw new AuthServiceError(401, 'invalid_session', 'Invalid app session token.');
     }
 
-    if (Date.parse(session.expiresAt) <= Date.now()) {
+    const now = Date.now();
+    const expiresAtMs = Date.parse(session.expiresAt);
+    if (expiresAtMs <= now) {
       throw new AuthServiceError(401, 'expired_session', 'App session has expired.');
+    }
+
+    // Sliding extension: if the session is past the halfway point of its
+    // lifetime, bump it back to a full lifetime from now. Bounded by the
+    // store; happens on a fraction of requests so DB load stays small.
+    const lifetimeMs = this.config.authSessionLifetimeMs;
+    const remainingMs = expiresAtMs - now;
+    if (remainingMs < lifetimeMs / 2) {
+      const newExpiresAt = new Date(now + lifetimeMs).toISOString();
+      await this.store.extendAuthSession(session.id, newExpiresAt);
+      session = { ...session, expiresAt: newExpiresAt };
     }
 
     const user = await this.store.getUserById(session.userId);

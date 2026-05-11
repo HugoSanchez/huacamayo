@@ -93,6 +93,13 @@ export class DrizzleAuthStore implements AuthStore {
       .where(eq(authSessions.id, sessionId));
   }
 
+  async extendAuthSession(sessionId: string, expiresAt: string): Promise<void> {
+    await this.db
+      .update(authSessions)
+      .set({ expiresAt: new Date(expiresAt) })
+      .where(eq(authSessions.id, sessionId));
+  }
+
   async getAuthSessionByTokenHash(tokenHash: string): Promise<AuthSessionRecord | null> {
     const rows = await this.db.select().from(authSessions).where(eq(authSessions.tokenHash, tokenHash)).limit(1);
     return rows[0] ? mapAuthSession(rows[0]) : null;

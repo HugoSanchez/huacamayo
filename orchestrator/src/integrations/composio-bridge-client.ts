@@ -1,7 +1,4 @@
-import { existsSync } from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ManagedBackendClient } from './managed-backend-client.ts';
 
 export interface RemoteBridgeSessionView {
   userId: string;
@@ -77,64 +74,63 @@ export class RemoteBridgeHttpError extends Error {
   }
 }
 
+/**
+ * Composio proxy client that talks to the managed backend's /v1/composio/*
+ * surface. Auth uses the user's in-memory session token (same one the chat
+ * proxy uses), so a single Bearer covers every backend call this orchestrator
+ * makes.
+ *
+ * Note: the `userId` arguments on these methods are accepted for API symmetry
+ * with the older local-bridge contract, but the backend ignores them — it
+ * always uses the authenticated user's id, so cross-user calls are impossible.
+ */
 export class RemoteComposioBridgeClient {
-  private static localBridgeProcess: ChildProcess | null = null;
-
-  private static localBridgeStartup: Promise<void> | null = null;
-
+  private readonly managedBackend: ManagedBackendClient;
   private readonly baseUrl: string;
 
-  private readonly token: string | null;
-
-  constructor(
-    baseUrl = process.env.VERVO_COMPOSIO_BRIDGE_URL?.trim() || '',
-    token = process.env.VERVO_COMPOSIO_BRIDGE_TOKEN?.trim() || '',
-  ) {
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
-    this.token = token || null;
+  constructor(managedBackend: ManagedBackendClient) {
+    this.managedBackend = managedBackend;
+    this.baseUrl = managedBackend.backendBaseUrl;
   }
 
+  /** Mirrors the previous behaviour: "configured" if the managed backend URL is set. */
   get configured(): boolean {
     return this.baseUrl.length > 0;
   }
 
-  async getSession(userId: string): Promise<RemoteBridgeSessionView> {
-    const body = await this.request<{ session: RemoteBridgeSessionView }>('POST', '/v1/composio/session', { userId });
+  async getSession(_userId: string): Promise<RemoteBridgeSessionView> {
+    const body = await this.request<{ session: RemoteBridgeSessionView }>('POST', '/v1/composio/session');
     return body.session;
   }
 
-  async resetSession(userId: string): Promise<void> {
-    await this.request('POST', '/v1/composio/session/reset', { userId });
+  async resetSession(_userId: string): Promise<void> {
+    await this.request('POST', '/v1/composio/session/reset');
   }
 
-  async listConnections(userId: string): Promise<RemoteBridgeConnectionView[]> {
-    const body = await this.request<{ connections: RemoteBridgeConnectionView[] }>(
-      'GET',
-      `/v1/connections?user_id=${encodeURIComponent(userId)}`,
-    );
+  async listConnections(_userId: string): Promise<RemoteBridgeConnectionView[]> {
+    const body = await this.request<{ connections: RemoteBridgeConnectionView[] }>('GET', '/v1/composio/connections');
     return body.connections;
   }
 
-  async listToolkits(userId: string, query?: string, limit?: number): Promise<RemoteBridgeToolkitView[]> {
-    const params = new URLSearchParams({ user_id: userId });
+  async listToolkits(_userId: string, query?: string, limit?: number): Promise<RemoteBridgeToolkitView[]> {
+    const params = new URLSearchParams();
     if (query && query.trim().length > 0) params.set('query', query.trim());
     if (typeof limit === 'number' && Number.isFinite(limit)) params.set('limit', String(Math.floor(limit)));
-    const body = await this.request<{ toolkits: RemoteBridgeToolkitView[] }>(
-      'GET',
-      `/v1/toolkits?${params.toString()}`,
-    );
+    const suffix = params.toString();
+    const path = suffix ? `/v1/composio/toolkits?${suffix}` : '/v1/composio/toolkits';
+    const body = await this.request<{ toolkits: RemoteBridgeToolkitView[] }>('GET', path);
     return body.toolkits;
   }
 
   async requestConnection(
-    userId: string,
+    _userId: string,
     toolkit: string,
     callbackUrl: string,
   ): Promise<RemoteBridgeConnectionRequestView> {
     const body = await this.request<{ request: RemoteBridgeConnectionRequestView }>(
       'POST',
-      '/v1/connections/request',
-      { userId, toolkit, callbackUrl },
+      '/v1/composio/connections/request',
+      { toolkit, callbackUrl },
     );
     return body.request;
   }
@@ -142,40 +138,39 @@ export class RemoteComposioBridgeClient {
   async getRequest(requestId: string): Promise<RemoteBridgeConnectionRequestView> {
     const body = await this.request<{ request: RemoteBridgeConnectionRequestView }>(
       'GET',
-      `/v1/connections/requests/${encodeURIComponent(requestId)}`,
+      `/v1/composio/connections/requests/${encodeURIComponent(requestId)}`,
     );
     return body.request;
   }
 
-  async searchTools(userId: string, query: string, toolkits?: string[]): Promise<RemoteBridgeSearchToolResult[]> {
+  async searchTools(_userId: string, query: string, toolkits?: string[]): Promise<RemoteBridgeSearchToolResult[]> {
     const body = await this.request<{ results: RemoteBridgeSearchToolResult[] }>(
       'POST',
-      '/v1/tools/search',
-      { userId, query, ...(toolkits && toolkits.length > 0 ? { toolkits } : {}) },
+      '/v1/composio/tools/search',
+      { query, ...(toolkits && toolkits.length > 0 ? { toolkits } : {}) },
     );
     return body.results;
   }
 
-  async getToolSchemas(userId: string, toolSlugs: string[]): Promise<RemoteBridgeToolSchemaView[]> {
+  async getToolSchemas(_userId: string, toolSlugs: string[]): Promise<RemoteBridgeToolSchemaView[]> {
     const body = await this.request<{ tools: RemoteBridgeToolSchemaView[] }>(
       'POST',
-      '/v1/tools/schemas',
-      { userId, toolSlugs },
+      '/v1/composio/tools/schemas',
+      { toolSlugs },
     );
     return body.tools;
   }
 
   async executeTool(
-    userId: string,
+    _userId: string,
     toolSlug: string,
     arguments_: Record<string, unknown> | undefined,
     connectedAccountId?: string,
   ): Promise<RemoteBridgeToolExecutionView> {
     const body = await this.request<{ result: RemoteBridgeToolExecutionView }>(
       'POST',
-      '/v1/tools/execute',
+      '/v1/composio/tools/execute',
       {
-        userId,
         toolSlug,
         arguments: arguments_ ?? {},
         ...(connectedAccountId ? { connectedAccountId } : {}),
@@ -186,16 +181,18 @@ export class RemoteComposioBridgeClient {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     if (!this.configured) {
-      throw new RemoteBridgeHttpError(503, 'Remote Composio bridge is not configured.');
+      throw new RemoteBridgeHttpError(503, 'Managed backend URL is not configured.');
+    }
+
+    const session = this.managedBackend.getStoredSession();
+    if (!session) {
+      throw new RemoteBridgeHttpError(401, 'No managed session is loaded — sign in to use Composio.');
     }
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
+      Authorization: `Bearer ${session.token}`,
     };
-
-    if (this.token) {
-      headers['X-Vervo-Bridge-Token'] = this.token;
-    }
 
     let payload: string | undefined;
     if (body !== undefined) {
@@ -205,22 +202,10 @@ export class RemoteComposioBridgeClient {
 
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
-        method,
-        headers,
-        body: payload,
-      });
+      response = await fetch(`${this.baseUrl}${path}`, { method, headers, body: payload });
     } catch (error) {
-      await this.ensureLocalBridgeAvailable().catch(() => {});
-      try {
-        response = await fetch(`${this.baseUrl}${path}`, {
-          method,
-          headers,
-          body: payload,
-        });
-      } catch {
-        throw error;
-      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw new RemoteBridgeHttpError(502, `Backend Composio request failed: ${message}`);
     }
 
     if (!response.ok) {
@@ -229,73 +214,6 @@ export class RemoteComposioBridgeClient {
     }
 
     return response.json() as Promise<T>;
-  }
-
-  private async ensureLocalBridgeAvailable(): Promise<void> {
-    if (!this.canAutoStartLocalBridge()) return;
-    if (await isBridgeHealthy(this.baseUrl)) return;
-
-    if (!RemoteComposioBridgeClient.localBridgeStartup) {
-      RemoteComposioBridgeClient.localBridgeStartup = this.startLocalBridge()
-        .finally(() => {
-          RemoteComposioBridgeClient.localBridgeStartup = null;
-        });
-    }
-
-    await RemoteComposioBridgeClient.localBridgeStartup;
-  }
-
-  private canAutoStartLocalBridge(): boolean {
-    try {
-      const url = new URL(this.baseUrl);
-      return (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && Boolean(resolveLocalBridgeDir());
-    } catch {
-      return false;
-    }
-  }
-
-  private async startLocalBridge(): Promise<void> {
-    if (RemoteComposioBridgeClient.localBridgeProcess && await isBridgeHealthy(this.baseUrl)) {
-      return;
-    }
-
-    const bridgeDir = resolveLocalBridgeDir();
-    if (!bridgeDir) {
-      throw new RemoteBridgeHttpError(503, 'Local Composio bridge directory not found.');
-    }
-
-    const url = new URL(this.baseUrl);
-    const tsxBin = path.join(bridgeDir, 'node_modules/.bin/tsx');
-    if (!existsSync(tsxBin)) {
-      throw new RemoteBridgeHttpError(503, 'Local Composio bridge dependencies are missing.');
-    }
-
-    const child = spawn(process.execPath, [tsxBin, 'src/server.ts'], {
-      cwd: bridgeDir,
-      env: {
-        ...process.env,
-        PORT: url.port || '8787',
-        // Override whatever VERVO_PARENT_PID was inherited from our env
-        // (which points to the Vervo app) so the bridge watches *our* pid —
-        // if the orchestrator dies, the bridge should die with it.
-        VERVO_PARENT_PID: String(process.pid),
-      },
-      stdio: 'ignore',
-    });
-
-    RemoteComposioBridgeClient.localBridgeProcess = child;
-    registerBridgeProcessCleanup(child);
-
-    child.once('exit', () => {
-      if (RemoteComposioBridgeClient.localBridgeProcess === child) {
-        RemoteComposioBridgeClient.localBridgeProcess = null;
-      }
-    });
-
-    const healthy = await waitForBridgeHealth(this.baseUrl, 5000);
-    if (!healthy) {
-      throw new RemoteBridgeHttpError(503, 'Local Composio bridge failed to start.');
-    }
   }
 }
 
@@ -308,51 +226,4 @@ async function readError(response: Response, fallback: string): Promise<string> 
   } catch {
     return fallback;
   }
-}
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-let cleanupRegistered = false;
-
-function resolveLocalBridgeDir(): string | null {
-  const candidate = path.resolve(__dirname, '../../../composio-bridge');
-  return existsSync(candidate) ? candidate : null;
-}
-
-function registerBridgeProcessCleanup(child: ChildProcess): void {
-  if (cleanupRegistered) return;
-  cleanupRegistered = true;
-
-  const cleanup = () => {
-    if (RemoteComposioBridgeClient['localBridgeProcess'] === child && !child.killed) {
-      child.kill('SIGTERM');
-    }
-  };
-
-  process.once('exit', cleanup);
-  process.once('SIGINT', () => {
-    cleanup();
-    process.exit(130);
-  });
-  process.once('SIGTERM', () => {
-    cleanup();
-    process.exit(143);
-  });
-}
-
-async function isBridgeHealthy(baseUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1000) });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForBridgeHealth(baseUrl: string, timeoutMs: number): Promise<boolean> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await isBridgeHealthy(baseUrl)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  return false;
 }

@@ -190,6 +190,63 @@ describe('AuthService.authenticateAppSession', () => {
     expect(auth.session.id).toBe(exchange.session.id);
     expect(auth.entitlements[0].mode).toBe('managed');
   });
+
+  test('newly minted sessions use the configured lifetime', async () => {
+    // Override lifetime to a small, exact value so we can compute expectations.
+    const config = getConfig({ ...baseEnv, AUTH_SESSION_LIFETIME_DAYS: '10' });
+    const store = new MemoryAuthStore();
+    const service = new AuthService(config, store, new StubVerifier());
+
+    const before = Date.now();
+    const exchange = await exchangeOnce(service);
+    const after = Date.now();
+
+    const expiresMs = Date.parse(exchange.session.expiresAt);
+    const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+    expect(expiresMs).toBeGreaterThanOrEqual(before + tenDaysMs);
+    expect(expiresMs).toBeLessThanOrEqual(after + tenDaysMs);
+  });
+
+  test('sliding extension: a session past the halfway mark gets refreshed to a full lifetime', async () => {
+    const config = getConfig({ ...baseEnv, AUTH_SESSION_LIFETIME_DAYS: '10' });
+    const store = new MemoryAuthStore();
+    const service = new AuthService(config, store, new StubVerifier());
+
+    const exchange = await exchangeOnce(service);
+    const original = await store.getAuthSessionByTokenHash(hash(exchange.sessionToken));
+    expect(original).not.toBeNull();
+
+    // Backdate the session so only 2 days remain — under half the 10-day lifetime.
+    const nearExpiry = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    await store.extendAuthSession(original!.id, nearExpiry);
+
+    const before = Date.now();
+    const auth = await service.authenticateAppSession(exchange.sessionToken);
+    const after = Date.now();
+
+    const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+    const extendedMs = Date.parse(auth.session.expiresAt);
+    expect(extendedMs).toBeGreaterThanOrEqual(before + tenDaysMs);
+    expect(extendedMs).toBeLessThanOrEqual(after + tenDaysMs);
+
+    // Confirm it persisted to the store, not just returned.
+    const persisted = await store.getAuthSessionByTokenHash(hash(exchange.sessionToken));
+    expect(persisted!.expiresAt).toBe(auth.session.expiresAt);
+  });
+
+  test('sliding extension: a session well within its lifetime is left alone (no DB write)', async () => {
+    const config = getConfig({ ...baseEnv, AUTH_SESSION_LIFETIME_DAYS: '10' });
+    const store = new MemoryAuthStore();
+    const service = new AuthService(config, store, new StubVerifier());
+
+    const exchange = await exchangeOnce(service);
+    const before = exchange.session.expiresAt;
+
+    await service.authenticateAppSession(exchange.sessionToken);
+
+    const after = await store.getAuthSessionByTokenHash(hash(exchange.sessionToken));
+    expect(after!.expiresAt).toBe(before);
+  });
 });
 
 function hash(sessionToken: string): string {

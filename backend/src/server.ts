@@ -15,6 +15,8 @@ import { registerAuthRoutes } from './routes/auth.ts';
 import { registerRuntimeConfigRoutes } from './routes/runtime-config.ts';
 import { registerInferenceRoutes } from './routes/inference.ts';
 import { registerUsageRoutes } from './routes/usage.ts';
+import { registerComposioRoutes } from './routes/composio.ts';
+import { ComposioService } from './composio/service.ts';
 
 export interface BuildServerOptions {
   config?: BackendConfig;
@@ -22,6 +24,7 @@ export interface BuildServerOptions {
   authStore?: AuthStore;
   inferenceStore?: InferenceStore;
   buildOpenRouterClient?: (config: BackendConfig) => OpenRouterClient;
+  composioService?: ComposioService;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
@@ -54,6 +57,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
     buildClient: options.buildOpenRouterClient,
   });
   await registerUsageRoutes(app, { authService, inferenceStore });
+  const composioService = options.composioService ?? new ComposioService();
+  await registerComposioRoutes(app, { authService, composioService });
   return app;
 }
 

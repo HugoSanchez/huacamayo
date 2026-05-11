@@ -152,6 +152,11 @@ export class ManagedBackendClient {
     return this.baseUrl.length > 0;
   }
 
+  /** Read-only accessor so peer integrations can build their own URLs against the same host. */
+  get backendBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   setSession(record: ManagedSessionRecord | null): void {
     this.currentSession = record;
   }

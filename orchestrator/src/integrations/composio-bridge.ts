@@ -6,6 +6,7 @@ import {
   type RemoteBridgeToolExecutionView,
   type RemoteBridgeToolSchemaView,
 } from './composio-bridge-client.ts';
+import { ManagedBackendClient } from './managed-backend-client.ts';
 
 export interface ComposioBridgeSessionView {
   userId: string;
@@ -45,9 +46,13 @@ export class ComposioBridgeService {
 
   private cachedSession: CachedSession | null = null;
 
-  constructor(store = new ConnectionsStore(), apiKey = process.env.COMPOSIO_API_KEY?.trim() || '') {
+  constructor(
+    managedBackend: ManagedBackendClient,
+    store = new ConnectionsStore(),
+    apiKey = process.env.COMPOSIO_API_KEY?.trim() || '',
+  ) {
     this.store = store;
-    this.bridgeClient = new RemoteComposioBridgeClient();
+    this.bridgeClient = new RemoteComposioBridgeClient(managedBackend);
     this.apiKey = apiKey || null;
     this.client = !this.bridgeClient.configured && this.apiKey ? new Composio({ apiKey: this.apiKey }) : null;
   }

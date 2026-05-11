@@ -63,6 +63,7 @@ export interface AuthStore {
   updateDevice(device: DeviceRecord): Promise<void>;
   insertAuthSession(session: AuthSessionRecord): Promise<void>;
   revokeAuthSession(sessionId: string, revokedAt: string): Promise<void>;
+  extendAuthSession(sessionId: string, expiresAt: string): Promise<void>;
   getAuthSessionByTokenHash(tokenHash: string): Promise<AuthSessionRecord | null>;
   getUserById(userId: string): Promise<AppUserRecord | null>;
   getDeviceById(deviceId: string): Promise<DeviceRecord | null>;

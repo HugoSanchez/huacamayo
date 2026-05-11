@@ -12,6 +12,7 @@ const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 60;
 const DEFAULT_BREAKER_THRESHOLD = 5;
 const DEFAULT_BREAKER_COOLDOWN_MS = 60_000;
+const DEFAULT_SESSION_LIFETIME_DAYS = 365;
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -27,6 +28,7 @@ const envSchema = z.object({
   MANAGED_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().optional(),
   MANAGED_BREAKER_THRESHOLD: z.coerce.number().int().positive().optional(),
   MANAGED_BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().optional(),
+  AUTH_SESSION_LIFETIME_DAYS: z.coerce.number().int().positive().optional(),
   WEB_BASE_URL: z.preprocess(
     (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
     z.string().url().optional(),
@@ -43,6 +45,7 @@ export type BackendConfig = z.infer<typeof envSchema> & {
   managedRateLimitPerMinute: number;
   managedBreakerThreshold: number;
   managedBreakerCooldownMs: number;
+  authSessionLifetimeMs: number;
 };
 
 export function getConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
@@ -54,6 +57,8 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
   const managedRateLimitPerMinute = parsed.MANAGED_RATE_LIMIT_PER_MINUTE ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
   const managedBreakerThreshold = parsed.MANAGED_BREAKER_THRESHOLD ?? DEFAULT_BREAKER_THRESHOLD;
   const managedBreakerCooldownMs = parsed.MANAGED_BREAKER_COOLDOWN_MS ?? DEFAULT_BREAKER_COOLDOWN_MS;
+  const authSessionLifetimeDays = parsed.AUTH_SESSION_LIFETIME_DAYS ?? DEFAULT_SESSION_LIFETIME_DAYS;
+  const authSessionLifetimeMs = authSessionLifetimeDays * 24 * 60 * 60 * 1000;
 
   return {
     ...parsed,
@@ -66,6 +71,7 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
     managedRateLimitPerMinute,
     managedBreakerThreshold,
     managedBreakerCooldownMs,
+    authSessionLifetimeMs,
   };
 }
 
