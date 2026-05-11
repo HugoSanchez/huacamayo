@@ -164,7 +164,7 @@ export class ComposioBridgeService {
     if (this.bridgeClient.configured || this.client) return;
     throw new ComposioBridgeHttpError(
       503,
-      'Composio bridge is unavailable. Set VERVO_COMPOSIO_BRIDGE_URL or COMPOSIO_API_KEY to enable it.',
+      'Composio bridge is unavailable. Set VERVO_BACKEND_URL (managed) or COMPOSIO_API_KEY (direct) to enable it.',
     );
   }
 
