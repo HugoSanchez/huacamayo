@@ -56,6 +56,12 @@ export class MemoryAuthStore implements AuthStore {
     this.sessionsById.set(sessionId, { ...existing, revokedAt });
   }
 
+  async extendAuthSession(sessionId: string, expiresAt: string): Promise<void> {
+    const existing = this.sessionsById.get(sessionId);
+    if (!existing) return;
+    this.sessionsById.set(sessionId, { ...existing, expiresAt });
+  }
+
   async getAuthSessionByTokenHash(tokenHash: string): Promise<AuthSessionRecord | null> {
     const id = this.sessionsByTokenHash.get(tokenHash);
     return id ? this.sessionsById.get(id) ?? null : null;

@@ -1,5 +1,6 @@
 import { json, route, type Route } from './router.ts';
 import { ComposioBridgeHttpError, ComposioBridgeService } from '../integrations/composio-bridge.ts';
+import { RemoteBridgeHttpError } from '../integrations/composio-bridge-client.ts';
 
 export function buildComposioBridgeRoutes(bridge: ComposioBridgeService): Route[] {
   return [
@@ -57,6 +58,14 @@ export function buildComposioBridgeRoutes(bridge: ComposioBridgeService): Route[
 
 function handleBridgeError(res: Parameters<typeof json>[0], error: unknown): void {
   if (error instanceof ComposioBridgeHttpError) {
+    json(res, error.status, { error: 'request_failed', message: error.message });
+    return;
+  }
+
+  if (error instanceof RemoteBridgeHttpError) {
+    // Bubble up the upstream status from the backend (401 missing_session,
+    // 503 backend down, etc.) so callers can react appropriately rather
+    // than seeing every Composio failure as 500.
     json(res, error.status, { error: 'request_failed', message: error.message });
     return;
   }

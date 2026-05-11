@@ -16,6 +16,7 @@
     "issue-test-session": "tsx scripts/issue-test-session.ts"
   },
   "dependencies": {
+    "@composio/core": "^0.8.0",
     "@fastify/cors": "^11.1.0",
     "@neondatabase/serverless": "^1.0.1",
     "@privy-io/node": "^0.17.0",

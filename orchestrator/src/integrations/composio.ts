@@ -1,4 +1,5 @@
 import { Composio } from '@composio/core';
+import { ManagedBackendClient } from './managed-backend-client.ts';
 import {
   ConnectionsStore,
   type ConnectionRecord,
@@ -76,9 +77,13 @@ export class ConnectionsService {
 
   private readonly allowedToolkits: Set<string> | null;
 
-  constructor(store = new ConnectionsStore(), apiKey = process.env.COMPOSIO_API_KEY?.trim() || '') {
+  constructor(
+    managedBackend: ManagedBackendClient,
+    store = new ConnectionsStore(),
+    apiKey = process.env.COMPOSIO_API_KEY?.trim() || '',
+  ) {
     this.store = store;
-    this.bridgeClient = new RemoteComposioBridgeClient();
+    this.bridgeClient = new RemoteComposioBridgeClient(managedBackend);
     this.apiKey = apiKey || null;
     this.client = this.apiKey ? new Composio({ apiKey: this.apiKey }) : null;
     this.allowedToolkits = parseAllowedToolkits(process.env.VERVO_COMPOSIO_ALLOWED_TOOLKITS);
@@ -402,7 +407,7 @@ export class ConnectionsService {
     if (this.bridgeClient.configured || this.client) return;
     throw new HttpError(
       503,
-      'Composio is unavailable. Set VERVO_COMPOSIO_BRIDGE_URL or COMPOSIO_API_KEY to enable connections.',
+      'Composio is unavailable. Set VERVO_BACKEND_URL (managed) or COMPOSIO_API_KEY (direct) to enable connections.',
     );
   }
 

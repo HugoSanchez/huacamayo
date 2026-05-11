@@ -8,16 +8,12 @@ describe('Chat HTTP Endpoints', () => {
   const envSnapshot = {
     VERVO_HERMES_MANAGED: process.env.VERVO_HERMES_MANAGED,
     VERVO_CHAT_STORE_PATH: process.env.VERVO_CHAT_STORE_PATH,
-    VERVO_COMPOSIO_BRIDGE_URL: process.env.VERVO_COMPOSIO_BRIDGE_URL,
-    VERVO_COMPOSIO_BRIDGE_TOKEN: process.env.VERVO_COMPOSIO_BRIDGE_TOKEN,
     COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
   };
 
   beforeAll(async () => {
     process.env.VERVO_HERMES_MANAGED = 'false';
     process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-endpoint-${process.pid}.sqlite`;
-    delete process.env.VERVO_COMPOSIO_BRIDGE_URL;
-    delete process.env.VERVO_COMPOSIO_BRIDGE_TOKEN;
     delete process.env.COMPOSIO_API_KEY;
     const result = await startServer({ port: 0 });
     server = result.server;
@@ -31,8 +27,6 @@ describe('Chat HTTP Endpoints', () => {
     }
     process.env.VERVO_HERMES_MANAGED = envSnapshot.VERVO_HERMES_MANAGED;
     process.env.VERVO_CHAT_STORE_PATH = envSnapshot.VERVO_CHAT_STORE_PATH;
-    process.env.VERVO_COMPOSIO_BRIDGE_URL = envSnapshot.VERVO_COMPOSIO_BRIDGE_URL;
-    process.env.VERVO_COMPOSIO_BRIDGE_TOKEN = envSnapshot.VERVO_COMPOSIO_BRIDGE_TOKEN;
     process.env.COMPOSIO_API_KEY = envSnapshot.COMPOSIO_API_KEY;
   });
 
@@ -54,11 +48,11 @@ describe('Chat HTTP Endpoints', () => {
     expect(body.hasActiveRequest).toBe(false);
   });
 
-  it('reports composio bridge as unavailable without an API key', async () => {
+  it('reports composio bridge as unauthenticated when no managed session is loaded', async () => {
     const { status, body } = await fetchJson('/composio/session');
-    expect(status).toBe(503);
+    expect(status).toBe(401);
     expect(body.error).toBe('request_failed');
-    expect(body.message).toContain('COMPOSIO_API_KEY');
+    expect(body.message).toMatch(/session/i);
   });
 
   it('creates and reads a session', async () => {

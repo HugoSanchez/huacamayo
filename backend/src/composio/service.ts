@@ -80,17 +80,17 @@ interface CatalogToolkitItem {
   noAuth?: boolean;
 }
 
-export class BridgeHttpError extends Error {
+export class ComposioServiceError extends Error {
   readonly status: number;
 
   constructor(status: number, message: string) {
     super(message);
-    this.name = 'BridgeHttpError';
+    this.name = 'ComposioServiceError';
     this.status = status;
   }
 }
 
-export class ComposioBridgeBackendService {
+export class ComposioService {
   private readonly apiKey: string | null;
 
   private readonly client: Composio | null;
@@ -349,7 +349,7 @@ export class ComposioBridgeBackendService {
 
   private assertConfigured(): void {
     if (this.client) return;
-    throw new BridgeHttpError(503, 'Composio bridge backend is unavailable. Set COMPOSIO_API_KEY to enable it.');
+    throw new ComposioServiceError(503, 'Composio backend is unavailable. Set COMPOSIO_API_KEY to enable it.');
   }
 
   private async createToolRouterSession(userId: string) {
@@ -377,7 +377,7 @@ export class ComposioBridgeBackendService {
     });
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new BridgeHttpError(
+      throw new ComposioServiceError(
         response.status,
         `Composio toolkits request failed (${response.status}): ${body || response.statusText}`,
       );
@@ -412,13 +412,13 @@ export class ComposioBridgeBackendService {
   private async resolveToolkit(toolkitInput: string): Promise<BridgeToolkitView> {
     const normalizedInput = toolkitInput.trim().toLowerCase();
     if (!normalizedInput) {
-      throw new BridgeHttpError(400, 'Missing "toolkit"');
+      throw new ComposioServiceError(400, 'Missing "toolkit"');
     }
 
     try {
       const toolkit = await this.getToolkitByInput(toolkitInput);
       if (!this.isAllowedToolkit(toolkit.slug)) {
-        throw new BridgeHttpError(400, `Toolkit "${toolkitInput}" is not allowed by policy.`);
+        throw new ComposioServiceError(400, `Toolkit "${toolkitInput}" is not allowed by policy.`);
       }
       return {
         slug: toolkit.slug,
@@ -455,11 +455,11 @@ export class ComposioBridgeBackendService {
       }
 
       if (ranked.length === 0) {
-        throw new BridgeHttpError(404, `No Composio toolkit found for "${toolkitInput}".`);
+        throw new ComposioServiceError(404, `No Composio toolkit found for "${toolkitInput}".`);
       }
 
       const suggestions = ranked.slice(0, 4).map(({ toolkit }) => `${toolkit.name} (${toolkit.slug})`).join(', ');
-      throw new BridgeHttpError(
+      throw new ComposioServiceError(
         400,
         `Toolkit "${toolkitInput}" is ambiguous. Try one of: ${suggestions}`,
       );
@@ -513,7 +513,7 @@ export class ComposioBridgeBackendService {
         lastError = error;
       }
     }
-    throw lastError ?? new BridgeHttpError(404, `No Composio toolkit found for "${toolkitInput}".`);
+    throw lastError ?? new ComposioServiceError(404, `No Composio toolkit found for "${toolkitInput}".`);
   }
 
   private async tryGetToolkitCatalogItem(query: string): Promise<CatalogToolkitItem | null> {
@@ -551,7 +551,7 @@ export class ComposioBridgeBackendService {
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new BridgeHttpError(
+      throw new ComposioServiceError(
         response.status,
         `Composio tools request failed (${response.status}): ${body || response.statusText}`,
       );
@@ -585,7 +585,7 @@ export class ComposioBridgeBackendService {
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new BridgeHttpError(
+      throw new ComposioServiceError(
         response.status,
         `Composio tool lookup failed (${response.status}): ${body || response.statusText}`,
       );
@@ -635,7 +635,7 @@ export class ComposioBridgeBackendService {
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new BridgeHttpError(
+      throw new ComposioServiceError(
         response.status,
         `Composio tool execute failed (${response.status}): ${body || response.statusText}`,
       );
@@ -665,7 +665,7 @@ function normalizeHeaders(headers: Record<string, unknown> | undefined): Record<
 function normalizeUserId(userId: string): string {
   const normalized = userId.trim();
   if (!normalized) {
-    throw new BridgeHttpError(400, 'Missing "userId"');
+    throw new ComposioServiceError(400, 'Missing "userId"');
   }
   return normalized;
 }
