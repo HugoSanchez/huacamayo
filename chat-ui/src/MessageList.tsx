@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { ChatMessage, ActivityStep, ConnectionRequestView } from './types';
 import { generateCronDescription, openExternalUrl } from './chat';
+import { useIsSystemAsleep } from './useSystemSleep';
 
 interface Props {
   messages: ChatMessage[];
@@ -615,11 +616,14 @@ function Dot() {
 
 function useElapsed(startedAt: number | undefined, endedAt: number | undefined, isStreaming: boolean | undefined): number {
   const [now, setNow] = useState(() => Date.now());
+  // Suspend the 100ms tick while the laptop is asleep; nothing is rendering
+  // anyway, and the interval would otherwise wake the CPU 10× per second.
+  const asleep = useIsSystemAsleep();
   useEffect(() => {
-    if (!isStreaming) return;
+    if (!isStreaming || asleep) return;
     const id = setInterval(() => setNow(Date.now()), 100);
     return () => clearInterval(id);
-  }, [isStreaming]);
+  }, [isStreaming, asleep]);
   if (!startedAt) return 0;
   const end = isStreaming ? now : (endedAt ?? now);
   return Math.max(0, end - startedAt);

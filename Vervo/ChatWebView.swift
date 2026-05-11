@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import AppKit
 
 /// SwiftUI wrapper around WKWebView that hosts the React chat app.
 /// Passes the sidecar port to JS via `window.setSidecarPort(port)`.
@@ -10,17 +11,20 @@ struct ChatWebView: NSViewRepresentable {
     let isCatalogOpen: Bool
     let isSkillsCatalogOpen: Bool
     let pendingCronOpen: CronOpenRequest?
+    let pendingSettingsOpen: SettingsOpenRequest?
     let onSessionStateChange: ((String?) -> Void)?
     let onCatalogStateChange: ((Bool) -> Void)?
     let onSkillsCatalogStateChange: ((Bool) -> Void)?
     let onCronsChanged: (() -> Void)?
+    let onSignOutRequested: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onSessionStateChange: onSessionStateChange,
             onCatalogStateChange: onCatalogStateChange,
             onSkillsCatalogStateChange: onSkillsCatalogStateChange,
-            onCronsChanged: onCronsChanged
+            onCronsChanged: onCronsChanged,
+            onSignOutRequested: onSignOutRequested
         )
     }
 
@@ -157,6 +161,15 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
+        // Settings-open requests follow the same nonced-token pattern so
+        // clicking the gear after leaving Settings still re-opens it.
+        if let request = pendingSettingsOpen, request.token != context.coordinator.lastInjectedSettingsToken {
+            context.coordinator.pendingSettingsOpen = request
+            if context.coordinator.pageLoaded {
+                context.coordinator.injectOpenSettings(request)
+            }
+        }
+
         // Update color scheme
         if isDarkMode != context.coordinator.lastDarkMode {
             context.coordinator.lastDarkMode = isDarkMode
@@ -173,6 +186,7 @@ struct ChatWebView: NSViewRepresentable {
         var onCatalogStateChange: ((Bool) -> Void)?
         var onSkillsCatalogStateChange: ((Bool) -> Void)?
         var onCronsChanged: (() -> Void)?
+        var onSignOutRequested: (() -> Void)?
         weak var webView: WKWebView?
         var lastInjectedPort: Int?
         var pendingPort: Int?
@@ -184,6 +198,8 @@ struct ChatWebView: NSViewRepresentable {
         var pendingSkillsCatalogOpen: Bool = false
         var lastInjectedCronToken: UUID?
         var pendingCronOpen: CronOpenRequest?
+        var lastInjectedSettingsToken: UUID?
+        var pendingSettingsOpen: SettingsOpenRequest?
         var lastDarkMode: Bool?
         var pageLoaded = false
 
@@ -191,12 +207,60 @@ struct ChatWebView: NSViewRepresentable {
             onSessionStateChange: ((String?) -> Void)?,
             onCatalogStateChange: ((Bool) -> Void)?,
             onSkillsCatalogStateChange: ((Bool) -> Void)?,
-            onCronsChanged: (() -> Void)?
+            onCronsChanged: (() -> Void)?,
+            onSignOutRequested: (() -> Void)?
         ) {
             self.onSessionStateChange = onSessionStateChange
             self.onCatalogStateChange = onCatalogStateChange
             self.onSkillsCatalogStateChange = onSkillsCatalogStateChange
             self.onCronsChanged = onCronsChanged
+            self.onSignOutRequested = onSignOutRequested
+            super.init()
+            // When the system is about to sleep we tell the webview's JS to
+            // stop its polling intervals. Resume on wake. NSWorkspace fires
+            // these for lid-close and idle-sleep alike, which is exactly the
+            // PowerNap window where we want zero CPU activity.
+            let center = NSWorkspace.shared.notificationCenter
+            center.addObserver(
+                self,
+                selector: #selector(handleSystemSleep),
+                name: NSWorkspace.willSleepNotification,
+                object: nil
+            )
+            center.addObserver(
+                self,
+                selector: #selector(handleSystemWake),
+                name: NSWorkspace.didWakeNotification,
+                object: nil
+            )
+        }
+
+        deinit {
+            NSWorkspace.shared.notificationCenter.removeObserver(self)
+        }
+
+        @objc private func handleSystemSleep() {
+            injectSystemSleep()
+        }
+
+        @objc private func handleSystemWake() {
+            injectSystemWake()
+        }
+
+        func injectSystemSleep() {
+            guard let webView, pageLoaded else { return }
+            webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('vervo:system-sleep'));",
+                completionHandler: nil
+            )
+        }
+
+        func injectSystemWake() {
+            guard let webView, pageLoaded else { return }
+            webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('vervo:system-wake'));",
+                completionHandler: nil
+            )
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -209,6 +273,9 @@ struct ChatWebView: NSViewRepresentable {
             injectSkillsCatalogState(pendingSkillsCatalogOpen)
             if let request = pendingCronOpen {
                 injectOpenCron(request)
+            }
+            if let request = pendingSettingsOpen {
+                injectOpenSettings(request)
             }
         }
 
@@ -327,6 +394,21 @@ struct ChatWebView: NSViewRepresentable {
             lastInjectedCronToken = request.token
         }
 
+        func injectOpenSettings(_ request: SettingsOpenRequest) {
+            guard let webView else { return }
+            let js = """
+            (function() {
+              window.dispatchEvent(new CustomEvent('vervo:open-settings'));
+            })();
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    print("[ChatWebView] Failed to inject open-settings: \(error.localizedDescription)")
+                }
+            }
+            lastInjectedSettingsToken = request.token
+        }
+
         func injectSkillsCatalogState(_ open: Bool) {
             guard let webView else { return }
             let js = """
@@ -387,6 +469,13 @@ struct ChatWebView: NSViewRepresentable {
             if type == "cronsChanged" {
                 DispatchQueue.main.async { [onCronsChanged] in
                     onCronsChanged?()
+                }
+                return
+            }
+
+            if type == "signOut" {
+                DispatchQueue.main.async { [onSignOutRequested] in
+                    onSignOutRequested?()
                 }
                 return
             }

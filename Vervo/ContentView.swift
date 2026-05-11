@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 private struct ConductorThemePalette {
     let sidebarTop: Color
@@ -106,8 +107,13 @@ struct ContentView: View {
     @State private var skills: [SidebarSkill] = []
     @State private var crons: [SidebarCron] = []
     @State private var pendingCronOpen: CronOpenRequest?
+    @State private var pendingSettingsOpen: SettingsOpenRequest?
     @State private var hasCompletedInitialSelection = false
-    private let sidebarRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    // The sidebar refresh timer is managed manually (cancel on system sleep,
+    // restart on wake) so that closing the laptop lid lets the CPU actually
+    // sleep instead of waking every 5s to refresh a hidden window.
+    @State private var sidebarRefreshCancellable: AnyCancellable?
+    @State private var isSystemAsleep = false
 
     init(sidecar: SidecarManager, managedSessionStore: ManagedSessionStore) {
         self.sidecar = sidecar
@@ -195,7 +201,10 @@ struct ContentView: View {
                         managedAccount: sidecar.managedAccount,
                         managedSession: managedSessionStore.currentSession,
                         theme: theme,
-                        onSignOut: { managedSessionStore.clearSession() }
+                        onSignOut: { managedSessionStore.clearSession() },
+                        onOpenSettings: {
+                            pendingSettingsOpen = SettingsOpenRequest(token: UUID())
+                        }
                     )
                 }
             }
@@ -238,6 +247,7 @@ struct ContentView: View {
                 isCatalogOpen: isConnectionsCatalogExpanded,
                 isSkillsCatalogOpen: isSkillsCatalogExpanded,
                 pendingCronOpen: pendingCronOpen,
+                pendingSettingsOpen: pendingSettingsOpen,
                 onSessionStateChange: handleWebSessionStateChange,
                 onCatalogStateChange: { open in
                     isConnectionsCatalogExpanded = open
@@ -247,6 +257,9 @@ struct ContentView: View {
                 },
                 onCronsChanged: {
                     Task { await refreshCrons() }
+                },
+                onSignOutRequested: {
+                    managedSessionStore.clearSession()
                 }
             )
             .overlay(alignment: .topLeading) {
@@ -320,8 +333,22 @@ struct ContentView: View {
             await refreshSkills()
             await refreshCrons()
         }
-        .onReceive(sidebarRefreshTimer) { _ in
-            guard sidecarPort != nil else { return }
+        .onAppear {
+            startSidebarTimer()
+        }
+        .onDisappear {
+            stopSidebarTimer()
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in
+            // Laptop is about to sleep (lid close, idle sleep, etc.). Cancel
+            // the polling timer so it doesn't keep waking the CPU during
+            // sleep. WebView pause is handled separately by ChatWebView.
+            isSystemAsleep = true
+            stopSidebarTimer()
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+            isSystemAsleep = false
+            startSidebarTimer()
             Task {
                 await refreshSessions()
                 await refreshConnections()
@@ -393,6 +420,26 @@ struct ContentView: View {
         } catch {
             // Keep the last known list when refresh fails.
         }
+    }
+
+    private func startSidebarTimer() {
+        guard sidebarRefreshCancellable == nil else { return }
+        sidebarRefreshCancellable = Timer.publish(every: 5, on: .main, in: .common)
+            .autoconnect()
+            .sink { _ in
+                guard sidecarPort != nil else { return }
+                Task {
+                    await refreshSessions()
+                    await refreshConnections()
+                    await refreshSkills()
+                    await refreshCrons()
+                }
+            }
+    }
+
+    private func stopSidebarTimer() {
+        sidebarRefreshCancellable?.cancel()
+        sidebarRefreshCancellable = nil
     }
 
     @MainActor
@@ -1149,6 +1196,10 @@ struct CronOpenRequest: Equatable {
     let token: UUID
 }
 
+struct SettingsOpenRequest: Equatable {
+    let token: UUID
+}
+
 private struct SidebarCronRow: View {
     let cron: SidebarCron
     let subtitle: String?
@@ -1745,6 +1796,7 @@ private struct SidebarFooter: View {
     let managedSession: ManagedAppSession?
     let theme: ConductorThemePalette
     let onSignOut: () -> Void
+    let onOpenSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1795,12 +1847,13 @@ private struct SidebarFooter: View {
                 }
                 .buttonStyle(.plain)
 
-                Button(action: {}) {
+                Button(action: onOpenSettings) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(theme.footerIcon)
                 }
                 .buttonStyle(.plain)
+                .help("Settings")
             }
             .padding(.trailing, 16)
             .padding(.vertical, 10)

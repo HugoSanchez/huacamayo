@@ -8,6 +8,11 @@ let nextRuntimeStatus = 200;
 let nextInferenceStatus = 200;
 let nextRuntimeBody: unknown = null;
 let nextInferenceChunks: string[] = [];
+let nextRevokeStatus = 204;
+let revokeCallCount = 0;
+let revokeAuthHeader: string | null = null;
+let nextUsageStatus = 200;
+let nextUsageBody: unknown = null;
 
 beforeAll(async () => {
   backendPort = await allocatePort();
@@ -74,6 +79,42 @@ describe('ManagedBackendClient.getRuntimeConfig', () => {
   });
 });
 
+describe('ManagedBackendClient.getUsageSummary', () => {
+  it('returns the parsed usage summary on 200', async () => {
+    nextUsageStatus = 200;
+    nextUsageBody = {
+      user: { id: 'usr_x', email: 'x@example.com', displayName: null },
+      mode: 'managed',
+      usage: { monthToDateUsd: 1.23, dayToDateUsd: 0.45, monthStart: '2026-05-01T00:00:00.000Z', dayStart: '2026-05-11T00:00:00.000Z' },
+      limits: { monthlyUsdLimit: 10, dailyUsdLimit: null },
+    };
+
+    const client = freshClient();
+    const summary = await client.getUsageSummary();
+    expect(summary.user.email).toBe('x@example.com');
+    expect(summary.usage.monthToDateUsd).toBe(1.23);
+    expect(summary.limits.monthlyUsdLimit).toBe(10);
+    expect(summary.limits.dailyUsdLimit).toBeNull();
+  });
+
+  it('throws missing_session when no session is loaded', async () => {
+    const client = new ManagedBackendClient(`http://127.0.0.1:${backendPort}`);
+    client.setSession(null);
+    const error = await client.getUsageSummary().catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ManagedBackendError);
+    expect((error as ManagedBackendError).code).toBe('missing_session');
+  });
+
+  it('maps backend 5xx into ManagedBackendError', async () => {
+    nextUsageStatus = 503;
+    nextUsageBody = { error: 'service_unavailable', message: 'backend down' };
+    const client = freshClient();
+    const error = await client.getUsageSummary().catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ManagedBackendError);
+    expect((error as ManagedBackendError).status).toBe(503);
+  });
+});
+
 describe('ManagedBackendClient.streamInference', () => {
   it('returns the upstream body and the inference request id header on success', async () => {
     nextInferenceStatus = 200;
@@ -117,6 +158,33 @@ describe('ManagedBackendClient.streamInference', () => {
     expect((error as ManagedBackendError).code).toBe('missing_session');
   });
 
+  it('revokeSession() POSTs /v1/auth/revoke with the in-memory bearer and treats 204 as success', async () => {
+    nextRevokeStatus = 204;
+    revokeCallCount = 0;
+    revokeAuthHeader = null;
+
+    const client = freshClient();
+    await expect(client.revokeSession()).resolves.toBeUndefined();
+    expect(revokeCallCount).toBe(1);
+    expect(revokeAuthHeader).toBe('Bearer token-test');
+  });
+
+  it('revokeSession() is a no-op when no session is loaded', async () => {
+    revokeCallCount = 0;
+    const client = new ManagedBackendClient(`http://127.0.0.1:${backendPort}`);
+    client.setSession(null);
+    await expect(client.revokeSession()).resolves.toBeUndefined();
+    expect(revokeCallCount).toBe(0);
+  });
+
+  it('revokeSession() treats 401 as success (already invalid)', async () => {
+    nextRevokeStatus = 401;
+    revokeCallCount = 0;
+    const client = freshClient();
+    await expect(client.revokeSession()).resolves.toBeUndefined();
+    expect(revokeCallCount).toBe(1);
+  });
+
   it('throws expired_session when the local expiry is in the past', async () => {
     const client = new ManagedBackendClient(`http://127.0.0.1:${backendPort}`);
     client.setSession({
@@ -156,6 +224,20 @@ async function startFakeBackend(port: number): Promise<http.Server> {
     if (req.method === 'GET' && url.pathname === '/v1/runtime-config') {
       res.writeHead(nextRuntimeStatus, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(nextRuntimeBody));
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/usage/summary') {
+      res.writeHead(nextUsageStatus, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(nextUsageBody));
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/v1/auth/revoke') {
+      revokeCallCount += 1;
+      revokeAuthHeader = (req.headers.authorization as string | undefined) ?? null;
+      res.writeHead(nextRevokeStatus, { 'Content-Type': 'application/json' });
+      res.end(nextRevokeStatus === 204 ? '' : JSON.stringify({ error: 'invalid_session', message: 'gone' }));
       return;
     }
 

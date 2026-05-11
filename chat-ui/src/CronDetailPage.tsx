@@ -13,6 +13,7 @@ import {
 } from './chat';
 import { humanizeSchedule } from './scheduleHumanize';
 import { useToast } from './Toaster';
+import { useIsSystemAsleep } from './useSystemSleep';
 import type {
   CronDescriptionView,
   CronDetailView,
@@ -25,9 +26,10 @@ import type {
 interface Props {
   id: string;
   onBack: () => void;
+  onTitleResolved?: (name: string | null) => void;
 }
 
-export function CronDetailPage({ id, onBack }: Props) {
+export function CronDetailPage({ id, onBack, onTitleResolved }: Props) {
   const [detail, setDetail] = useState<CronDetailView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -65,6 +67,23 @@ export function CronDetailPage({ id, onBack }: Props) {
   const [pendingRun, setPendingRun] = useState<{ startedAt: number } | null>(null);
   const pendingPollRef = useRef<number | null>(null);
   const toast = useToast();
+  const asleep = useIsSystemAsleep();
+
+  // Reactive title push so the header updates after rename / refetch too.
+  useEffect(() => {
+    if (detail?.cron.name) onTitleResolved?.(detail.cron.name);
+  }, [detail?.cron.name, onTitleResolved]);
+
+  // Abandon the run-now poll when the system goes to sleep. The cron will
+  // still fire on its own schedule; the user can refresh the detail page on
+  // wake to see the result. We do this here (not in the poll closure) so
+  // the existing handle gets cleared right away.
+  useEffect(() => {
+    if (!asleep || pendingPollRef.current === null) return;
+    window.clearInterval(pendingPollRef.current);
+    pendingPollRef.current = null;
+    setPendingRun(null);
+  }, [asleep]);
 
   useEffect(() => {
     let cancelled = false;

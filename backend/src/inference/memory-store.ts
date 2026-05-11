@@ -1,4 +1,9 @@
-import type { InferenceRequestRecord, InferenceRequestUsage, InferenceStore } from './types.ts';
+import type {
+  InferenceRequestRecord,
+  InferenceRequestUsage,
+  InferenceStore,
+  InferenceUsageTotals,
+} from './types.ts';
 
 export class MemoryInferenceStore implements InferenceStore {
   private readonly recordsById = new Map<string, InferenceRequestRecord>();
@@ -36,5 +41,21 @@ export class MemoryInferenceStore implements InferenceStore {
 
   async listByUserId(userId: string): Promise<InferenceRequestRecord[]> {
     return Array.from(this.recordsById.values()).filter((record) => record.userId === userId);
+  }
+
+  async getUserUsageTotals(userId: string, now: Date): Promise<InferenceUsageTotals> {
+    const startOfMonth = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+    const startOfDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    let monthToDateUsd = 0;
+    let dayToDateUsd = 0;
+    for (const record of this.recordsById.values()) {
+      if (record.userId !== userId) continue;
+      if (record.estimatedCostUsd === null) continue;
+      const ts = Date.parse(record.requestStartedAt);
+      if (Number.isNaN(ts)) continue;
+      if (ts >= startOfMonth) monthToDateUsd += record.estimatedCostUsd;
+      if (ts >= startOfDay) dayToDateUsd += record.estimatedCostUsd;
+    }
+    return { monthToDateUsd, dayToDateUsd };
   }
 }

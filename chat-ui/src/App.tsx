@@ -5,6 +5,7 @@ import { CatalogOverlay } from './CatalogOverlay';
 import { SkillsCatalogOverlay } from './SkillsCatalogOverlay';
 import { SkillDetailPage } from './SkillDetailPage';
 import { CronDetailPage } from './CronDetailPage';
+import { SettingsPage } from './SettingsPage';
 import {
   archiveChatSession,
   cancelChatRequest,
@@ -68,7 +69,12 @@ export function App() {
     Boolean(typeof window !== 'undefined' && window.__vervoPendingSkillsCatalogOpen),
   );
   const [selectedSkillSlug, setSelectedSkillSlug] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedCronId, setSelectedCronId] = useState<string | null>(null);
+  // Names resolved by the detail pages (via onTitleResolved) so the header
+  // can show "Skills: <name>" / "Routines: <name>" without us re-fetching.
+  const [activeSkillName, setActiveSkillName] = useState<string | null>(null);
+  const [activeCronName, setActiveCronName] = useState<string | null>(null);
   const [inputDrafts, setInputDrafts] = useState<Record<string, { text: string; attached: AttachedContext | null }>>({});
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const abortRef = useRef<(() => void) | null>(null);
@@ -76,6 +82,28 @@ export function App() {
   const idCounter = useRef(0);
   const hydrateTokenRef = useRef(0);
   const connectionPollers = useRef<Map<string, number>>(new Map());
+
+  // Clear the cached detail-page names when their id clears, so the next
+  // time you open a routine/skill the header doesn't briefly show the
+  // previous one's name.
+  useEffect(() => { if (!selectedSkillSlug) setActiveSkillName(null); }, [selectedSkillSlug]);
+  useEffect(() => { if (!selectedCronId) setActiveCronName(null); }, [selectedCronId]);
+
+  // System sleep: tear down anything that would otherwise keep waking the
+  // CPU. Connection pollers are cheap to restart by the user (they just
+  // click Connect again), so we don't bother resuming on wake here.
+  useEffect(() => {
+    const onSleep = () => {
+      for (const handle of connectionPollers.current.values()) {
+        window.clearInterval(handle);
+      }
+      connectionPollers.current.clear();
+    };
+    window.addEventListener('vervo:system-sleep', onSleep);
+    return () => {
+      window.removeEventListener('vervo:system-sleep', onSleep);
+    };
+  }, []);
 
   const refreshConnections = useCallback(async () => {
     if (!getSidecarPort()) return;
@@ -295,6 +323,20 @@ export function App() {
     window.addEventListener('vervo:open-cron-detail', handleOpenCron as EventListener);
     return () => {
       window.removeEventListener('vervo:open-cron-detail', handleOpenCron as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleOpenSettings = () => {
+      setIsSettingsOpen(true);
+      setSelectedCronId(null);
+      setSelectedSkillSlug(null);
+      setIsCatalogOpen(false);
+      setIsSkillsCatalogOpen(false);
+    };
+    window.addEventListener('vervo:open-settings', handleOpenSettings as EventListener);
+    return () => {
+      window.removeEventListener('vervo:open-settings', handleOpenSettings as EventListener);
     };
   }, []);
 
@@ -574,6 +616,18 @@ export function App() {
   const activeSessions = sessions.filter((session) => !session.archivedAt);
   const archivedSessions = sessions.filter((session) => !!session.archivedAt);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
+
+  // Header title is computed from the active view; the detail pages report
+  // their resolved name via `onTitleResolved` so we don't double-fetch.
+  // Reset the cached name when the active id clears so a stale name doesn't
+  // flash on the next navigation.
+  const headerTitle = isSettingsOpen
+    ? 'Settings'
+    : selectedCronId
+      ? activeCronName ? `Routines: ${activeCronName}` : 'Routines'
+      : selectedSkillSlug
+        ? activeSkillName ? `Skills: ${activeSkillName}` : 'Skills'
+        : selectedSession?.title ?? 'New chat';
   const headerSubtitle = !connected
     ? 'Connecting'
     : selectedSession?.archivedAt
@@ -603,8 +657,8 @@ export function App() {
 
   const mainPanel = (
     <main className="chat-panel">
-      {isNativeShell && <ChatHeaderScaffold />}
-      {!isNativeShell && !selectedSkillSlug && !selectedCronId && (
+      {isNativeShell && <ChatHeaderScaffold title={headerTitle} />}
+      {!isNativeShell && !selectedSkillSlug && !selectedCronId && !isSettingsOpen && (
         <div className="chat-toolbar">
           <div>
             <div className="chat-toolbar-title">{selectedSession?.title ?? 'New Chat'}</div>
@@ -623,15 +677,19 @@ export function App() {
         </div>
       )}
 
-      {selectedCronId ? (
+      {isSettingsOpen ? (
+        <SettingsPage onBack={() => setIsSettingsOpen(false)} />
+      ) : selectedCronId ? (
         <CronDetailPage
           id={selectedCronId}
           onBack={() => setSelectedCronId(null)}
+          onTitleResolved={setActiveCronName}
         />
       ) : selectedSkillSlug ? (
         <SkillDetailPage
           slug={selectedSkillSlug}
           onOpenInNewSession={handleOpenSkillInNewSession}
+          onTitleResolved={setActiveSkillName}
         />
       ) : (
         <>
@@ -733,13 +791,17 @@ export function App() {
   );
 }
 
-function ChatHeaderScaffold() {
+function ChatHeaderScaffold({ title }: { title?: string }) {
   return (
-    <div className="chat-header-scaffold" aria-hidden="true">
-      <div className="chat-header-band-top" />
+    <div className="chat-header-scaffold">
+      <div className="chat-header-band-top">
+        {title && <span className="chat-header-title">{title}</span>}
+      </div>
+      {/* Second band (tabs) is hidden for launch — bring back when tabs ship.
       <div className="chat-header-band-tabs">
         <div className="chat-header-active-line" />
       </div>
+      */}
     </div>
   );
 }

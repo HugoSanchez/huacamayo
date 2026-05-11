@@ -50,6 +50,12 @@ export class MemoryAuthStore implements AuthStore {
     this.sessionsByTokenHash.set(session.tokenHash, session.id);
   }
 
+  async revokeAuthSession(sessionId: string, revokedAt: string): Promise<void> {
+    const existing = this.sessionsById.get(sessionId);
+    if (!existing) return;
+    this.sessionsById.set(sessionId, { ...existing, revokedAt });
+  }
+
   async getAuthSessionByTokenHash(tokenHash: string): Promise<AuthSessionRecord | null> {
     const id = this.sessionsByTokenHash.get(tokenHash);
     return id ? this.sessionsById.get(id) ?? null : null;

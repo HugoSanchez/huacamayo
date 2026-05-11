@@ -14,6 +14,7 @@ import { registerHealthRoutes } from './routes/health.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
 import { registerRuntimeConfigRoutes } from './routes/runtime-config.ts';
 import { registerInferenceRoutes } from './routes/inference.ts';
+import { registerUsageRoutes } from './routes/usage.ts';
 
 export interface BuildServerOptions {
   config?: BackendConfig;
@@ -52,6 +53,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
     inferenceStore,
     buildClient: options.buildOpenRouterClient,
   });
+  await registerUsageRoutes(app, { authService, inferenceStore });
   return app;
 }
 

@@ -35,10 +35,12 @@ interface TestContext {
   app: Awaited<ReturnType<typeof buildServer>>;
   config: BackendConfig;
   authService: AuthService;
+  authStore: MemoryAuthStore;
   inferenceStore: MemoryInferenceStore;
   sessionToken: string;
   userId: string;
   deviceId: string;
+  entitlementId: string;
 }
 
 async function setup(opts: {
@@ -47,7 +49,8 @@ async function setup(opts: {
 } = {}): Promise<TestContext> {
   const env = { ...baseEnv, ...opts.envOverride };
   const config = getConfig(env);
-  const authService = new AuthService(config, new MemoryAuthStore(), new StubVerifier());
+  const authStore = new MemoryAuthStore();
+  const authService = new AuthService(config, authStore, new StubVerifier());
   const inferenceStore = new MemoryInferenceStore();
   const app = await buildServer({
     config,
@@ -66,10 +69,12 @@ async function setup(opts: {
     app,
     config,
     authService,
+    authStore,
     inferenceStore,
     sessionToken: exchange.sessionToken,
     userId: exchange.user.id,
     deviceId: exchange.device.id,
+    entitlementId: exchange.entitlements[0]?.id ?? '',
   };
 }
 
@@ -386,5 +391,290 @@ describe('POST /v1/chat/completions', () => {
     });
     expect(response.statusCode).toBe(401);
     expect(response.json().error).toBe('invalid_session');
+  });
+
+  test('rejects with 402 spend_limit_exceeded when month-to-date usage meets monthlyUsdLimit', async () => {
+    ctx = await setup({ buildClient: fakeClient('data: [DONE]\n') });
+
+    // Set a $0.50 monthly limit on the user's entitlement.
+    await ctx.authStore.insertEntitlement({
+      id: ctx.entitlementId,
+      userId: ctx.userId,
+      mode: 'managed',
+      status: 'active',
+      monthlyUsdLimit: '0.50',
+      dailyUsdLimit: null,
+      allowedModels: ['anthropic/opus-4.7'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Seed two completed requests this month summing to $0.55 — over the cap.
+    const now = new Date().toISOString();
+    for (const cost of [0.30, 0.25]) {
+      await ctx.inferenceStore.insertRequest({
+        id: `inf_seed_${cost}`,
+        userId: ctx.userId,
+        deviceId: ctx.deviceId,
+        localSessionId: null,
+        provider: 'openrouter',
+        model: 'anthropic/opus-4.7',
+        requestStartedAt: now,
+        requestCompletedAt: now,
+        status: 'completed',
+        inputTokens: 100,
+        outputTokens: 50,
+        cachedTokens: null,
+        reasoningTokens: null,
+        estimatedCostUsd: cost,
+        providerRequestId: null,
+        errorCode: null,
+      });
+    }
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(402);
+    const body = response.json();
+    expect(body.error).toBe('spend_limit_exceeded');
+    expect(body.scope).toBe('monthly');
+    expect(body.limit).toBe(0.5);
+    expect(body.used).toBeCloseTo(0.55);
+  });
+
+  test('rejects with 402 spend_limit_exceeded when day-to-date usage meets dailyUsdLimit', async () => {
+    ctx = await setup({ buildClient: fakeClient('data: [DONE]\n') });
+
+    await ctx.authStore.insertEntitlement({
+      id: ctx.entitlementId,
+      userId: ctx.userId,
+      mode: 'managed',
+      status: 'active',
+      monthlyUsdLimit: '100.00',
+      dailyUsdLimit: '0.10',
+      allowedModels: ['anthropic/opus-4.7'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const now = new Date().toISOString();
+    await ctx.inferenceStore.insertRequest({
+      id: 'inf_seed_today',
+      userId: ctx.userId,
+      deviceId: ctx.deviceId,
+      localSessionId: null,
+      provider: 'openrouter',
+      model: 'anthropic/opus-4.7',
+      requestStartedAt: now,
+      requestCompletedAt: now,
+      status: 'completed',
+      inputTokens: 100,
+      outputTokens: 50,
+      cachedTokens: null,
+      reasoningTokens: null,
+      estimatedCostUsd: 0.12,
+      providerRequestId: null,
+      errorCode: null,
+    });
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(402);
+    expect(response.json().scope).toBe('daily');
+  });
+
+  test('lets the request through when usage is under both limits', async () => {
+    ctx = await setup({ buildClient: fakeClient('data: [DONE]\n') });
+
+    await ctx.authStore.insertEntitlement({
+      id: ctx.entitlementId,
+      userId: ctx.userId,
+      mode: 'managed',
+      status: 'active',
+      monthlyUsdLimit: '10.00',
+      dailyUsdLimit: '1.00',
+      allowedModels: ['anthropic/opus-4.7'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  test('failed inference rows (null cost) do not count toward the limit', async () => {
+    ctx = await setup({ buildClient: fakeClient('data: [DONE]\n') });
+
+    await ctx.authStore.insertEntitlement({
+      id: ctx.entitlementId,
+      userId: ctx.userId,
+      mode: 'managed',
+      status: 'active',
+      monthlyUsdLimit: '0.10',
+      dailyUsdLimit: null,
+      allowedModels: ['anthropic/opus-4.7'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Seed three failed rows. Even though the cap is just $0.10, these have
+    // null cost (failed) so they must not consume any of the budget.
+    const now = new Date().toISOString();
+    for (let i = 0; i < 3; i++) {
+      await ctx.inferenceStore.insertRequest({
+        id: `inf_failed_${i}`,
+        userId: ctx.userId,
+        deviceId: ctx.deviceId,
+        localSessionId: null,
+        provider: 'openrouter',
+        model: 'anthropic/opus-4.7',
+        requestStartedAt: now,
+        requestCompletedAt: now,
+        status: 'failed',
+        inputTokens: null,
+        outputTokens: null,
+        cachedTokens: null,
+        reasoningTokens: null,
+        estimatedCostUsd: null,
+        providerRequestId: null,
+        errorCode: 'provider_error',
+      });
+    }
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  test('returns 429 rate_limit_exceeded after burning through the per-minute cap', async () => {
+    ctx = await setup({
+      envOverride: { MANAGED_RATE_LIMIT_PER_MINUTE: '2' },
+      buildClient: fakeClient('data: [DONE]\n'),
+    });
+
+    // Two requests fit under the cap.
+    const r1 = await ctx.app.inject({
+      method: 'POST', url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: { model: 'anthropic/opus-4.7', messages: [{ role: 'user', content: 'hi' }] },
+    });
+    expect(r1.statusCode).toBe(200);
+    const r2 = await ctx.app.inject({
+      method: 'POST', url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: { model: 'anthropic/opus-4.7', messages: [{ role: 'user', content: 'hi' }] },
+    });
+    expect(r2.statusCode).toBe(200);
+
+    // Third request trips the limiter.
+    const r3 = await ctx.app.inject({
+      method: 'POST', url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: { model: 'anthropic/opus-4.7', messages: [{ role: 'user', content: 'hi' }] },
+    });
+    expect(r3.statusCode).toBe(429);
+    expect(r3.json().error).toBe('rate_limit_exceeded');
+    expect(r3.headers['retry-after']).toBeDefined();
+  });
+
+  test('returns 503 auto_paused after enough consecutive failures', async () => {
+    const error = new OpenRouterError(502, 'provider_error', 'Upstream blew up.');
+    ctx = await setup({
+      envOverride: {
+        MANAGED_BREAKER_THRESHOLD: '2',
+        MANAGED_BREAKER_COOLDOWN_MS: '60000',
+        MANAGED_RATE_LIMIT_PER_MINUTE: '999',
+      },
+      buildClient: failingClient(error),
+    });
+
+    // Two failures arm the breaker.
+    for (let i = 0; i < 2; i++) {
+      const r = await ctx.app.inject({
+        method: 'POST', url: '/v1/chat/completions',
+        headers: { authorization: `Bearer ${ctx.sessionToken}` },
+        payload: { model: 'anthropic/opus-4.7', messages: [{ role: 'user', content: 'hi' }] },
+      });
+      expect(r.statusCode).toBe(502);
+    }
+
+    // Next call is auto-paused.
+    const blocked = await ctx.app.inject({
+      method: 'POST', url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: { model: 'anthropic/opus-4.7', messages: [{ role: 'user', content: 'hi' }] },
+    });
+    expect(blocked.statusCode).toBe(503);
+    expect(blocked.json().error).toBe('auto_paused');
+  });
+
+  test('with null monthlyUsdLimit and null dailyUsdLimit, the request is unconstrained', async () => {
+    ctx = await setup({ buildClient: fakeClient('data: [DONE]\n') });
+    // Default-seeded entitlement already has both limits null. Just confirm
+    // a request goes through even with a fat pre-seeded usage history.
+    const now = new Date().toISOString();
+    await ctx.inferenceStore.insertRequest({
+      id: 'inf_seed_huge',
+      userId: ctx.userId,
+      deviceId: ctx.deviceId,
+      localSessionId: null,
+      provider: 'openrouter',
+      model: 'anthropic/opus-4.7',
+      requestStartedAt: now,
+      requestCompletedAt: now,
+      status: 'completed',
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedTokens: null,
+      reasoningTokens: null,
+      estimatedCostUsd: 9999.99,
+      providerRequestId: null,
+      errorCode: null,
+    });
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 });

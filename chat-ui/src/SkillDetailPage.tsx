@@ -7,9 +7,10 @@ import type { SkillDetailView } from './types';
 interface Props {
   slug: string;
   onOpenInNewSession: (slug: string) => void;
+  onTitleResolved?: (name: string | null) => void;
 }
 
-export function SkillDetailPage({ slug, onOpenInNewSession }: Props) {
+export function SkillDetailPage({ slug, onOpenInNewSession, onTitleResolved }: Props) {
   const [detail, setDetail] = useState<SkillDetailView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -26,6 +27,7 @@ export function SkillDetailPage({ slug, onOpenInNewSession }: Props) {
       .then((next) => {
         if (cancelled) return;
         setDetail(next);
+        onTitleResolved?.(next.name);
       })
       .catch((err: unknown) => {
         if (cancelled) return;

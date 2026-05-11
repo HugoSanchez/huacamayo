@@ -447,7 +447,10 @@ export class HermesSupervisor {
         VERVO_HERMES_CHILD_ARGS: JSON.stringify(this.launch.args),
         VERVO_HERMES_CHILD_CWD: this.launch.cwd ?? '',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // 4th stdio slot opens an IPC channel so the child can detect parent
+      // death via `process.on('disconnect')` instead of polling `ppid` once
+      // per second. Saves a CPU wakeup every second on idle/sleep.
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
 
     child.stdout?.setEncoding('utf8');

@@ -164,4 +164,61 @@ describe('auth routes', () => {
     expect(me.statusCode).toBe(401);
     expect(me.json().error).toBe('invalid_session');
   });
+
+  test('POST /v1/auth/revoke marks the session revoked; subsequent /v1/me returns 401', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const exchange = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/privy/exchange',
+      payload: { privyAccessToken: 'privy-valid-token', deviceLabel: 'Hugo', platform: 'macos' },
+    });
+    const token = exchange.json().session.token;
+
+    // /v1/me works pre-revoke.
+    const meBefore = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `Bearer ${token}` } });
+    expect(meBefore.statusCode).toBe(200);
+
+    // Revoke.
+    const revoke = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/revoke',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(revoke.statusCode).toBe(204);
+
+    // /v1/me is now blocked.
+    const meAfter = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `Bearer ${token}` } });
+    expect(meAfter.statusCode).toBe(401);
+    expect(meAfter.json().error).toBe('invalid_session');
+  });
+
+  test('POST /v1/auth/revoke is idempotent (second call still 204)', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const exchange = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/privy/exchange',
+      payload: { privyAccessToken: 'privy-valid-token', deviceLabel: 'Hugo', platform: 'macos' },
+    });
+    const token = exchange.json().session.token;
+
+    const r1 = await app.inject({ method: 'POST', url: '/v1/auth/revoke', headers: { authorization: `Bearer ${token}` } });
+    expect(r1.statusCode).toBe(204);
+    // Note: after revoke the session lookup still finds the row (just with revokedAt set),
+    // so a second revoke call hits the "already revoked → no-op success" branch.
+    const r2 = await app.inject({ method: 'POST', url: '/v1/auth/revoke', headers: { authorization: `Bearer ${token}` } });
+    expect(r2.statusCode).toBe(204);
+  });
+
+  test('POST /v1/auth/revoke without Authorization returns 401', async () => {
+    const authService = new AuthService(config, new MemoryAuthStore(), new FakePrivyVerifier());
+    app = await buildServer({ config, authService });
+
+    const res = await app.inject({ method: 'POST', url: '/v1/auth/revoke' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('missing_session');
+  });
 });

@@ -86,6 +86,13 @@ export class DrizzleAuthStore implements AuthStore {
       });
   }
 
+  async revokeAuthSession(sessionId: string, revokedAt: string): Promise<void> {
+    await this.db
+      .update(authSessions)
+      .set({ revokedAt: new Date(revokedAt) })
+      .where(eq(authSessions.id, sessionId));
+  }
+
   async getAuthSessionByTokenHash(tokenHash: string): Promise<AuthSessionRecord | null> {
     const rows = await this.db.select().from(authSessions).where(eq(authSessions.tokenHash, tokenHash)).limit(1);
     return rows[0] ? mapAuthSession(rows[0]) : null;
