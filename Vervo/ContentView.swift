@@ -1162,12 +1162,6 @@ private struct SidebarCronRow: View {
     @State private var confirmingDelete = false
     @State private var confirmResetTask: Task<Void, Never>?
 
-    private var deleteIconColor: Color {
-        confirmingDelete
-            ? Color.red.opacity(isDarkMode ? 0.92 : 0.78)
-            : secondaryText
-    }
-
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: 10) {
@@ -1189,16 +1183,27 @@ private struct SidebarCronRow: View {
 
                 Spacer(minLength: 0)
 
-                if isHovered || confirmingDelete {
+                if confirmingDelete {
                     Button(action: handleDeleteTap) {
-                        Image(systemName: "trash")
+                        Text("Confirm")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(Color.red.opacity(isDarkMode ? 0.92 : 0.78))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Click to delete")
+                } else if isHovered {
+                    Button(action: handleDeleteTap) {
+                        Image(systemName: "archivebox")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(deleteIconColor)
+                            .foregroundStyle(secondaryText)
                             .frame(width: 18, height: 18)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(confirmingDelete ? "Click again to delete" : "Delete routine")
+                    .help("Delete routine")
                 }
             }
             .padding(.horizontal, 10)
@@ -1756,6 +1761,8 @@ private struct SidebarFooter: View {
                         Text(sidecarStatusText)
                             .font(.system(size: 11))
                             .foregroundStyle(theme.footerIcon)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     Menu {
                         Button("Sign out", action: onSignOut)

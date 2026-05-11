@@ -67,6 +67,25 @@ export interface ManagedAccountView {
   };
 }
 
+export interface ManagedRuntimeConfig {
+  defaultModel: string;
+  allowedModels: string[];
+}
+
+export interface InferenceRequestPayload {
+  model: string;
+  messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; name?: string }>;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  localSessionId?: string | null;
+}
+
+export interface InferenceStreamResult {
+  body: ReadableStream<Uint8Array>;
+  inferenceRequestId: string | null;
+}
+
 interface ManagedMeResponse {
   user: ManagedBackendUserView;
   device: ManagedBackendDeviceView;
@@ -77,6 +96,18 @@ interface ManagedMeResponse {
 interface ManagedBackendErrorBody {
   error?: string;
   message?: string;
+}
+
+export class ManagedBackendError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = 'ManagedBackendError';
+    this.status = status;
+    this.code = code;
+  }
 }
 
 /**
@@ -193,6 +224,127 @@ export class ManagedBackendClient {
       return view;
     }
   }
+
+  /**
+   * Fetch the backend's published model allowlist + default model. Unauth — the
+   * runtime-config endpoint does not require a session and returns the same
+   * shape for everyone.
+   */
+  async getRuntimeConfig(): Promise<ManagedRuntimeConfig> {
+    if (!this.configured) {
+      throw new ManagedBackendError(503, 'backend_unconfigured', 'Managed backend URL is not configured.');
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/runtime-config`, {
+        headers: { Accept: 'application/json' },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ManagedBackendError(502, 'backend_unreachable', message);
+    }
+
+    if (!response.ok) {
+      const body = await readErrorBody(response);
+      throw new ManagedBackendError(
+        response.status,
+        body.error ?? 'backend_error',
+        body.message ?? `Backend returned HTTP ${response.status}.`,
+      );
+    }
+
+    const body = await response.json() as Partial<ManagedRuntimeConfig>;
+    if (typeof body.defaultModel !== 'string' || !Array.isArray(body.allowedModels)) {
+      throw new ManagedBackendError(502, 'malformed_response', 'Backend runtime-config response is malformed.');
+    }
+    return {
+      defaultModel: body.defaultModel,
+      allowedModels: body.allowedModels.filter((entry): entry is string => typeof entry === 'string'),
+    };
+  }
+
+  /**
+   * Low-level proxy: POSTs the given body verbatim to /v1/chat/completions
+   * with the in-memory bearer token, returns the raw upstream Response so the
+   * caller (the local LLM proxy) can pipe both headers and body unchanged.
+   * No body parsing, no validation — the backend is the authority on schema.
+   */
+  async forwardChatCompletion(body: Record<string, unknown>): Promise<Response> {
+    if (!this.configured) {
+      throw new ManagedBackendError(503, 'backend_unconfigured', 'Managed backend URL is not configured.');
+    }
+    const stored = this.currentSession;
+    if (!stored) {
+      throw new ManagedBackendError(401, 'missing_session', 'No managed session is loaded.');
+    }
+    if (isIsoExpired(stored.expiresAt)) {
+      throw new ManagedBackendError(401, 'expired_session', 'Managed session has expired locally.');
+    }
+
+    return fetch(`${this.baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${stored.token}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream, application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * POST a managed inference request and return the upstream SSE stream so the
+   * caller can pipe bytes downstream without buffering. Uses the in-memory
+   * session token; throws if no session is present or it has expired locally.
+   */
+  async streamInference(payload: InferenceRequestPayload): Promise<InferenceStreamResult> {
+    if (!this.configured) {
+      throw new ManagedBackendError(503, 'backend_unconfigured', 'Managed backend URL is not configured.');
+    }
+
+    const stored = this.currentSession;
+    if (!stored) {
+      throw new ManagedBackendError(401, 'missing_session', 'No managed session is loaded.');
+    }
+    if (isIsoExpired(stored.expiresAt)) {
+      throw new ManagedBackendError(401, 'expired_session', 'Managed session has expired locally.');
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${stored.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ManagedBackendError(502, 'backend_unreachable', message);
+    }
+
+    if (!response.ok) {
+      const errorBody = await readErrorBody(response);
+      throw new ManagedBackendError(
+        response.status,
+        errorBody.error ?? 'backend_error',
+        errorBody.message ?? `Backend returned HTTP ${response.status}.`,
+      );
+    }
+
+    if (!response.body) {
+      throw new ManagedBackendError(502, 'empty_stream', 'Backend inference response had no body.');
+    }
+
+    return {
+      body: response.body,
+      inferenceRequestId: response.headers.get('x-inference-request-id'),
+    };
+  }
 }
 
 function readSessionFromEnv(): ManagedSessionRecord | null {
@@ -216,7 +368,7 @@ async function readErrorBody(response: Response): Promise<ManagedBackendErrorBod
     return await response.json() as ManagedBackendErrorBody;
   } catch {
     return {
-      message: `Managed backend returned HTTP ${response.status}.`,
+      message: `Backend returned HTTP ${response.status}.`,
     };
   }
 }

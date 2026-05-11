@@ -5,6 +5,7 @@ import os from 'node:os';
 import { delimiter, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+import type { RuntimeMode } from '../integrations/runtime-mode.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -133,12 +134,24 @@ function findExecutableOnPath(name: string): string | null {
   return null;
 }
 
+export interface HermesSupervisorOptions {
+  config?: HermesGatewayConfig;
+  launch?: HermesLaunchConfig;
+  runtimeMode?: RuntimeMode;
+  /** Default model for managed mode; written into the managed Hermes config.yaml. */
+  managedDefaultModel?: string;
+}
+
+const DEFAULT_MANAGED_MODEL = 'openai/gpt-5.4';
+
 export class HermesSupervisor {
   private readonly launch: HermesLaunchConfig;
   private readonly hasExplicitBaseUrl: boolean;
   private readonly manualMode: boolean;
   private readonly managedHermesHome: string;
   private readonly templateHermesHome: string;
+  private readonly runtimeMode: RuntimeMode;
+  private readonly managedDefaultModel: string;
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
@@ -151,15 +164,19 @@ export class HermesSupervisor {
   private lastError: string | null = null;
   private logTail: string[] = [];
 
-  constructor(config = getHermesGatewayConfig(), launch = getHermesLaunchConfig()) {
-    this.config = config;
-    this.launch = launch;
+  constructor(options: HermesSupervisorOptions = {}) {
+    this.config = options.config ?? getHermesGatewayConfig();
+    this.launch = options.launch ?? getHermesLaunchConfig();
+    this.runtimeMode = options.runtimeMode ?? 'managed';
+    this.managedDefaultModel = (process.env.VERVO_MANAGED_DEFAULT_MODEL?.trim()
+      || options.managedDefaultModel
+      || DEFAULT_MANAGED_MODEL);
     this.hasExplicitBaseUrl = Boolean(process.env.VERVO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
     this.baseUrlResolved = this.hasExplicitBaseUrl;
-    this.state = launch.command || this.manualMode ? 'idle' : 'unavailable';
+    this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
 
   // The on-disk Hermes home for the gateway we manage (or the template path
@@ -400,6 +417,13 @@ export class HermesSupervisor {
     const gatewayUrl = new URL(this.config.baseUrl);
     const port = gatewayUrl.port || (gatewayUrl.protocol === 'https:' ? '443' : '80');
     const host = gatewayUrl.hostname;
+    // In managed mode, Hermes resolves its "custom" provider's api_key from
+    // OPENAI_API_KEY. The orchestrator's LLM proxy ignores whatever bearer
+    // Hermes sends and substitutes the real managed session token, so the key
+    // here is purely a placeholder to satisfy Hermes' auth check.
+    const managedEnvOverrides = this.runtimeMode === 'managed'
+      ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY?.trim() || 'no-key-required' }
+      : {};
     const env = {
       ...process.env,
       PORT: port,
@@ -412,6 +436,7 @@ export class HermesSupervisor {
       HERMES_HOME: this.managedHermesHome,
       VERVO_HERMES_GATEWAY_URL: this.config.baseUrl,
       ...(this.orchestratorBaseUrl ? { VERVO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
+      ...managedEnvOverrides,
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {
@@ -442,6 +467,44 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.configureManagedMcpServers();
+    this.configureManagedModelOverride();
+  }
+
+  /**
+   * In managed mode, point Hermes at the orchestrator's local LLM proxy
+   * (`/llm/v1`) by writing the `model:` section in the managed profile's
+   * config.yaml. Hermes' `provider: custom` path reads `base_url` straight
+   * from this config (see ~/.hermes/hermes-agent/agent/auxiliary_client.py
+   * resolve_provider_client → custom branch).
+   *
+   * Other config sections (agent, personalities, mcp_servers, etc.) are left
+   * untouched so the user's existing Hermes setup is preserved.
+   */
+  private configureManagedModelOverride(): void {
+    if (this.runtimeMode !== 'managed') return;
+    if (!this.orchestratorBaseUrl) return;
+
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    if (!existsSync(configPath)) return;
+
+    let config: Record<string, unknown> = {};
+    try {
+      const raw = readFileSync(configPath, 'utf8');
+      const parsed = YAML.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        config = parsed as Record<string, unknown>;
+      }
+    } catch {
+      config = {};
+    }
+
+    config.model = {
+      provider: 'custom',
+      base_url: `${this.orchestratorBaseUrl}/llm/v1`,
+      default: this.managedDefaultModel,
+    };
+
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
   private configureManagedMcpServers(): void {

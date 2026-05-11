@@ -39,3 +39,22 @@ export const entitlements = pgTable('entitlements', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
 });
+
+export const inferenceRequests = pgTable('inference_requests', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  deviceId: text('device_id').notNull(),
+  localSessionId: text('local_session_id'),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  requestStartedAt: timestamp('request_started_at', { withTimezone: true }).notNull(),
+  requestCompletedAt: timestamp('request_completed_at', { withTimezone: true }),
+  status: text('status').notNull(),
+  inputTokens: text('input_tokens'),
+  outputTokens: text('output_tokens'),
+  cachedTokens: text('cached_tokens'),
+  reasoningTokens: text('reasoning_tokens'),
+  estimatedCostUsd: text('estimated_cost_usd'),
+  providerRequestId: text('provider_request_id'),
+  errorCode: text('error_code'),
+});

@@ -377,7 +377,15 @@ export function CronDetailPage({ id, onBack }: Props) {
             <div className="skill-detail-actions cron-detail-actions">
               <button
                 type="button"
-                className="cron-detail-secondary"
+                className="skill-detail-action is-primary"
+                onClick={handleRunNow}
+                disabled={isRunningNow}
+              >
+                {isRunningNow ? 'Running…' : 'Run now'}
+              </button>
+              <button
+                type="button"
+                className="cron-detail-secondary cron-detail-edit-chat"
                 onClick={() => { void handleEditInChat(); }}
                 disabled={isOpeningInChat}
               >
@@ -386,14 +394,6 @@ export function CronDetailPage({ id, onBack }: Props) {
                   <path d="M11 4.5 12.5 3 13 2.5 13.5 3 14 3.5 12.5 5 11 4.5z" />
                 </svg>
                 <span>{isOpeningInChat ? 'Opening…' : 'Edit in chat'}</span>
-              </button>
-              <button
-                type="button"
-                className="skill-detail-action is-primary cron-detail-run-now"
-                onClick={handleRunNow}
-                disabled={isRunningNow}
-              >
-                {isRunningNow ? 'Running…' : 'Run now'}
               </button>
             </div>
 
@@ -601,15 +601,20 @@ function buildScheduleMetaLine(cron: CronJobView): string {
   const humanized = humanizeSchedule(cron.schedule_display ?? '');
   if (humanized) parts.push(humanized);
   if (cron.state === 'paused') {
-    parts.push('paused');
+    parts.push('Paused');
   } else if (cron.next_run_at) {
-    parts.push(formatNextRun(cron.next_run_at));
+    parts.push(capitalize(formatNextRun(cron.next_run_at)));
   }
   if (cron.last_run_at) {
     const failed = cron.last_status === 'error' ? ' (failed)' : '';
-    parts.push(`last run ${formatRelative(cron.last_run_at)}${failed}`);
+    parts.push(`Last run ${formatRelative(cron.last_run_at)}${failed}`);
   }
   return parts.join(' · ');
+}
+
+function capitalize(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function extractResponseSection(markdown: string): string | null {
