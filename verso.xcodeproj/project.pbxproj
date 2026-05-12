@@ -97,6 +97,7 @@
 				A10000070000000000000001 /* Sources */,
 				A10000040000000000000001 /* Frameworks */,
 				A10000070000000000000002 /* Resources */,
+				A100000B0000000000000002 /* Bundle Runtime Components */,
 			);
 			buildRules = (
 			);
@@ -155,6 +156,21 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "export PATH=\"/usr/local/bin:/opt/homebrew/bin:$PATH\"\ncd \"$SRCROOT/chat-ui\"\nif [ ! -d node_modules ]; then\n  npm install\nfi\nnpm run build\nrm -rf \"$SRCROOT/verso/chat-ui\"\ncp -r dist \"$SRCROOT/verso/chat-ui\"\n";
+		};
+		A100000B0000000000000002 /* Bundle Runtime Components */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Runtime Components";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/scripts/copy-runtime-bundles.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -323,7 +339,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.verso.app";
+				PRODUCT_BUNDLE_IDENTIFIER = "xyz.itsverso.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -349,7 +365,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.verso.app";
+				PRODUCT_BUNDLE_IDENTIFIER = "xyz.itsverso.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
