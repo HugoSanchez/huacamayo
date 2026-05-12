@@ -109,10 +109,6 @@ struct ContentView: View {
     @State private var pendingCronOpen: CronOpenRequest?
     @State private var pendingSettingsOpen: SettingsOpenRequest?
     @State private var hasCompletedInitialSelection = false
-    // The sidebar refresh timer is managed manually (cancel on system sleep,
-    // restart on wake) so that closing the laptop lid lets the CPU actually
-    // sleep instead of waking every 5s to refresh a hidden window.
-    @State private var sidebarRefreshCancellable: AnyCancellable?
     @State private var isSystemAsleep = false
 
     init(sidecar: SidecarManager, managedSessionStore: ManagedSessionStore) {
@@ -258,6 +254,15 @@ struct ContentView: View {
                 onCronsChanged: {
                     Task { await refreshCrons() }
                 },
+                onConnectionsChanged: {
+                    Task { await refreshConnections() }
+                },
+                onSessionsChanged: {
+                    Task { await refreshSessions() }
+                },
+                onSkillsChanged: {
+                    Task { await refreshSkills() }
+                },
                 onSignOutRequested: {
                     managedSessionStore.clearSession()
                 }
@@ -333,22 +338,15 @@ struct ContentView: View {
             await refreshSkills()
             await refreshCrons()
         }
-        .onAppear {
-            startSidebarTimer()
-        }
-        .onDisappear {
-            stopSidebarTimer()
-        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in
-            // Laptop is about to sleep (lid close, idle sleep, etc.). Cancel
-            // the polling timer so it doesn't keep waking the CPU during
-            // sleep. WebView pause is handled separately by ChatWebView.
             isSystemAsleep = true
-            stopSidebarTimer()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
+            // One-shot resync on wake so the sidebar reflects anything that
+            // happened externally (e.g. a routine fired, a connection was
+            // revoked from another device). Steady-state refresh is fully
+            // event-driven via the chatBridge `*Changed` messages.
             isSystemAsleep = false
-            startSidebarTimer()
             Task {
                 await refreshSessions()
                 await refreshConnections()
@@ -420,26 +418,6 @@ struct ContentView: View {
         } catch {
             // Keep the last known list when refresh fails.
         }
-    }
-
-    private func startSidebarTimer() {
-        guard sidebarRefreshCancellable == nil else { return }
-        sidebarRefreshCancellable = Timer.publish(every: 5, on: .main, in: .common)
-            .autoconnect()
-            .sink { _ in
-                guard sidecarPort != nil else { return }
-                Task {
-                    await refreshSessions()
-                    await refreshConnections()
-                    await refreshSkills()
-                    await refreshCrons()
-                }
-            }
-    }
-
-    private func stopSidebarTimer() {
-        sidebarRefreshCancellable?.cancel()
-        sidebarRefreshCancellable = nil
     }
 
     @MainActor

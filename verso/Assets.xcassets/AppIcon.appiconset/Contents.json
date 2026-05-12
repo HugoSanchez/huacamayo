@@ -11,8 +11,5 @@
     { "idiom" : "mac", "scale" : "1x", "size" : "512x512", "filename" : "icon_512x512.png" },
     { "idiom" : "mac", "scale" : "2x", "size" : "512x512", "filename" : "icon_512x512@2x.png" }
   ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
-  }
+  "info" : { "author" : "xcode", "version" : 1 }
 }

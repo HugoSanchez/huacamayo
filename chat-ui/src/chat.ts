@@ -11,6 +11,14 @@ import type {
 
 let sidecarPort: number | null = null;
 
+// Tell the native host that a piece of sidebar state changed. The Swift shell
+// listens via WKScriptMessageHandler('chatBridge') and refetches the
+// corresponding endpoint. Using this on every mutating helper means the
+// sidebar stays in sync without a polling timer.
+function notifyHost(type: 'sessionsChanged' | 'skillsChanged' | 'connectionsChanged'): void {
+  window.webkit?.messageHandlers?.chatBridge?.postMessage({ type });
+}
+
 export function setSidecarPort(port: number) {
   sidecarPort = port;
 }
@@ -34,6 +42,7 @@ export async function createChatSession(title?: string): Promise<ChatSessionSumm
     throw new Error(await readError(res, 'Failed to create chat session'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
+  notifyHost('sessionsChanged');
   return body.session;
 }
 
@@ -54,6 +63,7 @@ export async function archiveChatSession(sessionId: string): Promise<ChatSession
     throw new Error(await readError(res, 'Failed to archive chat session'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
+  notifyHost('sessionsChanged');
   return body.session;
 }
 
@@ -65,6 +75,7 @@ export async function unarchiveChatSession(sessionId: string): Promise<ChatSessi
     throw new Error(await readError(res, 'Failed to restore chat session'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
+  notifyHost('sessionsChanged');
   return body.session;
 }
 
@@ -225,6 +236,7 @@ export async function toggleSkill(slug: string, enabled: boolean): Promise<Skill
     throw new Error(await readError(res, 'Failed to toggle skill'));
   }
   const body = await res.json() as { skill: SkillSummaryView };
+  notifyHost('skillsChanged');
   return body.skill;
 }
 
@@ -325,6 +337,7 @@ export async function pinSkill(slug: string, pinned: boolean): Promise<SkillSumm
     throw new Error(await readError(res, 'Failed to pin skill'));
   }
   const body = await res.json() as { skill: SkillSummaryView };
+  notifyHost('skillsChanged');
   return body.skill;
 }
 
