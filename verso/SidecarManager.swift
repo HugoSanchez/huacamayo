@@ -282,7 +282,7 @@ final class SidecarManager: ObservableObject {
             throw SidecarError.directoryNotFound(serverDir)
         }
 
-        guard let nodePath = Self.findExecutable("node") else {
+        guard let nodePath = Self.nodePath() else {
             throw SidecarError.executableNotFound("node")
         }
 
@@ -318,6 +318,12 @@ final class SidecarManager: ObservableObject {
             env["VERSO_BACKEND_URL"] = "https://verso-backend-2lg3.onrender.com"
         }
         #endif
+        // Release builds also point the orchestrator at the bundled Python /
+        // Hermes / wheels so it can build the user's venv from offline files
+        // on first launch — no `brew install python` and no PyPI access
+        // required. Debug builds leave these unset so HermesSupervisor falls
+        // back to the developer's existing ~/.hermes install.
+        Self.applyBundledRuntimeEnv(&env)
         if let managedSession, !managedSession.isExpired {
             env["VERSO_MANAGED_SESSION_TOKEN"] = managedSession.token
             env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = managedSession.expiresAt
@@ -533,6 +539,55 @@ final class SidecarManager: ObservableObject {
         }
 
         return nil
+    }
+
+    /// Resolve which `node` binary to run.
+    /// Release builds ship a universal `node` at Resources/node/bin/node, so
+    /// friends without Homebrew/system Node still launch correctly. Debug
+    /// builds fall back to the developer's system Node so daily Cmd+R doesn't
+    /// require running scripts/build-runtime-bundles.sh first.
+    private static func nodePath() -> String? {
+        if let bundled = Bundle.main.resourcePath {
+            let bundledNode = (bundled as NSString).appendingPathComponent("node/bin/node")
+            if FileManager.default.isExecutableFile(atPath: bundledNode) {
+                return bundledNode
+            }
+        }
+        return findExecutable("node")
+    }
+
+    /// Wire env vars that tell the orchestrator where the bundled Hermes
+    /// runtime lives, plus the per-user runtime directory the orchestrator
+    /// creates the venv inside. Only fires when the bundled artifacts are
+    /// actually present (Release builds; Debug builds leave the env clean
+    /// and HermesSupervisor falls back to the ~/.hermes install).
+    private static func applyBundledRuntimeEnv(_ env: inout [String: String]) {
+        guard let resources = Bundle.main.resourcePath else { return }
+        let pythonDir = (resources as NSString).appendingPathComponent("python")
+        let wheelsDir = (resources as NSString).appendingPathComponent("wheels")
+        let defaultsDir = (resources as NSString).appendingPathComponent("hermes-defaults")
+        let versionFile = (resources as NSString).appendingPathComponent("BUNDLE_VERSION")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: pythonDir),
+              fm.fileExists(atPath: wheelsDir),
+              fm.fileExists(atPath: defaultsDir) else {
+            return
+        }
+
+        let appSupport = (NSHomeDirectory() as NSString)
+            .appendingPathComponent("Library/Application Support/Verso")
+        let runtimeDir = (appSupport as NSString).appendingPathComponent("runtime")
+        let hermesHome = (appSupport as NSString).appendingPathComponent("hermes-home")
+
+        env["VERSO_BUNDLED_PYTHON_DIR"] = pythonDir
+        env["VERSO_BUNDLED_WHEELS_DIR"] = wheelsDir
+        env["VERSO_BUNDLED_DEFAULTS"] = defaultsDir
+        env["VERSO_RUNTIME_DIR"] = runtimeDir
+        env["VERSO_HERMES_HOME"] = hermesHome
+
+        if let bundleVersion = try? String(contentsOfFile: versionFile, encoding: .utf8) {
+            env["VERSO_BUNDLE_VERSION"] = bundleVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     /// Path to the sidecar package directory.

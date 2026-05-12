@@ -6,6 +6,13 @@ import { delimiter, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import type { RuntimeMode } from '../integrations/runtime-mode.ts';
+import {
+  ensureRuntimeVenv,
+  getBundledHermesBin,
+  getBundledVenvPython,
+  isBundledRuntime,
+  seedHermesHomeFromBundle,
+} from './runtime-bootstrap.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -107,6 +114,12 @@ function parseLaunchArgs(raw: string | undefined): string[] {
 }
 
 function detectInstalledHermesCommand(): string | null {
+  // In Release builds the orchestrator owns a private venv it manages itself,
+  // so always point at that path — even if it doesn't exist yet. ensureReady()
+  // creates the venv before spawn.
+  const bundled = getBundledHermesBin();
+  if (bundled) return bundled;
+
   const home = process.env.HOME?.trim();
   const candidates = [
     home ? join(home, '.local', 'bin', 'hermes') : null,
@@ -370,6 +383,22 @@ export class HermesSupervisor {
     if (this.isChildRunning() && await this.ping(500)) {
       this.noteReady();
       return;
+    }
+
+    // First-launch bootstrap (Release builds only): build the user venv from
+    // bundled Python + offline wheels, and seed hermes-home from bundled
+    // config templates. No-op when the bundled-runtime env vars aren't set
+    // (Debug builds use the developer's existing ~/.hermes install).
+    if (isBundledRuntime()) {
+      this.state = 'starting';
+      try {
+        await ensureRuntimeVenv();
+        seedHermesHomeFromBundle();
+      } catch (error) {
+        this.lastError = `Failed to prepare bundled runtime: ${error instanceof Error ? error.message : String(error)}`;
+        this.state = 'error';
+        throw new Error(this.lastError);
+      }
     }
 
     await this.ensureSpawnTargetAvailable();
@@ -719,7 +748,10 @@ async function allocatePort(): Promise<number> {
 }
 
 function getTemplateHermesHome(): string {
-  return process.env.HERMES_HOME?.trim() || join(os.homedir(), '.hermes');
+  // In Release the seed-defaults live next to the app bundle, not under ~/.hermes.
+  return process.env.VERSO_BUNDLED_DEFAULTS?.trim()
+    || process.env.HERMES_HOME?.trim()
+    || join(os.homedir(), '.hermes');
 }
 
 function getManagedHermesHome(templateHome: string): string {
@@ -735,6 +767,10 @@ function resolveHermesRoot(home: string): string {
 }
 
 function resolveHermesPython(templateHome: string): string | null {
+  // In Release the bundled-runtime venv owns Python; prefer it.
+  const bundledVenvPython = getBundledVenvPython();
+  if (bundledVenvPython && existsSync(bundledVenvPython)) return bundledVenvPython;
+
   const candidate = join(resolveHermesRoot(templateHome), 'hermes-agent', 'venv', 'bin', 'python');
   return existsSync(candidate) ? candidate : null;
 }
