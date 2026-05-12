@@ -6,7 +6,22 @@
     <false/>
     <key>com.apple.security.network.client</key>
     <true/>
+    <!-- Node's V8 needs JIT (allow-jit) plus the ability to map JIT pages
+         as writable+executable (allow-unsigned-executable-memory). -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Python loads C-extension .so files from the bundled distribution and
+         from the user's venv (e.g. pydantic-core). Hardened runtime would
+         normally refuse to load unsigned dylibs into our process, so we
+         disable that check. -->
     <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Python honors PYTHONHOME/PYTHONPATH-style vars; hardened runtime
+         strips them by default. The bundled CPython also reads DYLD_* vars
+         to locate its embedded libpython. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
 </dict>
 </plist>
