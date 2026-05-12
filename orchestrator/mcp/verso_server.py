@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vervo MCP bridge for Hermes.
+"""verso MCP bridge for Hermes.
 
 This server exposes a small set of app-coordination tools over stdio so Hermes can
 request connections and inspect connection state without knowing anything about the
@@ -19,13 +19,13 @@ import mcp.types as types
 from mcp.server.fastmcp import FastMCP
 
 
-SERVER_NAME = "vervo"
-ORCHESTRATOR_BASE_URL = os.environ.get("VERVO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
+SERVER_NAME = "verso"
+ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
 
 mcp = FastMCP(
     SERVER_NAME,
     instructions=(
-        "Vervo app bridge. Use search_toolkits to find the right app first when needed, "
+        "verso app bridge. Use search_toolkits to find the right app first when needed, "
         "then request_connection/list_connections/get_connection_status for auth and connection state. "
         "For Composio-backed apps, use "
         "search_composio_tools to find the right tool, get_composio_tool_schemas to inspect "
@@ -41,10 +41,10 @@ def request_connection(toolkit: str, reason: str | None = None) -> types.CallToo
     Use this when the user explicitly asks Hermes to connect or authorize a service.
     The toolkit input can be an exact Composio slug like "googlecalendar" or a human name
     like "Google Calendar" when it resolves unambiguously.
-    After calling this tool, tell the user to use the Vervo connection card. Do not paste
+    After calling this tool, tell the user to use the verso connection card. Do not paste
     authentication URLs into the chat.
     Returns structured connection request data including the request id, current status,
-    and enough metadata for Vervo to render a connect button.
+    and enough metadata for verso to render a connect button.
     """
 
     del reason
@@ -101,7 +101,7 @@ def search_toolkits(query: str, limit: int | None = None) -> types.CallToolResul
 
 @mcp.tool()
 def list_connections() -> types.CallToolResult:
-    """List the user's known Vervo connections and whether they are active."""
+    """List the user's known verso connections and whether they are active."""
 
     payload = _request("GET", "/connections")
     return _structured_result(payload)
@@ -154,7 +154,7 @@ def get_composio_tool_schemas(tool_slugs: list[str]) -> types.CallToolResult:
 
 @mcp.tool()
 def execute_composio_tool(tool_slug: str, arguments: dict[str, Any] | None = None) -> types.CallToolResult:
-    """Execute a Composio-backed tool through Vervo's bridge.
+    """Execute a Composio-backed tool through verso's bridge.
 
     Use this only after identifying the right tool slug and argument schema. The result is the
     raw Composio execution payload: data, error, and logId.
@@ -173,7 +173,7 @@ def execute_composio_tool(tool_slug: str, arguments: dict[str, Any] | None = Non
 
 def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     if not ORCHESTRATOR_BASE_URL:
-        raise RuntimeError("VERVO_ORCHESTRATOR_BASE_URL is not set")
+        raise RuntimeError("VERSO_ORCHESTRATOR_BASE_URL is not set")
 
     request = urllib.request.Request(
         f"{ORCHESTRATOR_BASE_URL}{path}",
@@ -196,7 +196,7 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict
         details = exc.read().decode("utf-8", errors="replace").strip()
         raise RuntimeError(details or f"HTTP {exc.code} while calling {path}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"Failed to reach Vervo orchestrator at {ORCHESTRATOR_BASE_URL}") from exc
+        raise RuntimeError(f"Failed to reach verso orchestrator at {ORCHESTRATOR_BASE_URL}") from exc
 
 
 def _structured_result(payload: dict[str, Any]) -> types.CallToolResult:

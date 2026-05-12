@@ -37,9 +37,9 @@ struct ChatWebView: NSViewRepresentable {
         config.userContentController.addUserScript(WKUserScript(
             source: """
             (function() {
-              if (window.__vervoBridgeInstalled) return;
-              window.__vervoBridgeInstalled = true;
-              window.__vervoPendingSidecarPort = null;
+              if (window.__versoBridgeInstalled) return;
+              window.__versoBridgeInstalled = true;
+              window.__versoPendingSidecarPort = null;
               var assignedHandler = null;
 
               Object.defineProperty(window, 'setSidecarPort', {
@@ -48,43 +48,43 @@ struct ChatWebView: NSViewRepresentable {
                 get: function() { return assignedHandler; },
                 set: function(fn) {
                   assignedHandler = fn;
-                  var pending = window.__vervoPendingSidecarPort;
+                  var pending = window.__versoPendingSidecarPort;
                   if (typeof pending === 'number' && typeof assignedHandler === 'function') {
                     try { assignedHandler(pending); } catch (_) {}
                   }
                 }
               });
 
-              window.__vervoApplySidecarPort = function(port) {
-                window.__vervoPendingSidecarPort = port;
+              window.__versoApplySidecarPort = function(port) {
+                window.__versoPendingSidecarPort = port;
               if (typeof assignedHandler === 'function') {
                 try { assignedHandler(port); } catch (_) {}
               }
               };
 
-              window.__vervoShellMode = 'native';
-              window.__vervoPendingSelectedSessionId = null;
-              window.__vervoApplySelectedSession = function(sessionId) {
-                window.__vervoPendingSelectedSessionId = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
-                window.dispatchEvent(new CustomEvent('vervo:select-session', {
-                  detail: { sessionId: window.__vervoPendingSelectedSessionId }
+              window.__versoShellMode = 'native';
+              window.__versoPendingSelectedSessionId = null;
+              window.__versoApplySelectedSession = function(sessionId) {
+                window.__versoPendingSelectedSessionId = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
+                window.dispatchEvent(new CustomEvent('verso:select-session', {
+                  detail: { sessionId: window.__versoPendingSelectedSessionId }
                 }));
               };
 
-              window.__vervoPendingCatalogOpen = false;
-              window.__vervoApplyCatalogState = function(open) {
+              window.__versoPendingCatalogOpen = false;
+              window.__versoApplyCatalogState = function(open) {
                 var next = !!open;
-                window.__vervoPendingCatalogOpen = next;
-                window.dispatchEvent(new CustomEvent('vervo:toggle-catalog', {
+                window.__versoPendingCatalogOpen = next;
+                window.dispatchEvent(new CustomEvent('verso:toggle-catalog', {
                   detail: { open: next }
                 }));
               };
 
-              window.__vervoPendingSkillsCatalogOpen = false;
-              window.__vervoApplySkillsCatalogState = function(open) {
+              window.__versoPendingSkillsCatalogOpen = false;
+              window.__versoApplySkillsCatalogState = function(open) {
                 var next = !!open;
-                window.__vervoPendingSkillsCatalogOpen = next;
-                window.dispatchEvent(new CustomEvent('vervo:toggle-skills-catalog', {
+                window.__versoPendingSkillsCatalogOpen = next;
+                window.dispatchEvent(new CustomEvent('verso:toggle-skills-catalog', {
                   detail: { open: next }
                 }));
               };
@@ -130,7 +130,7 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
-        let selectedSessionToken = selectedSessionId ?? "__vervo_nil_session__"
+        let selectedSessionToken = selectedSessionId ?? "__verso_nil_session__"
         if selectedSessionToken != context.coordinator.lastInjectedSelectedSessionToken {
             context.coordinator.pendingSelectedSessionId = selectedSessionId
             if context.coordinator.pageLoaded {
@@ -250,7 +250,7 @@ struct ChatWebView: NSViewRepresentable {
         func injectSystemSleep() {
             guard let webView, pageLoaded else { return }
             webView.evaluateJavaScript(
-                "window.dispatchEvent(new CustomEvent('vervo:system-sleep'));",
+                "window.dispatchEvent(new CustomEvent('verso:system-sleep'));",
                 completionHandler: nil
             )
         }
@@ -258,7 +258,7 @@ struct ChatWebView: NSViewRepresentable {
         func injectSystemWake() {
             guard let webView, pageLoaded else { return }
             webView.evaluateJavaScript(
-                "window.dispatchEvent(new CustomEvent('vervo:system-wake'));",
+                "window.dispatchEvent(new CustomEvent('verso:system-wake'));",
                 completionHandler: nil
             )
         }
@@ -314,14 +314,14 @@ struct ChatWebView: NSViewRepresentable {
             guard let webView else { return }
             let js = """
             (function() {
-              window.__vervoSidecarPort = \(port);
-              if (typeof window.__vervoApplySidecarPort === 'function') {
-                window.__vervoApplySidecarPort(\(port));
+              window.__versoSidecarPort = \(port);
+              if (typeof window.__versoApplySidecarPort === 'function') {
+                window.__versoApplySidecarPort(\(port));
               }
               if (typeof window.setSidecarPort === 'function') {
                 window.setSidecarPort(\(port));
               }
-              window.dispatchEvent(new CustomEvent('vervo:sidecar-port', { detail: { port: \(port) } }));
+              window.dispatchEvent(new CustomEvent('verso:sidecar-port', { detail: { port: \(port) } }));
             })();
             """
             webView.evaluateJavaScript(js) { _, error in
@@ -339,9 +339,9 @@ struct ChatWebView: NSViewRepresentable {
             let sessionLiteral = sessionId.map { "'\($0.jsEscaped)'" } ?? "null"
             let js = """
             (function() {
-              window.__vervoPendingSelectedSessionId = \(sessionLiteral);
-              if (typeof window.__vervoApplySelectedSession === 'function') {
-                window.__vervoApplySelectedSession(\(sessionLiteral));
+              window.__versoPendingSelectedSessionId = \(sessionLiteral);
+              if (typeof window.__versoApplySelectedSession === 'function') {
+                window.__versoApplySelectedSession(\(sessionLiteral));
               }
             })();
             """
@@ -352,16 +352,16 @@ struct ChatWebView: NSViewRepresentable {
             }
 
             pendingSelectedSessionId = sessionId
-            lastInjectedSelectedSessionToken = sessionId ?? "__vervo_nil_session__"
+            lastInjectedSelectedSessionToken = sessionId ?? "__verso_nil_session__"
         }
 
         func injectCatalogState(_ open: Bool) {
             guard let webView else { return }
             let js = """
             (function() {
-              window.__vervoPendingCatalogOpen = \(open ? "true" : "false");
-              if (typeof window.__vervoApplyCatalogState === 'function') {
-                window.__vervoApplyCatalogState(\(open ? "true" : "false"));
+              window.__versoPendingCatalogOpen = \(open ? "true" : "false");
+              if (typeof window.__versoApplyCatalogState === 'function') {
+                window.__versoApplyCatalogState(\(open ? "true" : "false"));
               }
             })();
             """
@@ -381,7 +381,7 @@ struct ChatWebView: NSViewRepresentable {
                 .replacingOccurrences(of: "'", with: "\\'")
             let js = """
             (function() {
-              window.dispatchEvent(new CustomEvent('vervo:open-cron-detail', {
+              window.dispatchEvent(new CustomEvent('verso:open-cron-detail', {
                 detail: { id: '\(escapedId)' }
               }));
             })();
@@ -398,7 +398,7 @@ struct ChatWebView: NSViewRepresentable {
             guard let webView else { return }
             let js = """
             (function() {
-              window.dispatchEvent(new CustomEvent('vervo:open-settings'));
+              window.dispatchEvent(new CustomEvent('verso:open-settings'));
             })();
             """
             webView.evaluateJavaScript(js) { _, error in
@@ -413,9 +413,9 @@ struct ChatWebView: NSViewRepresentable {
             guard let webView else { return }
             let js = """
             (function() {
-              window.__vervoPendingSkillsCatalogOpen = \(open ? "true" : "false");
-              if (typeof window.__vervoApplySkillsCatalogState === 'function') {
-                window.__vervoApplySkillsCatalogState(\(open ? "true" : "false"));
+              window.__versoPendingSkillsCatalogOpen = \(open ? "true" : "false");
+              if (typeof window.__versoApplySkillsCatalogState === 'function') {
+                window.__versoApplySkillsCatalogState(\(open ? "true" : "false"));
               }
             })();
             """

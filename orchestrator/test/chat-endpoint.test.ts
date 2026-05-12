@@ -6,14 +6,14 @@ describe('Chat HTTP Endpoints', () => {
   let server: http.Server | null = null;
   let port = 0;
   const envSnapshot = {
-    VERVO_HERMES_MANAGED: process.env.VERVO_HERMES_MANAGED,
-    VERVO_CHAT_STORE_PATH: process.env.VERVO_CHAT_STORE_PATH,
+    VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
+    VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
     COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
   };
 
   beforeAll(async () => {
-    process.env.VERVO_HERMES_MANAGED = 'false';
-    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-endpoint-${process.pid}.sqlite`;
+    process.env.VERSO_HERMES_MANAGED = 'false';
+    process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-endpoint-${process.pid}.sqlite`;
     delete process.env.COMPOSIO_API_KEY;
     const result = await startServer({ port: 0 });
     server = result.server;
@@ -25,8 +25,8 @@ describe('Chat HTTP Endpoints', () => {
       server.close();
       server = null;
     }
-    process.env.VERVO_HERMES_MANAGED = envSnapshot.VERVO_HERMES_MANAGED;
-    process.env.VERVO_CHAT_STORE_PATH = envSnapshot.VERVO_CHAT_STORE_PATH;
+    process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
+    process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
     process.env.COMPOSIO_API_KEY = envSnapshot.COMPOSIO_API_KEY;
   });
 

@@ -16,21 +16,21 @@ describe('Managed account routes', () => {
   let envSnapshot: Record<string, string | undefined> = {};
 
   beforeAll(async () => {
-    tempDir = mkdtempSync(path.join(os.tmpdir(), 'vervo-managed-account-'));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), 'verso-managed-account-'));
     envSnapshot = {
-      VERVO_BACKEND_URL: process.env.VERVO_BACKEND_URL,
-      VERVO_CHAT_STORE_PATH: process.env.VERVO_CHAT_STORE_PATH,
-      VERVO_MANAGED_SESSION_TOKEN: process.env.VERVO_MANAGED_SESSION_TOKEN,
-      VERVO_MANAGED_SESSION_EXPIRES_AT: process.env.VERVO_MANAGED_SESSION_EXPIRES_AT,
-      VERVO_MANAGED_USER_ID: process.env.VERVO_MANAGED_USER_ID,
+      VERSO_BACKEND_URL: process.env.VERSO_BACKEND_URL,
+      VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
+      VERSO_MANAGED_SESSION_TOKEN: process.env.VERSO_MANAGED_SESSION_TOKEN,
+      VERSO_MANAGED_SESSION_EXPIRES_AT: process.env.VERSO_MANAGED_SESSION_EXPIRES_AT,
+      VERSO_MANAGED_USER_ID: process.env.VERSO_MANAGED_USER_ID,
     };
 
     backendPort = await allocatePort();
-    process.env.VERVO_BACKEND_URL = `http://127.0.0.1:${backendPort}`;
-    process.env.VERVO_CHAT_STORE_PATH = path.join(tempDir, 'chat.sqlite');
-    delete process.env.VERVO_MANAGED_SESSION_TOKEN;
-    delete process.env.VERVO_MANAGED_SESSION_EXPIRES_AT;
-    delete process.env.VERVO_MANAGED_USER_ID;
+    process.env.VERSO_BACKEND_URL = `http://127.0.0.1:${backendPort}`;
+    process.env.VERSO_CHAT_STORE_PATH = path.join(tempDir, 'chat.sqlite');
+    delete process.env.VERSO_MANAGED_SESSION_TOKEN;
+    delete process.env.VERSO_MANAGED_SESSION_EXPIRES_AT;
+    delete process.env.VERSO_MANAGED_USER_ID;
 
     backendServer = await startFakeBackend(backendPort);
     const result = await startServer({ port: 0 });
@@ -50,11 +50,11 @@ describe('Managed account routes', () => {
       backendServer = null;
     }
 
-    process.env.VERVO_BACKEND_URL = envSnapshot.VERVO_BACKEND_URL;
-    process.env.VERVO_CHAT_STORE_PATH = envSnapshot.VERVO_CHAT_STORE_PATH;
-    process.env.VERVO_MANAGED_SESSION_TOKEN = envSnapshot.VERVO_MANAGED_SESSION_TOKEN;
-    process.env.VERVO_MANAGED_SESSION_EXPIRES_AT = envSnapshot.VERVO_MANAGED_SESSION_EXPIRES_AT;
-    process.env.VERVO_MANAGED_USER_ID = envSnapshot.VERVO_MANAGED_USER_ID;
+    process.env.VERSO_BACKEND_URL = envSnapshot.VERSO_BACKEND_URL;
+    process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
+    process.env.VERSO_MANAGED_SESSION_TOKEN = envSnapshot.VERSO_MANAGED_SESSION_TOKEN;
+    process.env.VERSO_MANAGED_SESSION_EXPIRES_AT = envSnapshot.VERSO_MANAGED_SESSION_EXPIRES_AT;
+    process.env.VERSO_MANAGED_USER_ID = envSnapshot.VERSO_MANAGED_USER_ID;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -136,7 +136,7 @@ async function startFakeBackend(port: number): Promise<http.Server> {
         },
         device: {
           id: 'dev_test_123',
-          label: 'Vervo for macOS',
+          label: 'verso for macOS',
           platform: 'macos',
           lastSeenAt: new Date().toISOString(),
         },

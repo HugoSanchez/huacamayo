@@ -63,7 +63,7 @@ export function LoginFlow() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           privyAccessToken: accessToken,
-          deviceLabel: 'Vervo for macOS',
+          deviceLabel: 'verso for macOS',
           platform: 'macos',
           email: user?.email?.address ?? null,
           displayName: null,

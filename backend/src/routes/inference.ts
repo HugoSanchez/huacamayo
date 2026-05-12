@@ -237,7 +237,7 @@ function defaultClientFactory(config: BackendConfig): OpenRouterClient {
   return new OpenRouterClient({
     apiKey: config.OPENROUTER_API_KEY,
     appUrl: config.WEB_BASE_URL ?? undefined,
-    appTitle: 'Vervo',
+    appTitle: 'verso',
   });
 }
 

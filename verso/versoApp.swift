@@ -2,13 +2,13 @@ import SwiftUI
 import AppKit
 
 @main
-struct VervoApp: App {
+struct versoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var sidecar = SidecarManager()
     @StateObject private var managedSessionStore = ManagedSessionStore()
 
     var body: some Scene {
-        Window("Vervo", id: "main") {
+        Window("verso", id: "main") {
             RootView(sidecar: sidecar, managedSessionStore: managedSessionStore)
                 .onAppear {
                     appDelegate.sidecar = sidecar
@@ -42,7 +42,7 @@ private struct RootView: View {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Set by VervoApp once the sidecar manager is constructed. We grab a
+    /// Set by versoApp once the sidecar manager is constructed. We grab a
     /// reference here so applicationWillTerminate can stop it cleanly even
     /// when the @StateObject's deinit doesn't run (which is most of the time
     /// on macOS app shutdown).

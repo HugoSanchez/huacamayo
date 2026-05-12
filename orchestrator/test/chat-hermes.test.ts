@@ -16,16 +16,16 @@ describe('Hermes Chat Streaming', () => {
   const conversations = new Map<string, string>();
   const sessions = new Map<string, Array<{ id: number; session_id: string; role: string; content: string; timestamp: number }>>();
   let envSnapshot: {
-    VERVO_HERMES_GATEWAY_URL?: string;
-    VERVO_CHAT_STORE_PATH?: string;
-    VERVO_HERMES_MANAGED?: string;
+    VERSO_HERMES_GATEWAY_URL?: string;
+    VERSO_CHAT_STORE_PATH?: string;
+    VERSO_HERMES_MANAGED?: string;
   } = {};
 
   beforeAll(async () => {
     envSnapshot = {
-      VERVO_HERMES_GATEWAY_URL: process.env.VERVO_HERMES_GATEWAY_URL,
-      VERVO_CHAT_STORE_PATH: process.env.VERVO_CHAT_STORE_PATH,
-      VERVO_HERMES_MANAGED: process.env.VERVO_HERMES_MANAGED,
+      VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
+      VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
+      VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
     };
 
     gateway = http.createServer((req, res) => {
@@ -155,9 +155,9 @@ describe('Hermes Chat Streaming', () => {
       });
     });
 
-    process.env.VERVO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
-    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-test-${process.pid}.sqlite`;
-    process.env.VERVO_HERMES_MANAGED = 'false';
+    process.env.VERSO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
+    process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-test-${process.pid}.sqlite`;
+    process.env.VERSO_HERMES_MANAGED = 'false';
 
     const result = await startServer({ port: 0 });
     server = result.server;
@@ -174,9 +174,9 @@ describe('Hermes Chat Streaming', () => {
       gateway = null;
     }
 
-    process.env.VERVO_HERMES_GATEWAY_URL = envSnapshot.VERVO_HERMES_GATEWAY_URL;
-    process.env.VERVO_CHAT_STORE_PATH = envSnapshot.VERVO_CHAT_STORE_PATH;
-    process.env.VERVO_HERMES_MANAGED = envSnapshot.VERVO_HERMES_MANAGED;
+    process.env.VERSO_HERMES_GATEWAY_URL = envSnapshot.VERSO_HERMES_GATEWAY_URL;
+    process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
+    process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
   });
 
   function url(pathname: string): string {

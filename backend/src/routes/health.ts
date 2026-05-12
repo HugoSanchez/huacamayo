@@ -9,7 +9,7 @@ export async function registerHealthRoutes(app: FastifyInstance, config: Backend
 
     return reply.code(healthy ? 200 : 503).send({
       status: healthy ? 'ok' : 'degraded',
-      service: 'vervo-backend',
+      service: 'verso-backend',
       environment: config.NODE_ENV,
       timestamp: Date.now(),
       capabilities: {

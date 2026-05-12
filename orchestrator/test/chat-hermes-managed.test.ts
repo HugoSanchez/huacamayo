@@ -8,33 +8,33 @@ describe('Managed Hermes Startup', () => {
   let port = 0;
   let gatewayPort = 0;
   let envSnapshot: {
-    VERVO_HERMES_GATEWAY_URL?: string;
-    VERVO_CHAT_STORE_PATH?: string;
-    VERVO_HERMES_COMMAND?: string;
-    VERVO_HERMES_ARGS?: string;
-    VERVO_HERMES_CWD?: string;
-    VERVO_HERMES_MANAGED?: string;
+    VERSO_HERMES_GATEWAY_URL?: string;
+    VERSO_CHAT_STORE_PATH?: string;
+    VERSO_HERMES_COMMAND?: string;
+    VERSO_HERMES_ARGS?: string;
+    VERSO_HERMES_CWD?: string;
+    VERSO_HERMES_MANAGED?: string;
   } = {};
 
   beforeAll(async () => {
     envSnapshot = {
-      VERVO_HERMES_GATEWAY_URL: process.env.VERVO_HERMES_GATEWAY_URL,
-      VERVO_CHAT_STORE_PATH: process.env.VERVO_CHAT_STORE_PATH,
-      VERVO_HERMES_COMMAND: process.env.VERVO_HERMES_COMMAND,
-      VERVO_HERMES_ARGS: process.env.VERVO_HERMES_ARGS,
-      VERVO_HERMES_CWD: process.env.VERVO_HERMES_CWD,
-      VERVO_HERMES_MANAGED: process.env.VERVO_HERMES_MANAGED,
+      VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
+      VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
+      VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
+      VERSO_HERMES_ARGS: process.env.VERSO_HERMES_ARGS,
+      VERSO_HERMES_CWD: process.env.VERSO_HERMES_CWD,
+      VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
     };
 
     gatewayPort = await allocatePort();
-    process.env.VERVO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
-    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-chat-managed-${process.pid}.sqlite`;
-    process.env.VERVO_HERMES_COMMAND = process.execPath;
-    process.env.VERVO_HERMES_ARGS = JSON.stringify([
+    process.env.VERSO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
+    process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-managed-${process.pid}.sqlite`;
+    process.env.VERSO_HERMES_COMMAND = process.execPath;
+    process.env.VERSO_HERMES_ARGS = JSON.stringify([
       path.resolve(process.cwd(), 'test/fixtures/fake-hermes-gateway.mjs'),
     ]);
-    process.env.VERVO_HERMES_CWD = process.cwd();
-    process.env.VERVO_HERMES_MANAGED = 'true';
+    process.env.VERSO_HERMES_CWD = process.cwd();
+    process.env.VERSO_HERMES_MANAGED = 'true';
 
     const result = await startServer({ port: 0 });
     server = result.server;
@@ -49,12 +49,12 @@ describe('Managed Hermes Startup', () => {
       server = null;
     }
 
-    process.env.VERVO_HERMES_GATEWAY_URL = envSnapshot.VERVO_HERMES_GATEWAY_URL;
-    process.env.VERVO_CHAT_STORE_PATH = envSnapshot.VERVO_CHAT_STORE_PATH;
-    process.env.VERVO_HERMES_COMMAND = envSnapshot.VERVO_HERMES_COMMAND;
-    process.env.VERVO_HERMES_ARGS = envSnapshot.VERVO_HERMES_ARGS;
-    process.env.VERVO_HERMES_CWD = envSnapshot.VERVO_HERMES_CWD;
-    process.env.VERVO_HERMES_MANAGED = envSnapshot.VERVO_HERMES_MANAGED;
+    process.env.VERSO_HERMES_GATEWAY_URL = envSnapshot.VERSO_HERMES_GATEWAY_URL;
+    process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
+    process.env.VERSO_HERMES_COMMAND = envSnapshot.VERSO_HERMES_COMMAND;
+    process.env.VERSO_HERMES_ARGS = envSnapshot.VERSO_HERMES_ARGS;
+    process.env.VERSO_HERMES_CWD = envSnapshot.VERSO_HERMES_CWD;
+    process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
   });
 
   function url(pathname: string): string {

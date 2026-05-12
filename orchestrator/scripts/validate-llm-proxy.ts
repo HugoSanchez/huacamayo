@@ -7,7 +7,7 @@
  *   curl/Python → /llm/v1/chat/completions
  *     → ManagedBackendClient → backend /v1/chat/completions → OpenRouter
  *
- * Usage: VERVO_BACKEND_URL=http://127.0.0.1:8788 PORT=0 npx tsx scripts/validate-llm-proxy.ts
+ * Usage: VERSO_BACKEND_URL=http://127.0.0.1:8788 PORT=0 npx tsx scripts/validate-llm-proxy.ts
  *
  * Prints `{"port":N,"status":"ready"}` on stdout when ready.
  */

@@ -30,13 +30,13 @@ export interface ConnectionRecord {
 }
 
 interface ConnectionsStoreShape {
-  vervoUserId: string | null;
+  versoUserId: string | null;
   requests: ConnectionRequestRecord[];
   connections: ConnectionRecord[];
 }
 
 function defaultStorePath(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Vervo', 'connections.json');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'connections.json');
 }
 
 export class ConnectionsStore {
@@ -44,7 +44,7 @@ export class ConnectionsStore {
 
   private state: ConnectionsStoreShape;
 
-  constructor(storePath = process.env.VERVO_CONNECTIONS_STORE_PATH?.trim() || defaultStorePath()) {
+  constructor(storePath = process.env.VERSO_CONNECTIONS_STORE_PATH?.trim() || defaultStorePath()) {
     this.storePath = storePath;
     this.state = this.load();
   }
@@ -53,15 +53,15 @@ export class ConnectionsStore {
     return this.storePath;
   }
 
-  getVervoUserId(): string | null {
-    return this.state.vervoUserId;
+  getversoUserId(): string | null {
+    return this.state.versoUserId;
   }
 
-  ensureVervoUserId(): string {
-    if (this.state.vervoUserId) return this.state.vervoUserId;
-    this.state.vervoUserId = randomUUID();
+  ensureversoUserId(): string {
+    if (this.state.versoUserId) return this.state.versoUserId;
+    this.state.versoUserId = randomUUID();
     this.save();
-    return this.state.vervoUserId;
+    return this.state.versoUserId;
   }
 
   listConnections(): ConnectionRecord[] {
@@ -106,7 +106,7 @@ export class ConnectionsStore {
   private load(): ConnectionsStoreShape {
     if (!existsSync(this.storePath)) {
       return {
-        vervoUserId: null,
+        versoUserId: null,
         requests: [],
         connections: [],
       };
@@ -116,7 +116,7 @@ export class ConnectionsStore {
       const raw = readFileSync(this.storePath, 'utf8');
       const parsed = JSON.parse(raw) as Partial<ConnectionsStoreShape>;
       return {
-        vervoUserId: typeof parsed.vervoUserId === 'string' ? parsed.vervoUserId : null,
+        versoUserId: typeof parsed.versoUserId === 'string' ? parsed.versoUserId : null,
         requests: Array.isArray(parsed.requests)
           ? parsed.requests.filter(isValidRequestRecord)
           : [],
@@ -126,7 +126,7 @@ export class ConnectionsStore {
       };
     } catch {
       return {
-        vervoUserId: null,
+        versoUserId: null,
         requests: [],
         connections: [],
       };

@@ -34,7 +34,7 @@ export interface CronTranscriptMessage {
 }
 
 export function buildCronsRoutes(hermes: HermesSupervisor, descriptions: CronDescriptionsStore): Route[] {
-  // Hermes (in Vervo's managed mode) writes cron data under
+  // Hermes (in verso's managed mode) writes cron data under
   // <hermesHome>/cron/output/<jobId>/<timestamp>.md and session files under
   // <hermesHome>/sessions/. The supervisor exposes the active home so we
   // don't have to guess between ~/.hermes and ~/.hermes/profiles/<name>.

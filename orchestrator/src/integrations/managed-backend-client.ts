@@ -142,7 +142,7 @@ export class ManagedBackendClient {
   private currentSession: ManagedSessionRecord | null;
 
   constructor(
-    baseUrl = process.env.VERVO_BACKEND_URL?.trim() || 'http://127.0.0.1:8788',
+    baseUrl = process.env.VERSO_BACKEND_URL?.trim() || 'http://127.0.0.1:8788',
   ) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.currentSession = readSessionFromEnv();
@@ -447,9 +447,9 @@ export class ManagedBackendClient {
 }
 
 function readSessionFromEnv(): ManagedSessionRecord | null {
-  const token = process.env.VERVO_MANAGED_SESSION_TOKEN?.trim() || '';
-  const expiresAt = process.env.VERVO_MANAGED_SESSION_EXPIRES_AT?.trim() || '';
-  const userId = process.env.VERVO_MANAGED_USER_ID?.trim() || '';
+  const token = process.env.VERSO_MANAGED_SESSION_TOKEN?.trim() || '';
+  const expiresAt = process.env.VERSO_MANAGED_SESSION_EXPIRES_AT?.trim() || '';
+  const userId = process.env.VERSO_MANAGED_USER_ID?.trim() || '';
   if (!token || !expiresAt || !userId) return null;
 
   return {

@@ -135,17 +135,17 @@ if (isMain) {
 
 /**
  * macOS has no equivalent of Linux's PR_SET_PDEATHSIG, so we poll the parent
- * pid every couple of seconds. If the parent disappears (Vervo crashed,
+ * pid every couple of seconds. If the parent disappears (verso crashed,
  * was force-quit, or Xcode's Stop button delivered SIGKILL), this process
  * exits cleanly instead of getting re-parented to launchd and spinning
  * forever — which is exactly what was cooking the user's laptop with three
  * orphaned orchestrators pinning CPU cores at 100%.
  */
 function installParentDeathWatcher(onParentGone: () => void): void {
-  const raw = process.env.VERVO_PARENT_PID;
+  const raw = process.env.VERSO_PARENT_PID;
   const parentPid = raw ? Number.parseInt(raw, 10) : NaN;
   if (!Number.isFinite(parentPid) || parentPid <= 1) {
-    console.error('[sidecar] VERVO_PARENT_PID not set; parent-death detection disabled');
+    console.error('[sidecar] VERSO_PARENT_PID not set; parent-death detection disabled');
     return;
   }
 
@@ -172,7 +172,7 @@ function installParentDeathWatcher(onParentGone: () => void): void {
 }
 
 function installDiagnosticHandlers(): void {
-  // Defensive: when our parent (the Vervo Mac app) dies, the read end of our
+  // Defensive: when our parent (the verso Mac app) dies, the read end of our
   // stdout/stderr pipes closes. Subsequent writes fail with EPIPE. Without an
   // 'error' handler the writable stream's internal retry loop can pin a CPU
   // core indefinitely — exactly the symptom we saw with the orphaned orchestrators

@@ -34,14 +34,14 @@ export interface ChatSessionSummary {
 }
 
 function defaultStorePath(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Vervo', 'chat-sessions.sqlite');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'chat-sessions.sqlite');
 }
 
 export class ChatStore {
   private readonly storePath: string;
   private readonly db: DatabaseSync;
 
-  constructor(storePath = process.env.VERVO_CHAT_STORE_PATH?.trim() || defaultStorePath()) {
+  constructor(storePath = process.env.VERSO_CHAT_STORE_PATH?.trim() || defaultStorePath()) {
     this.storePath = storePath;
     mkdirSync(path.dirname(this.storePath), { recursive: true });
     this.db = new DatabaseSync(this.storePath);

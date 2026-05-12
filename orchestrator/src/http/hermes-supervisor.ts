@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import { delimiter, dirname, join, sep } from 'node:path';
@@ -43,12 +43,12 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
 
 export function getHermesGatewayConfig(): HermesGatewayConfig {
   const baseUrl = normalizeBaseUrl(
-    process.env.VERVO_HERMES_GATEWAY_URL?.trim() || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
+    process.env.VERSO_HERMES_GATEWAY_URL?.trim() || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
   );
-  const rawTimeout = parseInt(process.env.VERVO_HERMES_TIMEOUT_MS || String(DEFAULT_TIMEOUT_MS), 10);
+  const rawTimeout = parseInt(process.env.VERSO_HERMES_TIMEOUT_MS || String(DEFAULT_TIMEOUT_MS), 10);
   const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : DEFAULT_TIMEOUT_MS;
   const rawStartupTimeout = parseInt(
-    process.env.VERVO_HERMES_STARTUP_TIMEOUT_MS || String(DEFAULT_STARTUP_TIMEOUT_MS),
+    process.env.VERSO_HERMES_STARTUP_TIMEOUT_MS || String(DEFAULT_STARTUP_TIMEOUT_MS),
     10,
   );
   const startupTimeoutMs = Number.isFinite(rawStartupTimeout) && rawStartupTimeout > 0
@@ -64,7 +64,7 @@ function normalizeBaseUrl(rawBaseUrl: string): string {
 
 function getHermesLaunchConfig(): HermesLaunchConfig {
   const startupTimeoutMs = getHermesGatewayConfig().startupTimeoutMs;
-  const cwd = process.env.VERVO_HERMES_CWD?.trim() || null;
+  const cwd = process.env.VERSO_HERMES_CWD?.trim() || null;
   if (isManagedDisabled()) {
     return {
       command: null,
@@ -73,12 +73,12 @@ function getHermesLaunchConfig(): HermesLaunchConfig {
       startupTimeoutMs,
     };
   }
-  const command = process.env.VERVO_HERMES_COMMAND?.trim() || detectInstalledHermesCommand();
+  const command = process.env.VERSO_HERMES_COMMAND?.trim() || detectInstalledHermesCommand();
 
   return {
     command,
-    args: command === process.env.VERVO_HERMES_COMMAND?.trim()
-      ? parseLaunchArgs(process.env.VERVO_HERMES_ARGS)
+    args: command === process.env.VERSO_HERMES_COMMAND?.trim()
+      ? parseLaunchArgs(process.env.VERSO_HERMES_ARGS)
       : ['gateway', 'run', '--replace'],
     cwd,
     startupTimeoutMs,
@@ -86,7 +86,7 @@ function getHermesLaunchConfig(): HermesLaunchConfig {
 }
 
 function isManagedDisabled(): boolean {
-  const managed = process.env.VERVO_HERMES_MANAGED?.trim().toLowerCase();
+  const managed = process.env.VERSO_HERMES_MANAGED?.trim().toLowerCase();
   return managed === '0' || managed === 'false' || managed === 'no';
 }
 
@@ -168,10 +168,10 @@ export class HermesSupervisor {
     this.config = options.config ?? getHermesGatewayConfig();
     this.launch = options.launch ?? getHermesLaunchConfig();
     this.runtimeMode = options.runtimeMode ?? 'managed';
-    this.managedDefaultModel = (process.env.VERVO_MANAGED_DEFAULT_MODEL?.trim()
+    this.managedDefaultModel = (process.env.VERSO_MANAGED_DEFAULT_MODEL?.trim()
       || options.managedDefaultModel
       || DEFAULT_MANAGED_MODEL);
-    this.hasExplicitBaseUrl = Boolean(process.env.VERVO_HERMES_GATEWAY_URL?.trim());
+    this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
@@ -222,7 +222,7 @@ export class HermesSupervisor {
     } else if (this.launch.command) {
       await abortable(this.startManaged(), signal);
     } else {
-      this.lastError = 'Hermes CLI not found. Install Hermes or set VERVO_HERMES_COMMAND.';
+      this.lastError = 'Hermes CLI not found. Install Hermes or set VERSO_HERMES_COMMAND.';
       this.state = 'unavailable';
       this.source = 'none';
       throw new Error(this.lastError);
@@ -434,8 +434,8 @@ export class HermesSupervisor {
       API_SERVER_HOST: host,
       API_SERVER_PORT: port,
       HERMES_HOME: this.managedHermesHome,
-      VERVO_HERMES_GATEWAY_URL: this.config.baseUrl,
-      ...(this.orchestratorBaseUrl ? { VERVO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
+      VERSO_HERMES_GATEWAY_URL: this.config.baseUrl,
+      ...(this.orchestratorBaseUrl ? { VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
       ...managedEnvOverrides,
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
@@ -443,9 +443,9 @@ export class HermesSupervisor {
       cwd: this.launch.cwd ?? process.cwd(),
       env: {
         ...env,
-        VERVO_HERMES_CHILD_COMMAND: this.launch.command ?? '',
-        VERVO_HERMES_CHILD_ARGS: JSON.stringify(this.launch.args),
-        VERVO_HERMES_CHILD_CWD: this.launch.cwd ?? '',
+        VERSO_HERMES_CHILD_COMMAND: this.launch.command ?? '',
+        VERSO_HERMES_CHILD_ARGS: JSON.stringify(this.launch.args),
+        VERSO_HERMES_CHILD_CWD: this.launch.cwd ?? '',
       },
       // 4th stdio slot opens an IPC channel so the child can detect parent
       // death via `process.on('disconnect')` instead of polling `ppid` once
@@ -462,6 +462,7 @@ export class HermesSupervisor {
   }
 
   private ensureManagedHermesHome(): void {
+    this.migrateLegacyVervoProfile();
     mkdirSync(this.managedHermesHome, { recursive: true });
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
@@ -471,6 +472,24 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.configureManagedMcpServers();
     this.configureManagedModelOverride();
+  }
+
+  // One-shot rename of the pre-rename ~/.hermes/profiles/vervo profile to
+  // ~/.hermes/profiles/verso. Idempotent: only moves when the new profile
+  // doesn't exist yet, so it's safe to leave in place indefinitely. Skipped
+  // entirely when VERSO_HERMES_HOME is overridden — that user knows what
+  // their layout looks like.
+  private migrateLegacyVervoProfile(): void {
+    if (process.env.VERSO_HERMES_HOME?.trim()) return;
+    if (existsSync(this.managedHermesHome)) return;
+    const legacy = join(this.managedHermesHome, '..', 'vervo');
+    if (!existsSync(legacy)) return;
+    try {
+      renameSync(legacy, this.managedHermesHome);
+    } catch {
+      // Cross-volume or permission failure — fall through and let the
+      // following mkdir create a fresh profile.
+    }
   }
 
   /**
@@ -529,13 +548,13 @@ export class HermesSupervisor {
 
     if (this.orchestratorBaseUrl) {
       const pythonPath = resolveHermesPython(this.templateHermesHome);
-      const serverPath = resolveVervoMcpServerPath();
+      const serverPath = resolveversoMcpServerPath();
       if (pythonPath && serverPath) {
-        mcpServers.vervo = {
+        mcpServers.verso = {
           command: pythonPath,
           args: [serverPath],
           env: {
-            VERVO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
+            VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
           },
           timeout: 120,
           connect_timeout: 60,
@@ -704,9 +723,9 @@ function getTemplateHermesHome(): string {
 }
 
 function getManagedHermesHome(templateHome: string): string {
-  const override = process.env.VERVO_HERMES_HOME?.trim();
+  const override = process.env.VERSO_HERMES_HOME?.trim();
   if (override) return override;
-  return join(resolveHermesRoot(templateHome), 'profiles', 'vervo');
+  return join(resolveHermesRoot(templateHome), 'profiles', 'verso');
 }
 
 function resolveHermesRoot(home: string): string {
@@ -720,9 +739,9 @@ function resolveHermesPython(templateHome: string): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
-function resolveVervoMcpServerPath(): string | null {
+function resolveversoMcpServerPath(): string | null {
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidate = join(currentDir, '..', '..', 'mcp', 'vervo_server.py');
+  const candidate = join(currentDir, '..', '..', 'mcp', 'verso_server.py');
   return existsSync(candidate) ? candidate : null;
 }
 

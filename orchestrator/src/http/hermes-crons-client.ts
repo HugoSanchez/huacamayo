@@ -2,7 +2,7 @@
 //
 // Hermes' gateway exposes the same endpoints used by the `hermes cron` CLI
 // and the agent-facing `cronjob` tool, so we don't keep any cron state in
-// Vervo — we just proxy.
+// verso — we just proxy.
 //
 // Auth: if API_SERVER_KEY is configured on the gateway side, every request
 // must carry `Authorization: Bearer <key>`. We pick that key up from the

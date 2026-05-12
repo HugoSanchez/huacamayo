@@ -65,7 +65,7 @@ export class ComposioBridgeService {
     this.assertConfigured();
     if (this.cachedSession) return this.cachedSession.view;
 
-    const userId = this.store.ensureVervoUserId();
+    const userId = this.store.ensureversoUserId();
     if (this.bridgeClient.configured) {
       const session = await this.bridgeClient.getSession(userId);
       this.cachedSession = { view: session };
@@ -91,7 +91,7 @@ export class ComposioBridgeService {
 
   reset(): void {
     if (this.bridgeClient.configured) {
-      const userId = this.store.getVervoUserId();
+      const userId = this.store.getversoUserId();
       if (userId) {
         void this.bridgeClient.resetSession(userId).catch(() => {});
       }
@@ -101,7 +101,7 @@ export class ComposioBridgeService {
 
   async searchTools(query: string, toolkits?: string[]): Promise<ComposioBridgeSearchToolView[]> {
     this.assertConfigured();
-    const userId = this.store.ensureVervoUserId();
+    const userId = this.store.ensureversoUserId();
 
     if (this.bridgeClient.configured) {
       return this.bridgeClient.searchTools(userId, query, toolkits);
@@ -123,7 +123,7 @@ export class ComposioBridgeService {
 
   async getToolSchemas(toolSlugs: string[]): Promise<ComposioBridgeToolSchemaView[]> {
     this.assertConfigured();
-    const userId = this.store.ensureVervoUserId();
+    const userId = this.store.ensureversoUserId();
 
     if (this.bridgeClient.configured) {
       return this.bridgeClient.getToolSchemas(userId, toolSlugs);
@@ -144,7 +144,7 @@ export class ComposioBridgeService {
 
   async executeTool(toolSlug: string, arguments_: Record<string, unknown> | undefined): Promise<ComposioBridgeToolExecutionView> {
     this.assertConfigured();
-    const userId = this.store.ensureVervoUserId();
+    const userId = this.store.ensureversoUserId();
 
     if (this.bridgeClient.configured) {
       const connectedAccountId = await this.resolveConnectedAccountIdForTool(toolSlug);
@@ -164,7 +164,7 @@ export class ComposioBridgeService {
     if (this.bridgeClient.configured || this.client) return;
     throw new ComposioBridgeHttpError(
       503,
-      'Composio bridge is unavailable. Set VERVO_BACKEND_URL (managed) or COMPOSIO_API_KEY (direct) to enable it.',
+      'Composio bridge is unavailable. Set VERSO_BACKEND_URL (managed) or COMPOSIO_API_KEY (direct) to enable it.',
     );
   }
 
@@ -180,7 +180,7 @@ export class ComposioBridgeService {
       return tool.toolkit?.slug?.trim().toLowerCase() ?? null;
     }
 
-    const userId = this.store.ensureVervoUserId();
+    const userId = this.store.ensureversoUserId();
     const [tool] = await this.bridgeClient.getToolSchemas(userId, [toolSlug]);
     return tool?.toolkitSlug?.trim().toLowerCase() ?? null;
   }

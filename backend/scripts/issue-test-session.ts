@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   await db.insert(devices).values({
     id: deviceId,
     userId,
-    deviceLabel: 'Vervo for macOS (test)',
+    deviceLabel: 'verso for macOS (test)',
     platform: 'macos',
     lastSeenAt: new Date(nowIso),
     createdAt: new Date(nowIso),

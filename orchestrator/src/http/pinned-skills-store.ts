@@ -4,10 +4,10 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 function defaultStorePath(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Vervo', 'chat-sessions.sqlite');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'chat-sessions.sqlite');
 }
 
-// Pinned skills are a Vervo-side UI concern: which skills the user has
+// Pinned skills are a verso-side UI concern: which skills the user has
 // bookmarked into the sidebar for quick access. Independent from Hermes'
 // global enable/disable (which lives in ~/.hermes/config.yaml). Stored in
 // the same SQLite file as ChatStore so we have one local user-state db.
@@ -18,7 +18,7 @@ function defaultStorePath(): string {
 export class PinnedSkillsStore {
   private readonly db: DatabaseSync;
 
-  constructor(storePath = process.env.VERVO_CHAT_STORE_PATH?.trim() || defaultStorePath()) {
+  constructor(storePath = process.env.VERSO_CHAT_STORE_PATH?.trim() || defaultStorePath()) {
     mkdirSync(path.dirname(storePath), { recursive: true });
     this.db = new DatabaseSync(storePath);
     this.db.exec(`

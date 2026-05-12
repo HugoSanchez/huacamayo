@@ -36,7 +36,7 @@ export function InputBar({
   // Skills fetch races the sidecar port assignment in App.tsx — if our
   // mount fires before the port is set, getSkills() throws (silently),
   // skills stays empty, and the suggestions popover never renders. So
-  // we also listen for the `vervo:sidecar-port` event the native shell
+  // we also listen for the `verso:sidecar-port` event the native shell
   // dispatches and refetch on each port update.
   useEffect(() => {
     let cancelled = false;
@@ -50,10 +50,10 @@ export function InputBar({
     };
     void fetchSkills();
     const onPortReady = () => { void fetchSkills(); };
-    window.addEventListener('vervo:sidecar-port-ready', onPortReady);
+    window.addEventListener('verso:sidecar-port-ready', onPortReady);
     return () => {
       cancelled = true;
-      window.removeEventListener('vervo:sidecar-port-ready', onPortReady);
+      window.removeEventListener('verso:sidecar-port-ready', onPortReady);
     };
   }, []);
 
