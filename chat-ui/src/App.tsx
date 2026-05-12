@@ -415,6 +415,7 @@ export function App() {
             connectionPollers.current.delete(requestId);
             await refreshConnections();
             bumpCatalogRefresh();
+            window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'connectionsChanged' });
           }
         } catch {
           window.clearInterval(poller);
@@ -438,6 +439,7 @@ export function App() {
         } else {
           await refreshConnections();
           bumpCatalogRefresh();
+          window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'connectionsChanged' });
         }
       } catch (error: unknown) {
         setSessionError(error instanceof Error ? error.message : String(error));

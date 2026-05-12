@@ -16,6 +16,9 @@ struct ChatWebView: NSViewRepresentable {
     let onCatalogStateChange: ((Bool) -> Void)?
     let onSkillsCatalogStateChange: ((Bool) -> Void)?
     let onCronsChanged: (() -> Void)?
+    let onConnectionsChanged: (() -> Void)?
+    let onSessionsChanged: (() -> Void)?
+    let onSkillsChanged: (() -> Void)?
     let onSignOutRequested: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -24,6 +27,9 @@ struct ChatWebView: NSViewRepresentable {
             onCatalogStateChange: onCatalogStateChange,
             onSkillsCatalogStateChange: onSkillsCatalogStateChange,
             onCronsChanged: onCronsChanged,
+            onConnectionsChanged: onConnectionsChanged,
+            onSessionsChanged: onSessionsChanged,
+            onSkillsChanged: onSkillsChanged,
             onSignOutRequested: onSignOutRequested
         )
     }
@@ -186,6 +192,9 @@ struct ChatWebView: NSViewRepresentable {
         var onCatalogStateChange: ((Bool) -> Void)?
         var onSkillsCatalogStateChange: ((Bool) -> Void)?
         var onCronsChanged: (() -> Void)?
+        var onConnectionsChanged: (() -> Void)?
+        var onSessionsChanged: (() -> Void)?
+        var onSkillsChanged: (() -> Void)?
         var onSignOutRequested: (() -> Void)?
         weak var webView: WKWebView?
         var lastInjectedPort: Int?
@@ -208,12 +217,18 @@ struct ChatWebView: NSViewRepresentable {
             onCatalogStateChange: ((Bool) -> Void)?,
             onSkillsCatalogStateChange: ((Bool) -> Void)?,
             onCronsChanged: (() -> Void)?,
+            onConnectionsChanged: (() -> Void)?,
+            onSessionsChanged: (() -> Void)?,
+            onSkillsChanged: (() -> Void)?,
             onSignOutRequested: (() -> Void)?
         ) {
             self.onSessionStateChange = onSessionStateChange
             self.onCatalogStateChange = onCatalogStateChange
             self.onSkillsCatalogStateChange = onSkillsCatalogStateChange
             self.onCronsChanged = onCronsChanged
+            self.onConnectionsChanged = onConnectionsChanged
+            self.onSessionsChanged = onSessionsChanged
+            self.onSkillsChanged = onSkillsChanged
             self.onSignOutRequested = onSignOutRequested
             super.init()
             // When the system is about to sleep we tell the webview's JS to
@@ -469,6 +484,27 @@ struct ChatWebView: NSViewRepresentable {
             if type == "cronsChanged" {
                 DispatchQueue.main.async { [onCronsChanged] in
                     onCronsChanged?()
+                }
+                return
+            }
+
+            if type == "connectionsChanged" {
+                DispatchQueue.main.async { [onConnectionsChanged] in
+                    onConnectionsChanged?()
+                }
+                return
+            }
+
+            if type == "sessionsChanged" {
+                DispatchQueue.main.async { [onSessionsChanged] in
+                    onSessionsChanged?()
+                }
+                return
+            }
+
+            if type == "skillsChanged" {
+                DispatchQueue.main.async { [onSkillsChanged] in
+                    onSkillsChanged?()
                 }
                 return
             }
