@@ -88,7 +88,7 @@ describe('auth routes', () => {
       url: '/v1/auth/privy/exchange',
       payload: {
         privyAccessToken: 'privy-valid-token',
-        deviceLabel: 'Vervo',
+        deviceLabel: 'verso',
         platform: 'macos',
       },
     });
@@ -104,7 +104,7 @@ describe('auth routes', () => {
     const exchange = await app.inject({
       method: 'POST',
       url: '/v1/auth/privy/exchange',
-      payload: { deviceLabel: 'Vervo', platform: 'macos' },
+      payload: { deviceLabel: 'verso', platform: 'macos' },
     });
 
     expect(exchange.statusCode).toBe(400);
@@ -120,7 +120,7 @@ describe('auth routes', () => {
       url: '/v1/auth/privy/exchange',
       payload: {
         privyAccessToken: 'privy-valid-token',
-        deviceLabel: 'Vervo',
+        deviceLabel: 'verso',
         platform: 'macos',
         email: 'not-an-email',
       },

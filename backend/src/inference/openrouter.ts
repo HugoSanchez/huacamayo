@@ -57,7 +57,7 @@ export class OpenRouterClient {
     this.apiKey = options.apiKey;
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.appUrl = options.appUrl ?? null;
-    this.appTitle = options.appTitle ?? 'Vervo';
+    this.appTitle = options.appTitle ?? 'verso';
   }
 
   /**

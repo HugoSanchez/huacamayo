@@ -68,7 +68,7 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
         return sendHtml(
           res,
           404,
-          renderCallbackPage('Connection unavailable', 'This connection link is no longer available. Return to Vervo and try again.'),
+          renderCallbackPage('Connection unavailable', 'This connection link is no longer available. Return to verso and try again.'),
         );
       }
 
@@ -81,8 +81,8 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
       const isFailed = status === 'failed';
       const title = isFailed ? 'Connection failed' : 'Connection complete';
       const message = isFailed
-        ? 'The connection did not complete. You can return to Vervo and try again.'
-        : 'You can return to Vervo now. The app will update automatically.';
+        ? 'The connection did not complete. You can return to verso and try again.'
+        : 'You can return to verso now. The app will update automatically.';
       sendHtml(res, 200, renderCallbackPage(title, message));
     }),
   ];

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 // Tracks whether the host laptop is currently asleep (PowerNap / lid closed).
-// The Swift shell dispatches `vervo:system-sleep` and `vervo:system-wake`
+// The Swift shell dispatches `verso:system-sleep` and `verso:system-wake`
 // custom events into the WKWebView via NSWorkspace's willSleep/didWake
 // notifications. Components that own polling/animation intervals subscribe to
 // this hook and skip work while asleep so the CPU can actually rest.
@@ -13,11 +13,11 @@ export function useIsSystemAsleep(): boolean {
   useEffect(() => {
     const onSleep = () => setAsleep(true);
     const onWake = () => setAsleep(false);
-    window.addEventListener('vervo:system-sleep', onSleep);
-    window.addEventListener('vervo:system-wake', onWake);
+    window.addEventListener('verso:system-sleep', onSleep);
+    window.addEventListener('verso:system-wake', onWake);
     return () => {
-      window.removeEventListener('vervo:system-sleep', onSleep);
-      window.removeEventListener('vervo:system-wake', onWake);
+      window.removeEventListener('verso:system-sleep', onSleep);
+      window.removeEventListener('verso:system-wake', onWake);
     };
   }, []);
   return asleep;

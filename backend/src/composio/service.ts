@@ -102,7 +102,7 @@ export class ComposioService {
   constructor(apiKey = process.env.COMPOSIO_API_KEY?.trim() || '') {
     this.apiKey = apiKey || null;
     this.client = this.apiKey ? new Composio({ apiKey: this.apiKey }) : null;
-    this.allowedToolkits = parseAllowedToolkits(process.env.VERVO_COMPOSIO_ALLOWED_TOOLKITS);
+    this.allowedToolkits = parseAllowedToolkits(process.env.VERSO_COMPOSIO_ALLOWED_TOOLKITS);
   }
 
   get configured(): boolean {

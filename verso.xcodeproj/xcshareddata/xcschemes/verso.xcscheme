@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "A10000060000000000000001"
-               BuildableName = "Vervo.app"
-               BlueprintName = "Vervo"
-               ReferencedContainer = "container:Vervo.xcodeproj">
+               BuildableName = "verso.app"
+               BlueprintName = "verso"
+               ReferencedContainer = "container:verso.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -46,18 +46,11 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A10000060000000000000001"
-            BuildableName = "Vervo.app"
-            BlueprintName = "Vervo"
-            ReferencedContainer = "container:Vervo.xcodeproj">
+            BuildableName = "verso.app"
+            BlueprintName = "verso"
+            ReferencedContainer = "container:verso.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "COMPOSIO_API_KEY"
-            value = "ak_lJNpdK_CCD-8w7gSn2jK"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -70,9 +63,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A10000060000000000000001"
-            BuildableName = "Vervo.app"
-            BlueprintName = "Vervo"
-            ReferencedContainer = "container:Vervo.xcodeproj">
+            BuildableName = "verso.app"
+            BlueprintName = "verso"
+            ReferencedContainer = "container:verso.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

@@ -1,5 +1,5 @@
 /**
- * Vervo sidecar runtime.
+ * verso sidecar runtime.
  *
  * Hermes-only local chat bridge for the macOS app.
  */

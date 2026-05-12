@@ -4,7 +4,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 function defaultStorePath(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'Vervo', 'chat-sessions.sqlite');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'chat-sessions.sqlite');
 }
 
 export type CronDescriptionSource = 'auto' | 'user';
@@ -16,13 +16,13 @@ export interface CronDescription {
 }
 
 // One-line LLM-generated (or user-edited) summary per cron job, cached in
-// the same SQLite file as the rest of Vervo's local UX state. Hermes itself
+// the same SQLite file as the rest of verso's local UX state. Hermes itself
 // has no description field — this is purely our display sugar, so it lives
 // outside ~/.hermes/.
 export class CronDescriptionsStore {
   private readonly db: DatabaseSync;
 
-  constructor(storePath = process.env.VERVO_CHAT_STORE_PATH?.trim() || defaultStorePath()) {
+  constructor(storePath = process.env.VERSO_CHAT_STORE_PATH?.trim() || defaultStorePath()) {
     mkdirSync(path.dirname(storePath), { recursive: true });
     this.db = new DatabaseSync(storePath);
     this.db.exec(`

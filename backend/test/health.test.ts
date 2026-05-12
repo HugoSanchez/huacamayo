@@ -21,7 +21,7 @@ describe('GET /health', () => {
 
     const body = response.json();
     expect(body.status).toBe('ok');
-    expect(body.service).toBe('vervo-backend');
+    expect(body.service).toBe('verso-backend');
     expect(body.capabilities).toEqual({
       databaseConfigured: false,
       privyConfigured: false,

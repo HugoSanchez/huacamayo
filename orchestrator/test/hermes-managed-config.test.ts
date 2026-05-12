@@ -18,19 +18,19 @@ describe('HermesSupervisor: managed config override', () => {
   let envSnapshot: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    tempRoot = mkdtempSync(path.join(os.tmpdir(), 'vervo-hermes-test-'));
+    tempRoot = mkdtempSync(path.join(os.tmpdir(), 'verso-hermes-test-'));
     templateHome = tempRoot;
-    managedHome = path.join(tempRoot, 'profiles', 'vervo');
+    managedHome = path.join(tempRoot, 'profiles', 'verso');
     envSnapshot = {
       HERMES_HOME: process.env.HERMES_HOME,
-      VERVO_HERMES_GATEWAY_URL: process.env.VERVO_HERMES_GATEWAY_URL,
-      VERVO_HERMES_COMMAND: process.env.VERVO_HERMES_COMMAND,
+      VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
+      VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
     };
     process.env.HERMES_HOME = templateHome;
     // Pretend Hermes is launchable so the supervisor doesn't bail out.
-    process.env.VERVO_HERMES_COMMAND = '/bin/true';
+    process.env.VERSO_HERMES_COMMAND = '/bin/true';
     // Avoid touching the real Hermes gateway during tests.
-    delete process.env.VERVO_HERMES_GATEWAY_URL;
+    delete process.env.VERSO_HERMES_GATEWAY_URL;
 
     // Seed a minimal template config.yaml that mirrors the user's real one.
     writeFileSync(path.join(tempRoot, 'config.yaml'), [
@@ -84,8 +84,8 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.toolsets).toEqual(['hermes-cli']);
   });
 
-  it('honours VERVO_MANAGED_DEFAULT_MODEL override', () => {
-    process.env.VERVO_MANAGED_DEFAULT_MODEL = 'anthropic/claude-opus-4.7';
+  it('honours VERSO_MANAGED_DEFAULT_MODEL override', () => {
+    process.env.VERSO_MANAGED_DEFAULT_MODEL = 'anthropic/claude-opus-4.7';
     try {
       const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
       supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
@@ -94,7 +94,7 @@ describe('HermesSupervisor: managed config override', () => {
       const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as Record<string, unknown>;
       expect((parsed.model as Record<string, unknown>).default).toBe('anthropic/claude-opus-4.7');
     } finally {
-      delete process.env.VERVO_MANAGED_DEFAULT_MODEL;
+      delete process.env.VERSO_MANAGED_DEFAULT_MODEL;
     }
   });
 

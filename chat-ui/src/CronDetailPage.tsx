@@ -44,7 +44,7 @@ export function CronDetailPage({ id, onBack, onTitleResolved }: Props) {
   const [isRunningNow, setIsRunningNow] = useState(false);
   const [isOpeningInChat, setIsOpeningInChat] = useState(false);
 
-  // LLM-generated subtitle. We store it server-side (Vervo SQLite, not Hermes)
+  // LLM-generated subtitle. We store it server-side (verso SQLite, not Hermes)
   // and lazy-generate on first view of a routine that doesn't have one yet.
   const [description, setDescription] = useState<CronDescriptionView | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState('');
@@ -292,12 +292,12 @@ export function CronDetailPage({ id, onBack, onTitleResolved }: Props) {
     setIsOpeningInChat(true);
     try {
       const session = await createChatSession(`Editing ${detail.cron.name}`);
-      // App.tsx routes vervo:select-session to the freshly created session,
-      // and vervo:attach-cron drops the chip into that session's draft.
-      window.dispatchEvent(new CustomEvent('vervo:attach-cron', {
+      // App.tsx routes verso:select-session to the freshly created session,
+      // and verso:attach-cron drops the chip into that session's draft.
+      window.dispatchEvent(new CustomEvent('verso:attach-cron', {
         detail: { id: detail.cron.id, name: detail.cron.name, sessionId: session.id },
       }));
-      window.dispatchEvent(new CustomEvent('vervo:select-session', {
+      window.dispatchEvent(new CustomEvent('verso:select-session', {
         detail: { sessionId: session.id },
       }));
       onBack();

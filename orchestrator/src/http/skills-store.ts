@@ -11,14 +11,14 @@ function defaultConfigPath(): string {
 // ~/.hermes/config.yaml under `skills.disabled`. Hermes filters its
 // auto-injected skills index against this list at request time, so
 // editing it here means our toggle surfaces a real Hermes setting
-// instead of a Vervo-side parallel store.
+// instead of a verso-side parallel store.
 //
 // Note the inversion: Hermes tracks *disabled* names; our UI presents
 // an enabled toggle, so callers pass `enabled` and we translate.
 export class HermesSkillsConfig {
   private readonly configPath: string;
 
-  constructor(configPath = process.env.VERVO_HERMES_CONFIG_PATH?.trim() || defaultConfigPath()) {
+  constructor(configPath = process.env.VERSO_HERMES_CONFIG_PATH?.trim() || defaultConfigPath()) {
     this.configPath = configPath;
   }
 

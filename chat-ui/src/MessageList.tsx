@@ -352,7 +352,7 @@ function CronToolCard({ action, jobId, name, scheduleDisplay }: CronToolCardProp
   const canView = action !== 'remove' && jobId !== null;
   const handleView = () => {
     if (!canView || jobId === null) return;
-    window.dispatchEvent(new CustomEvent('vervo:open-cron-detail', { detail: { id: jobId } }));
+    window.dispatchEvent(new CustomEvent('verso:open-cron-detail', { detail: { id: jobId } }));
   };
 
   return (

@@ -20,10 +20,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.vervo.app.auth</string>
+			<string>com.verso.app.auth</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>vervo</string>
+				<string>verso</string>
 			</array>
 		</dict>
 	</array>

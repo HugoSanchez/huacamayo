@@ -8,7 +8,7 @@ const VALID_MODES: RuntimeMode[] = ['managed', 'byo', 'local'];
  * on it once Phase 8 wires backend-managed inference in.
  */
 export function readRuntimeMode(env: NodeJS.ProcessEnv = process.env): RuntimeMode {
-  const raw = env.VERVO_RUNTIME_MODE?.trim().toLowerCase() ?? '';
+  const raw = env.VERSO_RUNTIME_MODE?.trim().toLowerCase() ?? '';
   if (raw && (VALID_MODES as string[]).includes(raw)) {
     return raw as RuntimeMode;
   }

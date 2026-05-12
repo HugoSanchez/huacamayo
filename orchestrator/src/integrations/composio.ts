@@ -86,7 +86,7 @@ export class ConnectionsService {
     this.bridgeClient = new RemoteComposioBridgeClient(managedBackend);
     this.apiKey = apiKey || null;
     this.client = this.apiKey ? new Composio({ apiKey: this.apiKey }) : null;
-    this.allowedToolkits = parseAllowedToolkits(process.env.VERVO_COMPOSIO_ALLOWED_TOOLKITS);
+    this.allowedToolkits = parseAllowedToolkits(process.env.VERSO_COMPOSIO_ALLOWED_TOOLKITS);
   }
 
   get configured(): boolean {
@@ -99,7 +99,7 @@ export class ConnectionsService {
 
   async listConnections(): Promise<ConnectionView[]> {
     if (this.bridgeClient.configured) {
-      const userId = this.store.ensureVervoUserId();
+      const userId = this.store.ensureversoUserId();
       try {
         const items = await this.bridgeClient.listConnections(userId);
         syncRemoteConnectionsIntoStore(this.store, items);
@@ -122,7 +122,7 @@ export class ConnectionsService {
     this.assertConfigured();
 
     if (this.bridgeClient.configured) {
-      const userId = this.store.ensureVervoUserId();
+      const userId = this.store.ensureversoUserId();
       try {
         const items = await this.bridgeClient.listToolkits(userId, opts.query, opts.limit);
         return {
@@ -151,7 +151,7 @@ export class ConnectionsService {
       throw new HttpError(503, 'Composio API key is not configured.');
     }
 
-    this.store.ensureVervoUserId();
+    this.store.ensureversoUserId();
     const query = opts.query?.trim() || undefined;
     const limit = normalizeToolkitLimit(opts.limit);
 
@@ -226,7 +226,7 @@ export class ConnectionsService {
     this.assertConfigured();
 
     if (this.bridgeClient.configured) {
-      const userId = this.store.ensureVervoUserId();
+      const userId = this.store.ensureversoUserId();
       try {
         const request = await this.bridgeClient.requestConnection(userId, toolkitSlug, `${baseUrl}/connections/callback`);
         syncRemoteRequestIntoStore(this.store, request);
@@ -262,7 +262,7 @@ export class ConnectionsService {
       toolkitName: resolvedToolkit.name,
       logoUrl: resolvedToolkit.logoUrl,
     };
-    const userId = this.store.ensureVervoUserId();
+    const userId = this.store.ensureversoUserId();
     const session = await this.client!.create(userId, {
       toolkits: [resolvedToolkit.slug],
       manageConnections: false,
@@ -364,7 +364,7 @@ export class ConnectionsService {
 
   private async syncConnections(): Promise<void> {
     if (!this.client) return;
-    const userId = this.store.getVervoUserId();
+    const userId = this.store.getversoUserId();
     if (!userId) return;
 
     const response = await this.client.connectedAccounts.list({
@@ -407,7 +407,7 @@ export class ConnectionsService {
     if (this.bridgeClient.configured || this.client) return;
     throw new HttpError(
       503,
-      'Composio is unavailable. Set VERVO_BACKEND_URL (managed) or COMPOSIO_API_KEY (direct) to enable connections.',
+      'Composio is unavailable. Set VERSO_BACKEND_URL (managed) or COMPOSIO_API_KEY (direct) to enable connections.',
     );
   }
 

@@ -11,23 +11,23 @@ describe('Crons orchestrator routes', () => {
 
   beforeAll(async () => {
     envSnapshot = {
-      VERVO_HERMES_GATEWAY_URL: process.env.VERVO_HERMES_GATEWAY_URL,
-      VERVO_CHAT_STORE_PATH: process.env.VERVO_CHAT_STORE_PATH,
-      VERVO_HERMES_COMMAND: process.env.VERVO_HERMES_COMMAND,
-      VERVO_HERMES_ARGS: process.env.VERVO_HERMES_ARGS,
-      VERVO_HERMES_CWD: process.env.VERVO_HERMES_CWD,
-      VERVO_HERMES_MANAGED: process.env.VERVO_HERMES_MANAGED,
+      VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
+      VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
+      VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
+      VERSO_HERMES_ARGS: process.env.VERSO_HERMES_ARGS,
+      VERSO_HERMES_CWD: process.env.VERSO_HERMES_CWD,
+      VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
     };
 
     gatewayPort = await allocatePort();
-    process.env.VERVO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
-    process.env.VERVO_CHAT_STORE_PATH = `/tmp/vervo-crons-${process.pid}.sqlite`;
-    process.env.VERVO_HERMES_COMMAND = process.execPath;
-    process.env.VERVO_HERMES_ARGS = JSON.stringify([
+    process.env.VERSO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
+    process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-crons-${process.pid}.sqlite`;
+    process.env.VERSO_HERMES_COMMAND = process.execPath;
+    process.env.VERSO_HERMES_ARGS = JSON.stringify([
       path.resolve(process.cwd(), 'test/fixtures/fake-hermes-gateway.mjs'),
     ]);
-    process.env.VERVO_HERMES_CWD = process.cwd();
-    process.env.VERVO_HERMES_MANAGED = 'true';
+    process.env.VERSO_HERMES_CWD = process.cwd();
+    process.env.VERSO_HERMES_MANAGED = 'true';
 
     const result = await startServer({ port: 0 });
     server = result.server;

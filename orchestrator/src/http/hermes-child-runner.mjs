@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 
-const command = process.env.VERVO_HERMES_CHILD_COMMAND || '';
-const cwd = process.env.VERVO_HERMES_CHILD_CWD || process.cwd();
-const args = parseArgs(process.env.VERVO_HERMES_CHILD_ARGS);
+const command = process.env.VERSO_HERMES_CHILD_COMMAND || '';
+const cwd = process.env.VERSO_HERMES_CHILD_CWD || process.cwd();
+const args = parseArgs(process.env.VERSO_HERMES_CHILD_ARGS);
 
 if (!command) {
   console.error('[hermes runner] missing child command');

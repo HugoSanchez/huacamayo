@@ -41,15 +41,15 @@ declare global {
       };
     };
     setSidecarPort?: (port: number) => void;
-    __vervoSidecarPort?: number;
-    __vervoShellMode?: 'native' | 'browser';
-    __vervoPendingSelectedSessionId?: string | null;
-    __vervoPendingCatalogOpen?: boolean;
-    __vervoPendingSkillsCatalogOpen?: boolean;
+    __versoSidecarPort?: number;
+    __versoShellMode?: 'native' | 'browser';
+    __versoPendingSelectedSessionId?: string | null;
+    __versoPendingCatalogOpen?: boolean;
+    __versoPendingSkillsCatalogOpen?: boolean;
   }
 }
 
-const SESSION_STORAGE_KEY = 'vervo.chat.sessionId';
+const SESSION_STORAGE_KEY = 'verso.chat.sessionId';
 
 export function App() {
   const isNativeShell = hasNativeShell();
@@ -63,10 +63,10 @@ export function App() {
   const [isHydratingSession, setIsHydratingSession] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [isCatalogOpen, setIsCatalogOpen] = useState<boolean>(
-    Boolean(typeof window !== 'undefined' && window.__vervoPendingCatalogOpen),
+    Boolean(typeof window !== 'undefined' && window.__versoPendingCatalogOpen),
   );
   const [isSkillsCatalogOpen, setIsSkillsCatalogOpen] = useState<boolean>(
-    Boolean(typeof window !== 'undefined' && window.__vervoPendingSkillsCatalogOpen),
+    Boolean(typeof window !== 'undefined' && window.__versoPendingSkillsCatalogOpen),
   );
   const [selectedSkillSlug, setSelectedSkillSlug] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -99,9 +99,9 @@ export function App() {
       }
       connectionPollers.current.clear();
     };
-    window.addEventListener('vervo:system-sleep', onSleep);
+    window.addEventListener('verso:system-sleep', onSleep);
     return () => {
-      window.removeEventListener('vervo:system-sleep', onSleep);
+      window.removeEventListener('verso:system-sleep', onSleep);
     };
   }, []);
 
@@ -175,7 +175,7 @@ export function App() {
   const bootstrapSessions = useCallback(async () => {
     const nextSessions = await refreshSessionList();
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    const pendingNativeSessionId = normalizeNativeSessionId(window.__vervoPendingSelectedSessionId);
+    const pendingNativeSessionId = normalizeNativeSessionId(window.__versoPendingSelectedSessionId);
     const initialSessionId = isNativeShell
       ? resolveNativeBootstrapSessionId(nextSessions, pendingNativeSessionId, storedSessionId)
       : pickInitialSessionId(nextSessions, storedSessionId);
@@ -204,16 +204,16 @@ export function App() {
       void refreshConnections();
       // Re-broadcast so descendants (InputBar etc.) that mount before
       // App's effect runs can hear about the now-available port.
-      window.dispatchEvent(new CustomEvent('vervo:sidecar-port-ready', { detail: { port } }));
+      window.dispatchEvent(new CustomEvent('verso:sidecar-port-ready', { detail: { port } }));
     };
 
     window.setSidecarPort = (port: number) => {
-      window.__vervoSidecarPort = port;
+      window.__versoSidecarPort = port;
       applyPort(port);
     };
 
-    if (typeof window.__vervoSidecarPort === 'number' && window.__vervoSidecarPort > 0) {
-      applyPort(window.__vervoSidecarPort);
+    if (typeof window.__versoSidecarPort === 'number' && window.__versoSidecarPort > 0) {
+      applyPort(window.__versoSidecarPort);
     }
 
     const onPortEvent = (ev: Event) => {
@@ -221,11 +221,11 @@ export function App() {
       const rawPort = detail?.port;
       const port = typeof rawPort === 'number' ? rawPort : Number(rawPort);
       if (Number.isFinite(port) && port > 0) {
-        window.__vervoSidecarPort = port;
+        window.__versoSidecarPort = port;
         applyPort(port);
       }
     };
-    window.addEventListener('vervo:sidecar-port', onPortEvent as EventListener);
+    window.addEventListener('verso:sidecar-port', onPortEvent as EventListener);
 
     const params = new URLSearchParams(window.location.search);
     const devPort = params.get('port');
@@ -237,7 +237,7 @@ export function App() {
     }
 
     return () => {
-      window.removeEventListener('vervo:sidecar-port', onPortEvent as EventListener);
+      window.removeEventListener('verso:sidecar-port', onPortEvent as EventListener);
       window.setSidecarPort = undefined;
       for (const poller of connectionPollers.current.values()) {
         window.clearInterval(poller);
@@ -278,9 +278,9 @@ export function App() {
       })();
     };
 
-    window.addEventListener('vervo:select-session', handleNativeSelection as EventListener);
+    window.addEventListener('verso:select-session', handleNativeSelection as EventListener);
     return () => {
-      window.removeEventListener('vervo:select-session', handleNativeSelection as EventListener);
+      window.removeEventListener('verso:select-session', handleNativeSelection as EventListener);
     };
   }, [hydrateSession, isNativeShell, refreshSessionList]);
 
@@ -291,9 +291,9 @@ export function App() {
       setIsCatalogOpen(open);
     };
 
-    window.addEventListener('vervo:toggle-catalog', handleCatalogToggle as EventListener);
+    window.addEventListener('verso:toggle-catalog', handleCatalogToggle as EventListener);
     return () => {
-      window.removeEventListener('vervo:toggle-catalog', handleCatalogToggle as EventListener);
+      window.removeEventListener('verso:toggle-catalog', handleCatalogToggle as EventListener);
     };
   }, [isCatalogOpen]);
 
@@ -304,9 +304,9 @@ export function App() {
       setIsSkillsCatalogOpen(open);
     };
 
-    window.addEventListener('vervo:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
+    window.addEventListener('verso:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
     return () => {
-      window.removeEventListener('vervo:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
+      window.removeEventListener('verso:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
     };
   }, [isSkillsCatalogOpen]);
 
@@ -320,9 +320,9 @@ export function App() {
       setIsCatalogOpen(false);
       setIsSkillsCatalogOpen(false);
     };
-    window.addEventListener('vervo:open-cron-detail', handleOpenCron as EventListener);
+    window.addEventListener('verso:open-cron-detail', handleOpenCron as EventListener);
     return () => {
-      window.removeEventListener('vervo:open-cron-detail', handleOpenCron as EventListener);
+      window.removeEventListener('verso:open-cron-detail', handleOpenCron as EventListener);
     };
   }, []);
 
@@ -334,9 +334,9 @@ export function App() {
       setIsCatalogOpen(false);
       setIsSkillsCatalogOpen(false);
     };
-    window.addEventListener('vervo:open-settings', handleOpenSettings as EventListener);
+    window.addEventListener('verso:open-settings', handleOpenSettings as EventListener);
     return () => {
-      window.removeEventListener('vervo:open-settings', handleOpenSettings as EventListener);
+      window.removeEventListener('verso:open-settings', handleOpenSettings as EventListener);
     };
   }, []);
 
@@ -353,9 +353,9 @@ export function App() {
         [targetKey]: { text: prev[targetKey]?.text ?? '', attached: { kind: 'cron', id, name } },
       }));
     };
-    window.addEventListener('vervo:attach-cron', handleAttachCron as EventListener);
+    window.addEventListener('verso:attach-cron', handleAttachCron as EventListener);
     return () => {
-      window.removeEventListener('vervo:attach-cron', handleAttachCron as EventListener);
+      window.removeEventListener('verso:attach-cron', handleAttachCron as EventListener);
     };
   }, [selectedSessionId]);
 
@@ -1131,7 +1131,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function hasNativeShell(): boolean {
-  return window.__vervoShellMode === 'native'
+  return window.__versoShellMode === 'native'
     || typeof window.webkit?.messageHandlers?.chatBridge?.postMessage === 'function';
 }
 

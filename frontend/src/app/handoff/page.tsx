@@ -15,7 +15,7 @@ export default function HandoffPage() {
         <div className="notice">
           <div className="status-row">
             <span>Target callback</span>
-            <strong className="mono">vervo://auth/callback</strong>
+            <strong className="mono">verso://auth/callback</strong>
           </div>
         </div>
 

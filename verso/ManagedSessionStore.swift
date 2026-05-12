@@ -44,7 +44,7 @@ struct ManagedSessionEvent: Equatable {
 
 @MainActor
 final class ManagedSessionStore: ObservableObject {
-    private static let keychainService = "com.vervo.managed-session"
+    private static let keychainService = "com.verso.managed-session"
     private static let keychainAccount = "current"
 
     @Published private(set) var currentSession: ManagedAppSession?
@@ -58,7 +58,7 @@ final class ManagedSessionStore: ObservableObject {
     }
 
     func handleCallbackURL(_ url: URL) {
-        guard url.scheme?.lowercased() == "vervo" else { return }
+        guard url.scheme?.lowercased() == "verso" else { return }
         guard url.host?.lowercased() == "auth", url.path == "/callback" else {
             latestEvent = ManagedSessionEvent(id: UUID(), message: "Ignored unsupported auth callback URL.", isError: true)
             return

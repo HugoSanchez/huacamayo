@@ -23,7 +23,7 @@ final class SidecarManager: ObservableObject {
     private var stopRequested = false
     private var restartAttempts = 0
     private let maxRestartAttempts = 8
-    private let logger = Logger(subsystem: "com.vervo.app", category: "Sidecar")
+    private let logger = Logger(subsystem: "com.verso.app", category: "Sidecar")
 
     struct ManagedAccountSnapshot: Equatable, Decodable {
         struct Backend: Equatable, Decodable {
@@ -90,7 +90,7 @@ final class SidecarManager: ObservableObject {
         let logsDir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
             .first!
             .appendingPathComponent("Logs", isDirectory: true)
-            .appendingPathComponent("Vervo", isDirectory: true)
+            .appendingPathComponent("verso", isDirectory: true)
         try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
         return logsDir.appendingPathComponent("sidecar.log")
     }
@@ -180,7 +180,7 @@ final class SidecarManager: ObservableObject {
             }
             guard (200..<300).contains(http.statusCode) else {
                 throw NSError(
-                    domain: "Vervo.SidecarManager",
+                    domain: "verso.SidecarManager",
                     code: http.statusCode,
                     userInfo: [NSLocalizedDescriptionKey: "Managed account request failed with HTTP \(http.statusCode)."]
                 )
@@ -239,7 +239,7 @@ final class SidecarManager: ObservableObject {
         guard activityToken == nil else { return }
         activityToken = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .automaticTerminationDisabled, .suddenTerminationDisabled],
-            reason: "Vervo orchestrator must run continuously to serve the chat UI"
+            reason: "verso orchestrator must run continuously to serve the chat UI"
         )
     }
 
@@ -309,20 +309,20 @@ final class SidecarManager: ObservableObject {
         let currentPath = env["PATH"] ?? ""
         env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
         if let managedSession, !managedSession.isExpired {
-            env["VERVO_MANAGED_SESSION_TOKEN"] = managedSession.token
-            env["VERVO_MANAGED_SESSION_EXPIRES_AT"] = managedSession.expiresAt
-            env["VERVO_MANAGED_USER_ID"] = managedSession.userId
+            env["VERSO_MANAGED_SESSION_TOKEN"] = managedSession.token
+            env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = managedSession.expiresAt
+            env["VERSO_MANAGED_USER_ID"] = managedSession.userId
         }
         // The orchestrator polls this pid every few seconds; if it goes away
         // (we crashed, were force-quit, were stopped from Xcode without a
         // graceful shutdown), the orchestrator self-exits. Without this, the
         // sidecar gets re-parented to launchd and keeps spinning forever.
-        env["VERVO_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
+        env["VERSO_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         process.environment = env
 
         logger.info("Launching sidecar: \(nodePath) \(tsxBin) src/http/server.ts")
         logger.info("Working directory: \(serverDir)")
-        if let command = env["VERVO_HERMES_COMMAND"], !command.isEmpty {
+        if let command = env["VERSO_HERMES_COMMAND"], !command.isEmpty {
             logger.info("Agent runtime launch mode: managed command \(command)")
         } else {
             logger.info("Agent runtime launch mode: auto-detect installed CLI")
@@ -341,7 +341,7 @@ final class SidecarManager: ObservableObject {
         self.stderrTailHandle = stderrPipe.fileHandleForReading
         self.stdoutTailHandle = stdoutPipe.fileHandleForReading
 
-        let startMarker = "\n[vervo] launching sidecar pid=\(process.processIdentifier) at \(Self.timestamp())\n"
+        let startMarker = "\n[verso] launching sidecar pid=\(process.processIdentifier) at \(Self.timestamp())\n"
         if let logHandle {
             Self.appendToLog(handle: logHandle, text: startMarker)
         }
@@ -424,7 +424,7 @@ final class SidecarManager: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if let handle = self.logFileHandle {
-                    Self.appendToLog(handle: handle, text: "\n[vervo] sidecar exited: \(reason) at \(Self.timestamp())\n")
+                    Self.appendToLog(handle: handle, text: "\n[verso] sidecar exited: \(reason) at \(Self.timestamp())\n")
                 }
                 self.stderrTailHandle?.readabilityHandler = nil
                 self.stdoutTailHandle?.readabilityHandler = nil
@@ -540,8 +540,8 @@ final class SidecarManager: ObservableObject {
         }
 
         let thisFile = #filePath
-        let vervoDir = (thisFile as NSString).deletingLastPathComponent
-        let repoRoot = (vervoDir as NSString).deletingLastPathComponent
+        let versoDir = (thisFile as NSString).deletingLastPathComponent
+        let repoRoot = (versoDir as NSString).deletingLastPathComponent
         let candidate = (repoRoot as NSString).appendingPathComponent("orchestrator")
         if FileManager.default.fileExists(atPath: candidate) {
             return candidate
