@@ -308,6 +308,16 @@ final class SidecarManager: ObservableObject {
         ]
         let currentPath = env["PATH"] ?? ""
         env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+        // Release builds (Archive) point the orchestrator at the deployed
+        // managed backend. Debug builds (Xcode → Run) keep the orchestrator
+        // default of http://127.0.0.1:8788 so local dev iterates against the
+        // local backend. A pre-set VERSO_BACKEND_URL in the parent env always
+        // wins (useful for testing prod from a debug build).
+        #if !DEBUG
+        if env["VERSO_BACKEND_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            env["VERSO_BACKEND_URL"] = "https://verso-backend-2lg3.onrender.com"
+        }
+        #endif
         if let managedSession, !managedSession.isExpired {
             env["VERSO_MANAGED_SESSION_TOKEN"] = managedSession.token
             env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = managedSession.expiresAt

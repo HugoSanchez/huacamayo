@@ -1,13 +1,35 @@
+/*
+ * Theme variables — light defaults, dark via prefers-color-scheme.
+ * Mirrors the landing page so every screen shares the same canvas.
+ */
 :root {
-  color-scheme: dark;
-  --bg: #141618;
-  --panel: rgba(255, 255, 255, 0.04);
-  --panel-strong: rgba(255, 255, 255, 0.08);
-  --border: rgba(255, 255, 255, 0.08);
-  --text: rgba(255, 255, 255, 0.92);
-  --text-dim: rgba(255, 255, 255, 0.62);
-  --accent: #7ec0ff;
-  --accent-strong: #4ca6ff;
+  color-scheme: light dark;
+
+  --bg: #f4f5f7;
+  --bg-grad-a: #fafbfc;
+  --bg-grad-b: #e6e8ec;
+  --panel: rgba(0, 0, 0, 0.04);
+  --panel-strong: rgba(0, 0, 0, 0.07);
+  --border: rgba(0, 0, 0, 0.08);
+  --text: rgba(0, 0, 0, 0.86);
+  --text-dim: rgba(0, 0, 0, 0.58);
+  --accent: #4ca6ff;
+  --accent-strong: #2f7fd1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1012;
+    --bg-grad-a: #18191c;
+    --bg-grad-b: #0b0c0e;
+    --panel: rgba(255, 255, 255, 0.04);
+    --panel-strong: rgba(255, 255, 255, 0.08);
+    --border: rgba(255, 255, 255, 0.08);
+    --text: rgba(255, 255, 255, 0.92);
+    --text-dim: rgba(255, 255, 255, 0.62);
+    --accent: #7ec0ff;
+    --accent-strong: #4ca6ff;
+  }
 }
 
 * {
@@ -18,13 +40,20 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
 }
 
 body {
   min-height: 100vh;
+  /* Clip horizontal overflow so pages with off-screen bleed (e.g. the
+     landing's right-flush screenshot) don't add a horizontal scrollbar. */
+  overflow-x: clip;
+  background:
+    radial-gradient(60% 50% at 50% 0%, var(--bg-grad-a) 0%, transparent 70%),
+    linear-gradient(180deg, var(--bg-grad-a) 0%, var(--bg-grad-b) 100%);
+  background-color: var(--bg);
+  background-attachment: fixed;
 }
 
 a {

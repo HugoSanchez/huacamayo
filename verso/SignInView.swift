@@ -66,12 +66,24 @@ struct SignInView: View {
 
         let configured = ProcessInfo.processInfo.environment["VERSO_FRONTEND_URL"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let raw = (configured?.isEmpty == false ? configured! : "http://127.0.0.1:3000/login")
+        let raw = (configured?.isEmpty == false ? configured! : Self.defaultFrontendURL)
         guard let url = URL(string: raw) else {
             errorMessage = "Sign-in URL is not configured."
             return
         }
 
         NSWorkspace.shared.open(url)
+    }
+
+    /// Debug builds (Xcode → Run) use localhost so day-to-day dev still works.
+    /// Release builds (Archive) point at the deployed frontend so friends sign
+    /// in via the real domain. The `VERSO_FRONTEND_URL` env var still wins if
+    /// set, useful for testing prod from a debug build or vice versa.
+    private static var defaultFrontendURL: String {
+        #if DEBUG
+        return "http://127.0.0.1:3000/login"
+        #else
+        return "https://www.itsverso.xyz/login"
+        #endif
     }
 }
