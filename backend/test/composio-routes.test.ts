@@ -70,11 +70,6 @@ class StubComposioService extends ComposioService {
     ];
   }
 
-  override async executeTool(userId: string, toolSlug: string) {
-    this.capturedUserId = userId;
-    return { data: { ok: true, toolSlug }, error: null, logId: null };
-  }
-
   override resetSession(_userId: string): void {
     // no-op
   }
@@ -167,34 +162,119 @@ describe('Composio routes', () => {
     expect(receivedOpts?.limit).toBe(12);
   });
 
-  test('POST /v1/composio/tools/execute ignores caller-supplied userId and uses authenticated user', async () => {
+  test('POST /v1/composio/connections/request ignores caller-supplied userId and uses authenticated user', async () => {
     s = await setup();
+    const composio = s.composio;
+    let capturedToolkit: string | null = null;
+    composio.requestConnection = async (userId, toolkit, _callbackUrl) => {
+      composio.capturedUserId = userId;
+      capturedToolkit = toolkit;
+      return {
+        id: 'req_x',
+        toolkitSlug: toolkit,
+        toolkitName: 'Gmail',
+        logoUrl: null,
+        status: 'pending' as const,
+        redirectUrl: 'https://composio.example/auth',
+        connectedAccountId: null,
+        errorMessage: null,
+      };
+    };
     const res = await s.app.inject({
       method: 'POST',
-      url: '/v1/composio/tools/execute',
+      url: '/v1/composio/connections/request',
       headers: { authorization: `Bearer ${s.sessionToken}` },
       payload: {
         userId: 'usr_attacker_attempting_to_act_as_someone_else',
-        toolSlug: 'gmail.send',
-        arguments: { to: 'a@b.com' },
+        toolkit: 'gmail',
+        callbackUrl: 'https://verso.example/cb',
       },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().result.data.toolSlug).toBe('gmail.send');
-    // The route used the bearer's user id, not the spoofed body userId.
-    expect(s.composio.capturedUserId).toBe(s.userId);
+    expect(res.statusCode).toBe(201);
+    expect(capturedToolkit).toBe('gmail');
+    expect(composio.capturedUserId).toBe(s.userId);
   });
 
-  test('POST /v1/composio/tools/execute rejects missing toolSlug as 400', async () => {
+  test('POST /v1/composio/connections/request rejects missing toolkit as 400', async () => {
     s = await setup();
     const res = await s.app.inject({
       method: 'POST',
-      url: '/v1/composio/tools/execute',
+      url: '/v1/composio/connections/request',
       headers: { authorization: `Bearer ${s.sessionToken}` },
-      payload: { arguments: {} },
+      payload: { callbackUrl: 'https://verso.example/cb' },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('composio_error');
+  });
+
+  test('POST /v1/composio/actions/find uses authenticated user', async () => {
+    s = await setup();
+    const composio = s.composio;
+    let receivedIntent: string | undefined;
+    composio.findActions = async (userId, request) => {
+      composio.capturedUserId = userId;
+      receivedIntent = request.intent;
+      return [
+        {
+          provider: 'composio' as const,
+          providerAction: 'SLACK_SEARCH_MESSAGES',
+          appSlug: 'slack',
+          appName: 'Slack',
+          name: 'Search messages',
+          description: null,
+          inputSchema: null,
+          guidance: null,
+          connection: null,
+        },
+      ];
+    };
+    const res = await s.app.inject({
+      method: 'POST',
+      url: '/v1/composio/actions/find',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+      payload: {
+        userId: 'usr_attacker_attempting_to_act_as_someone_else',
+        app: 'slack',
+        intent: 'search Slack',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(receivedIntent).toBe('search Slack');
+    expect(s.composio.capturedUserId).toBe(s.userId);
+    expect(res.json().actions[0].providerAction).toBe('SLACK_SEARCH_MESSAGES');
+  });
+
+  test('POST /v1/composio/actions/execute forwards provider action and arguments', async () => {
+    s = await setup();
+    const composio = s.composio;
+    let receivedProviderAction: string | undefined;
+    let receivedArguments: Record<string, unknown> | undefined;
+    composio.executeAction = async (userId, request) => {
+      composio.capturedUserId = userId;
+      receivedProviderAction = request.providerAction;
+      receivedArguments = request.arguments;
+      return {
+        provider: 'composio' as const,
+        providerAction: request.providerAction ?? '',
+        data: { ok: true },
+        error: null,
+        logId: 'log_1',
+        successful: true,
+      };
+    };
+    const res = await s.app.inject({
+      method: 'POST',
+      url: '/v1/composio/actions/execute',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+      payload: {
+        providerAction: 'SLACK_SEARCH_MESSAGES',
+        arguments: { query: 'katana' },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(s.composio.capturedUserId).toBe(s.userId);
+    expect(receivedProviderAction).toBe('SLACK_SEARCH_MESSAGES');
+    expect(receivedArguments).toEqual({ query: 'katana' });
   });
 
   test('surfaces ComposioServiceError status when the service throws', async () => {

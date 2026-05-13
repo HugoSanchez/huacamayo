@@ -13,11 +13,15 @@ export interface BreakerDecision {
   allowed: boolean;
   /** When `allowed=false`, milliseconds remaining before auto-recovery. */
   cooldownRemainingMs: number;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
 }
 
 interface BreakerState {
   consecutiveFailures: number;
   openedAt: number | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
 }
 
 export class FailureCircuitBreaker {
@@ -32,16 +36,33 @@ export class FailureCircuitBreaker {
 
   check(userId: string, now: number = Date.now()): BreakerDecision {
     const state = this.states.get(userId);
-    if (!state || state.openedAt === null) return { allowed: true, cooldownRemainingMs: 0 };
+    if (!state || state.openedAt === null) {
+      return {
+        allowed: true,
+        cooldownRemainingMs: 0,
+        lastErrorCode: state?.lastErrorCode ?? null,
+        lastErrorMessage: state?.lastErrorMessage ?? null,
+      };
+    }
     const elapsed = now - state.openedAt;
     if (elapsed >= this.cooldownMs) {
       // Cooldown elapsed; clear breaker but keep counter at threshold so a
       // single further failure re-opens us — we don't trust a half-recovered
       // user to immediately go on a fresh streak.
       state.openedAt = null;
-      return { allowed: true, cooldownRemainingMs: 0 };
+      return {
+        allowed: true,
+        cooldownRemainingMs: 0,
+        lastErrorCode: state.lastErrorCode,
+        lastErrorMessage: state.lastErrorMessage,
+      };
     }
-    return { allowed: false, cooldownRemainingMs: this.cooldownMs - elapsed };
+    return {
+      allowed: false,
+      cooldownRemainingMs: this.cooldownMs - elapsed,
+      lastErrorCode: state.lastErrorCode,
+      lastErrorMessage: state.lastErrorMessage,
+    };
   }
 
   recordSuccess(userId: string): void {
@@ -51,9 +72,21 @@ export class FailureCircuitBreaker {
     state.openedAt = null;
   }
 
-  recordFailure(userId: string, now: number = Date.now()): void {
-    const state = this.states.get(userId) ?? { consecutiveFailures: 0, openedAt: null };
+  recordFailure(
+    userId: string,
+    now: number = Date.now(),
+    errorCode: string | null = null,
+    errorMessage: string | null = null,
+  ): void {
+    const state = this.states.get(userId) ?? {
+      consecutiveFailures: 0,
+      openedAt: null,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+    };
     state.consecutiveFailures += 1;
+    state.lastErrorCode = errorCode;
+    state.lastErrorMessage = errorMessage;
     if (state.consecutiveFailures >= this.threshold) {
       state.openedAt = now;
     }

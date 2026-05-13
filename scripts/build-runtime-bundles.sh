@@ -2,10 +2,10 @@
 #
 # build-runtime-bundles.sh
 # ────────────────────────
-# Populates ./runtime-bundles/ with the runtime components that get embedded
+# Populates ./desktop/runtime-bundles/ with the runtime components that get embedded
 # inside Verso.app for Release builds:
 #
-#   runtime-bundles/
+#   desktop/runtime-bundles/
 #   ├── node/bin/node                     Node.js (universal arm64 + x86_64)
 #   ├── orchestrator/                     Source + node_modules, ready to run
 #   ├── python/{arm64,x86_64}/python/...  python-build-standalone (one per arch)
@@ -21,7 +21,7 @@
 #
 # Run this whenever:
 #   • First clone of the repo
-#   • You change orchestrator/package.json (deps changed)
+#   • You change desktop/orchestrator/package.json (deps changed)
 #   • You bump NODE_VERSION, PYTHON_TAG, or HERMES_REF below
 #   • Hermes upstream releases a new commit you want to ship
 #
@@ -47,7 +47,8 @@ HERMES_EXTRAS="mcp,cli,cron"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BUNDLE_DIR="${REPO_ROOT}/runtime-bundles"
+DESKTOP_ROOT="${REPO_ROOT}/desktop"
+BUNDLE_DIR="${DESKTOP_ROOT}/runtime-bundles"
 NODE_DIR="${BUNDLE_DIR}/node"
 ORCHESTRATOR_BUNDLE="${BUNDLE_DIR}/orchestrator"
 PYTHON_DIR="${BUNDLE_DIR}/python"
@@ -119,7 +120,7 @@ rsync -a --delete \
     --exclude '.env.*' \
     --exclude '*.log' \
     --exclude '.DS_Store' \
-    "${REPO_ROOT}/orchestrator/" "${ORCHESTRATOR_BUNDLE}/"
+    "${DESKTOP_ROOT}/orchestrator/" "${ORCHESTRATOR_BUNDLE}/"
 
 echo "[bundle] installing orchestrator dependencies (npm ci --include=dev for tsx)"
 # tsx lives in devDependencies, but we need it at runtime in the bundled app
@@ -334,4 +335,4 @@ echo "node=${NODE_VERSION} python=${PYTHON_VERSION} hermes=${HERMES_REF} extras=
     > "${BUNDLE_VERSION_FILE}"
 
 bundle_size=$(du -sh "${BUNDLE_DIR}" | cut -f1)
-echo "[bundle] done — runtime-bundles/ is ${bundle_size}"
+echo "[bundle] done — desktop/runtime-bundles/ is ${bundle_size}"

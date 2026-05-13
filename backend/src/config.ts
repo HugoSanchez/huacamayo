@@ -6,8 +6,8 @@ const optionalString = () => z.preprocess(
   z.string().min(1).optional(),
 );
 
-const DEFAULT_MANAGED_MODEL = 'anthropic/opus-4.7';
-const DEFAULT_ALLOWED_MODELS = ['anthropic/opus-4.7', 'openai/gpt-5.4'];
+const DEFAULT_MANAGED_MODEL = 'anthropic/claude-opus-4.7';
+const DEFAULT_ALLOWED_MODELS = ['anthropic/claude-opus-4.7', 'openai/gpt-5.4'];
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 60;
 const DEFAULT_BREAKER_THRESHOLD = 5;

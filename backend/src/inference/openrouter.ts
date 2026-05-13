@@ -28,17 +28,38 @@ export interface OpenRouterChatStream {
   usagePromise: Promise<InferenceRequestUsage>;
   /** Resolves with the OpenRouter request id if the response carried `id` field, otherwise null. */
   providerRequestIdPromise: Promise<string | null>;
+  /** Resolves when the stream ends with any OpenRouter mid-stream error event that was observed. */
+  errorPromise: Promise<OpenRouterStreamError | null>;
+}
+
+export interface OpenRouterStreamError {
+  code: string;
+  message: string;
+  provider: string | null;
+  rawCode: string | number | null;
+}
+
+export interface OpenRouterErrorOptions {
+  providerStatus?: number | null;
+  retryAfterSec?: number | null;
+  providerErrorCode?: string | number | null;
 }
 
 export class OpenRouterError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly providerStatus: number | null;
+  readonly retryAfterSec: number | null;
+  readonly providerErrorCode: string | number | null;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, options: OpenRouterErrorOptions = {}) {
     super(message);
     this.name = 'OpenRouterError';
     this.status = status;
     this.code = code;
+    this.providerStatus = options.providerStatus ?? null;
+    this.retryAfterSec = options.retryAfterSec ?? null;
+    this.providerErrorCode = options.providerErrorCode ?? null;
   }
 }
 
@@ -108,10 +129,18 @@ export class OpenRouterClient {
 
     if (!response.ok) {
       const text = await safeReadText(response);
+      const providerError = parseProviderError(text);
+      const retryAfterSec = parseRetryAfter(response.headers.get('retry-after'));
+      const code = classifyProviderError(response.status, providerError?.code ?? null);
       throw new OpenRouterError(
         mapProviderStatus(response.status),
-        'provider_error',
-        `OpenRouter returned HTTP ${response.status}: ${text || 'no body'}`,
+        code,
+        formatProviderErrorMessage(response.status, providerError?.message ?? text, retryAfterSec),
+        {
+          providerStatus: response.status,
+          retryAfterSec,
+          providerErrorCode: providerError?.code ?? null,
+        },
       );
     }
 
@@ -141,11 +170,14 @@ function tapUsage(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
     providerRequestId: null,
   };
   let providerRequestId: string | null = null;
+  let streamError: OpenRouterStreamError | null = null;
 
   let resolveUsage!: (value: InferenceRequestUsage) => void;
   let resolveRequestId!: (value: string | null) => void;
+  let resolveStreamError!: (value: OpenRouterStreamError | null) => void;
   const usagePromise = new Promise<InferenceRequestUsage>((resolve) => { resolveUsage = resolve; });
   const providerRequestIdPromise = new Promise<string | null>((resolve) => { resolveRequestId = resolve; });
+  const errorPromise = new Promise<OpenRouterStreamError | null>((resolve) => { resolveStreamError = resolve; });
 
   const transform = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
@@ -166,6 +198,10 @@ function tapUsage(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
           if (parsed.usage && typeof parsed.usage === 'object') {
             usage = readUsage(parsed.usage as Record<string, unknown>, usage);
           }
+          const parsedError = readStreamError(parsed);
+          if (parsedError) {
+            streamError = parsedError;
+          }
         } catch {
           // Tolerate non-JSON keepalive lines from OpenRouter.
         }
@@ -175,6 +211,7 @@ function tapUsage(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
       usage.providerRequestId = providerRequestId;
       resolveUsage(usage);
       resolveRequestId(providerRequestId);
+      resolveStreamError(streamError);
     },
   });
 
@@ -182,6 +219,7 @@ function tapUsage(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
     body: source.pipeThrough(transform),
     usagePromise,
     providerRequestIdPromise,
+    errorPromise,
   };
 }
 
@@ -226,9 +264,85 @@ async function safeReadText(response: Response): Promise<string> {
   }
 }
 
+function parseProviderError(text: string): { code: string | number | null; message: string | null } | null {
+  if (!text.trim()) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const rawError = (parsed as Record<string, unknown>).error;
+    if (!rawError || typeof rawError !== 'object') return null;
+    const error = rawError as Record<string, unknown>;
+    const code = typeof error.code === 'string' || typeof error.code === 'number' ? error.code : null;
+    const message = typeof error.message === 'string' ? error.message : null;
+    return { code, message };
+  } catch {
+    return null;
+  }
+}
+
+function readStreamError(parsed: Record<string, unknown>): OpenRouterStreamError | null {
+  const rawError = parsed.error;
+  if (!rawError || typeof rawError !== 'object') return null;
+  const error = rawError as Record<string, unknown>;
+  const rawCode = typeof error.code === 'string' || typeof error.code === 'number' ? error.code : null;
+  const message = typeof error.message === 'string' && error.message.trim().length > 0
+    ? error.message
+    : 'OpenRouter stream ended with an error.';
+  const provider = typeof parsed.provider === 'string' ? parsed.provider : null;
+  return {
+    code: classifyProviderError(typeof rawCode === 'number' ? rawCode : null, rawCode),
+    message,
+    provider,
+    rawCode,
+  };
+}
+
+function classifyProviderError(status: number | null, providerCode: string | number | null): string {
+  const normalized = String(providerCode ?? '').toLowerCase();
+  if (status === 429 || normalized === '429' || normalized.includes('rate_limit') || normalized.includes('too_many')) {
+    return 'provider_rate_limited';
+  }
+  if (status === 503 || normalized === '503' || normalized.includes('unavailable')) {
+    return 'provider_unavailable';
+  }
+  if (status === 402 || normalized === '402' || normalized.includes('credit') || normalized.includes('insufficient')) {
+    return 'provider_insufficient_credits';
+  }
+  return 'provider_error';
+}
+
+function formatProviderErrorMessage(status: number, rawMessage: string | null | undefined, retryAfterSec: number | null): string {
+  const providerMessage = rawMessage && rawMessage.trim().length > 0 ? rawMessage.trim() : 'no body';
+  const retryHint = retryAfterSec !== null ? ` Retry after ${retryAfterSec}s.` : '';
+  if (status === 429) {
+    return `OpenRouter rate limited the request.${retryHint} ${providerMessage}`.trim();
+  }
+  if (status === 503) {
+    return `OpenRouter has no available provider for this request.${retryHint} ${providerMessage}`.trim();
+  }
+  return `OpenRouter returned HTTP ${status}.${retryHint} ${providerMessage}`.trim();
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.ceil(seconds);
+  }
+
+  const retryAt = Date.parse(value);
+  if (!Number.isNaN(retryAt)) {
+    const secondsUntil = Math.ceil((retryAt - Date.now()) / 1000);
+    return secondsUntil > 0 ? secondsUntil : null;
+  }
+
+  return null;
+}
+
 function mapProviderStatus(status: number): number {
   if (status === 401 || status === 403) return 502;
   if (status === 429) return 429;
+  if (status === 503) return 503;
   if (status >= 500) return 502;
   return 502;
 }

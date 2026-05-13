@@ -97,14 +97,19 @@ export async function registerInferenceRoutes(app: FastifyInstance, deps: Infere
         event: 'circuit_breaker_open',
         userId: auth.user.id,
         cooldownRemainingMs: breakerDecision.cooldownRemainingMs,
+        lastErrorCode: breakerDecision.lastErrorCode,
       }));
+      const lastErrorSuffix = breakerDecision.lastErrorCode
+        ? ` Last error: ${breakerDecision.lastErrorCode}${breakerDecision.lastErrorMessage ? ` (${breakerDecision.lastErrorMessage})` : ''}.`
+        : '';
       return reply
         .code(503)
         .header('Retry-After', String(retryAfterSec))
         .send({
           error: 'auto_paused',
-          message: `Too many consecutive failures. Auto-paused for ${retryAfterSec}s.`,
+          message: `Too many consecutive failures. Auto-paused for ${retryAfterSec}s.${lastErrorSuffix}`,
           cooldownRemainingMs: breakerDecision.cooldownRemainingMs,
+          lastErrorCode: breakerDecision.lastErrorCode,
         });
     }
 
@@ -179,12 +184,33 @@ export async function registerInferenceRoutes(app: FastifyInstance, deps: Infere
       stream = await client.streamChatCompletion(forwardBody);
     } catch (error: unknown) {
       const completedAt = new Date().toISOString();
-      breaker.recordFailure(auth.user.id);
       if (error instanceof OpenRouterError) {
+        breaker.recordFailure(auth.user.id, Date.now(), error.code, error.message);
         await deps.inferenceStore.markFailed(recordId, completedAt, error.code);
-        return reply.code(error.status).send({ error: error.code, message: error.message });
+        console.warn(JSON.stringify({
+          event: 'provider_request_failed',
+          provider: 'openrouter',
+          userId: auth.user.id,
+          inferenceRequestId: recordId,
+          status: error.status,
+          providerStatus: error.providerStatus,
+          errorCode: error.code,
+          providerErrorCode: error.providerErrorCode,
+          retryAfterSec: error.retryAfterSec,
+        }));
+        if (error.retryAfterSec !== null) {
+          reply.header('Retry-After', String(error.retryAfterSec));
+        }
+        return reply.code(error.status).send({
+          error: error.code,
+          message: error.message,
+          provider: 'openrouter',
+          providerStatus: error.providerStatus,
+          retryAfterSec: error.retryAfterSec,
+        });
       }
       const message = error instanceof Error ? error.message : String(error);
+      breaker.recordFailure(auth.user.id, Date.now(), 'internal_error', message);
       await deps.inferenceStore.markFailed(recordId, completedAt, 'internal_error');
       return reply.code(500).send({ error: 'internal_error', message });
     }
@@ -218,9 +244,26 @@ export async function registerInferenceRoutes(app: FastifyInstance, deps: Infere
     }
 
     const completedAt = new Date().toISOString();
-    if (upstreamFailed) {
-      breaker.recordFailure(auth.user.id);
-      await deps.inferenceStore.markFailed(recordId, completedAt, 'stream_interrupted');
+    const streamError = await stream.errorPromise;
+    if (upstreamFailed || streamError) {
+      breaker.recordFailure(
+        auth.user.id,
+        Date.now(),
+        streamError?.code ?? 'stream_interrupted',
+        streamError?.message ?? null,
+      );
+      await deps.inferenceStore.markFailed(recordId, completedAt, streamError?.code ?? 'stream_interrupted');
+      if (streamError) {
+        console.warn(JSON.stringify({
+          event: 'provider_stream_failed',
+          provider: 'openrouter',
+          userId: auth.user.id,
+          inferenceRequestId: recordId,
+          errorCode: streamError.code,
+          providerErrorCode: streamError.rawCode,
+          providerName: streamError.provider,
+        }));
+      }
       return;
     }
 

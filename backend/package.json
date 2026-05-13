@@ -16,7 +16,7 @@
     "issue-test-session": "tsx scripts/issue-test-session.ts"
   },
   "dependencies": {
-    "@composio/core": "^0.8.0",
+    "@composio/core": "^0.9.1",
     "@fastify/cors": "^11.1.0",
     "@neondatabase/serverless": "^1.0.1",
     "@privy-io/node": "^0.17.0",
@@ -26,6 +26,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^25.6.0",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.21.0",

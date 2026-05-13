@@ -129,10 +129,14 @@ function tapForTests(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
     providerRequestId: null as string | null,
   };
   let providerRequestId: string | null = null;
+  type TestStreamError = Awaited<OpenRouterChatStream['errorPromise']>;
+  let streamError: TestStreamError = null;
   let resolveUsage!: (value: typeof usage) => void;
   let resolveRequestId!: (value: string | null) => void;
+  let resolveStreamError!: (value: TestStreamError) => void;
   const usagePromise = new Promise<typeof usage>((resolve) => { resolveUsage = resolve; });
   const providerRequestIdPromise = new Promise<string | null>((resolve) => { resolveRequestId = resolve; });
+  const errorPromise = new Promise<TestStreamError>((resolve) => { resolveStreamError = resolve; });
 
   const transform = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
@@ -159,6 +163,16 @@ function tapForTests(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
               estimatedCostUsd: numberOf(u.cost) ?? usage.estimatedCostUsd,
             };
           }
+          if (parsed.error && typeof parsed.error === 'object') {
+            const err = parsed.error as Record<string, unknown>;
+            const rawCode = typeof err.code === 'string' || typeof err.code === 'number' ? err.code : null;
+            streamError = {
+              code: classifyProviderErrorForTest(rawCode),
+              message: typeof err.message === 'string' ? err.message : 'stream failed',
+              provider: typeof parsed.provider === 'string' ? parsed.provider : null,
+              rawCode,
+            };
+          }
         } catch { /* tolerate keepalives */ }
       }
     },
@@ -166,6 +180,7 @@ function tapForTests(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
       usage.providerRequestId = providerRequestId;
       resolveUsage(usage);
       resolveRequestId(providerRequestId);
+      resolveStreamError(streamError);
     },
   });
 
@@ -173,12 +188,53 @@ function tapForTests(source: ReadableStream<Uint8Array>): OpenRouterChatStream {
     body: source.pipeThrough(transform),
     usagePromise: usagePromise as unknown as OpenRouterChatStream['usagePromise'],
     providerRequestIdPromise,
+    errorPromise,
   };
 }
 
 function numberOf(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
+
+function classifyProviderErrorForTest(rawCode: string | number | null): 'provider_rate_limited' | 'provider_error' {
+  const normalized = String(rawCode ?? '').toLowerCase();
+  if (normalized.includes('rate_limit') || normalized.includes('too_many') || normalized === '429') {
+    return 'provider_rate_limited';
+  }
+  return 'provider_error';
+}
+
+describe('OpenRouterClient', () => {
+  test('classifies OpenRouter HTTP 429s and preserves Retry-After', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      error: { code: 429, message: 'Rate limit exceeded' },
+    }), {
+      status: 429,
+      headers: {
+        'Content-Type': 'application/json',
+        'Retry-After': '60',
+      },
+    })) as typeof fetch;
+
+    try {
+      const client = new OpenRouterClient({ apiKey: 'or-test' });
+      const error = await client.streamChatCompletion({
+        model: 'openai/gpt-5.4',
+        messages: [{ role: 'user', content: 'hi' }],
+      }).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(OpenRouterError);
+      expect((error as OpenRouterError).status).toBe(429);
+      expect((error as OpenRouterError).code).toBe('provider_rate_limited');
+      expect((error as OpenRouterError).providerStatus).toBe(429);
+      expect((error as OpenRouterError).retryAfterSec).toBe(60);
+      expect((error as Error).message).toContain('OpenRouter rate limited');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
 
 describe('POST /v1/chat/completions', () => {
   let ctx: TestContext;
@@ -306,6 +362,71 @@ describe('POST /v1/chat/completions', () => {
     expect(records).toHaveLength(1);
     expect(records[0].status).toBe('failed');
     expect(records[0].errorCode).toBe('provider_error');
+  });
+
+  test('preserves provider rate-limit metadata when OpenRouter returns 429', async () => {
+    const error = new OpenRouterError(
+      429,
+      'provider_rate_limited',
+      'OpenRouter rate limited the request. Retry after 60s. Rate limit exceeded',
+      {
+        providerStatus: 429,
+        retryAfterSec: 60,
+        providerErrorCode: 429,
+      },
+    );
+    ctx = await setup({ buildClient: failingClient(error) });
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.headers['retry-after']).toBe('60');
+    expect(response.json()).toMatchObject({
+      error: 'provider_rate_limited',
+      provider: 'openrouter',
+      providerStatus: 429,
+      retryAfterSec: 60,
+    });
+
+    const records = await ctx.inferenceStore.listByUserId(ctx.userId);
+    expect(records).toHaveLength(1);
+    expect(records[0].status).toBe('failed');
+    expect(records[0].errorCode).toBe('provider_rate_limited');
+  });
+
+  test('marks OpenRouter mid-stream error events as failed requests', async () => {
+    ctx = await setup({
+      buildClient: fakeClient([
+        'data: {"id":"gen-error","provider":"openai","error":{"code":"rate_limit_exceeded","message":"Rate limit exceeded"},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}\n\n',
+        'data: [DONE]\n\n',
+      ].join('')),
+    });
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('Rate limit exceeded');
+
+    const records = await ctx.inferenceStore.listByUserId(ctx.userId);
+    expect(records).toHaveLength(1);
+    expect(records[0].status).toBe('failed');
+    expect(records[0].errorCode).toBe('provider_rate_limited');
   });
 
   test('injects managedDefaultMaxTokens when the caller omits max_tokens', async () => {
@@ -639,6 +760,8 @@ describe('POST /v1/chat/completions', () => {
     });
     expect(blocked.statusCode).toBe(503);
     expect(blocked.json().error).toBe('auto_paused');
+    expect(blocked.json().lastErrorCode).toBe('provider_error');
+    expect(blocked.json().message).toContain('Last error: provider_error');
   });
 
   test('with null monthlyUsdLimit and null dailyUsdLimit, the request is unconstrained', async () => {

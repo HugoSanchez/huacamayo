@@ -66,8 +66,8 @@ even offline.
 
 | Script | When it runs | What it does |
 |---|---|---|
-| `build-runtime-bundles.sh` | Manually, after deps or pins change | Populates `runtime-bundles/` with universal Node, both-arch Python, Hermes snapshot, pre-downloaded wheels, default configs |
-| `copy-runtime-bundles.sh` | Xcode Run Script phase (Release only) | `rsync runtime-bundles/* verso.app/Contents/Resources/` |
+| `build-runtime-bundles.sh` | Manually, after deps or pins change | Populates `desktop/runtime-bundles/` with universal Node, both-arch Python, Hermes snapshot, pre-downloaded wheels, default configs |
+| `copy-runtime-bundles.sh` | Xcode Run Script phase (Release only) | `rsync desktop/runtime-bundles/* verso.app/Contents/Resources/` |
 | `sign-bundle-binaries.sh` | Xcode Run Script phase (Release only) | Signs every Mach-O under `Resources/` with Developer ID + hardened runtime |
 | `notarize-app.sh` | Manually, after Release build | Ditto-zips → submits to Apple → staples ticket |
 
