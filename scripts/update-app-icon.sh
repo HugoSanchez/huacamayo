@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Slice a 1024x1024 PNG into the 10 macOS AppIcon sizes and drop them into
-# verso/Assets.xcassets/AppIcon.appiconset/.
+# desktop/macos/Assets.xcassets/AppIcon.appiconset/.
 #
 # Usage:
 #   scripts/update-app-icon.sh [path-to-1024.png]
@@ -14,7 +14,7 @@ set -euo pipefail
 
 SRC="${1:-$HOME/Documents/verso-icon.png}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DST="$ROOT/verso/Assets.xcassets/AppIcon.appiconset"
+DST="$ROOT/desktop/macos/Assets.xcassets/AppIcon.appiconset"
 
 if [[ ! -f "$SRC" ]]; then
   echo "error: source PNG not found at $SRC" >&2

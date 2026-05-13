@@ -5,22 +5,22 @@
 # Xcode Run Script build phase. Runs at the end of the verso target build.
 #
 #   • Debug builds: no-op. SidecarManager.swift falls back to the developer's
-#     system `node` and the repo's `orchestrator/` directory, so daily Cmd+R
-#     in Xcode keeps working without bundling.
+#     system `node` and `desktop/orchestrator/`, so daily Cmd+R in Xcode keeps
+#     working without bundling.
 #
-#   • Release builds: rsyncs runtime-bundles/ into the .app's Resources/
-#     directory so the shipping bundle contains everything it needs to run on
-#     a friend's Mac without `brew install node`.
+#   • Release builds: rsyncs desktop/runtime-bundles/ into the .app's
+#     Resources/ directory so the shipping bundle contains everything it needs
+#     to run on a friend's Mac without `brew install node`.
 #
 # Inputs (from Xcode):
 #   CONFIGURATION                 "Debug" or "Release"
-#   SRCROOT                       repo root (xcodeproj sits at the same level)
+#   SRCROOT                       repo root (xcodeproj sits there)
 #   BUILT_PRODUCTS_DIR            wherever Xcode is writing the .app to
 #   CONTENTS_FOLDER_PATH          e.g. "verso.app/Contents"
 #
 # Pre-requisite for Release: ./scripts/build-runtime-bundles.sh must have been
-# run at least once. The script below fails loudly if runtime-bundles/ is
-# missing — much better than producing a silently-broken Release .app.
+# run at least once. The script below fails loudly if desktop/runtime-bundles/
+# is missing — much better than producing a silently-broken Release .app.
 
 set -euo pipefail
 
@@ -29,7 +29,9 @@ if [ "${CONFIGURATION:-}" != "Release" ]; then
     exit 0
 fi
 
-BUNDLE_SRC="${SRCROOT}/runtime-bundles"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUNDLE_SRC="${REPO_ROOT}/desktop/runtime-bundles"
 RESOURCES_DST="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources"
 
 required_paths=(
@@ -44,7 +46,7 @@ required_paths=(
 )
 for p in "${required_paths[@]}"; do
     if [ ! -e "${p}" ]; then
-        echo "error: runtime-bundles/ is missing or incomplete (no ${p})." >&2
+        echo "error: desktop/runtime-bundles/ is missing or incomplete (no ${p})." >&2
         echo "       Run: ./scripts/build-runtime-bundles.sh" >&2
         echo "       Then rebuild the Release archive." >&2
         exit 1

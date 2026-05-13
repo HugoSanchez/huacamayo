@@ -47,12 +47,12 @@
 		A10000050000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				A10000050000000000000002 /* verso */,
+				A10000050000000000000002 /* macos */,
 				A10000050000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A10000050000000000000002 /* verso */ = {
+		A10000050000000000000002 /* macos */ = {
 			isa = PBXGroup;
 			children = (
 					A10000020000000000000001 /* versoApp.swift */,
@@ -67,7 +67,7 @@
 				A10000020000000000000005 /* verso.entitlements */,
 				A10000050000000000000004 /* Preview Content */,
 			);
-			path = "verso";
+			path = "desktop/macos";
 			sourceTree = "<group>";
 		};
 		A10000050000000000000003 /* Products */ = {
@@ -156,7 +156,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "export PATH=\"/usr/local/bin:/opt/homebrew/bin:$PATH\"\ncd \"$SRCROOT/chat-ui\"\nif [ ! -d node_modules ]; then\n  npm install\nfi\nnpm run build\nrm -rf \"$SRCROOT/verso/chat-ui\"\ncp -r dist \"$SRCROOT/verso/chat-ui\"\n";
+			shellScript = "export PATH=\"/usr/local/bin:/opt/homebrew/bin:$PATH\"\ncd \"$SRCROOT/desktop/chat-ui\"\nif [ ! -d node_modules ]; then\n  npm install\nfi\nnpm run build\nrm -rf \"$SRCROOT/desktop/macos/chat-ui\"\ncp -r dist \"$SRCROOT/desktop/macos/chat-ui\"\n";
 		};
 		A100000B0000000000000002 /* Bundle Runtime Components */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -341,14 +341,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "verso/verso.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "desktop/macos/verso.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"verso/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"desktop/macos/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = verso/Info.plist;
+				INFOPLIST_FILE = desktop/macos/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -367,7 +367,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "verso/verso.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "desktop/macos/verso.entitlements";
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				DEVELOPMENT_TEAM = 2T2JL5F698;
@@ -375,10 +375,10 @@
 				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"verso/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"desktop/macos/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = verso/Info.plist;
+				INFOPLIST_FILE = desktop/macos/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

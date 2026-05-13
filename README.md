@@ -4,9 +4,11 @@ A native macOS app for chatting with a local Hermes agent through a desktop UI.
 
 ## Architecture
 
-- **verso/** -- SwiftUI macOS shell that hosts the chat UI
-- **orchestrator/** -- local Node sidecar for Hermes sessions, streaming, persistence, and future tool integration
-- **chat-ui/** -- bundled web chat frontend rendered inside the app
+- **desktop/macos/** -- SwiftUI macOS shell that hosts the chat UI
+- **desktop/orchestrator/** -- local Node sidecar for Hermes sessions, streaming, persistence, and future tool integration
+- **desktop/chat-ui/** -- bundled web chat frontend rendered inside the app
+- **backend/** -- hosted API for managed users
+- **frontend/** -- hosted web/auth frontend
 
 ## Development
 
@@ -15,7 +17,7 @@ A native macOS app for chatting with a local Hermes agent through a desktop UI.
 open verso.xcodeproj
 
 # Run the local sidecar
-cd orchestrator && npm install && npm run dev
+cd desktop/orchestrator && npm install && npm run dev
 ```
 
 ### Managed Hermes startup

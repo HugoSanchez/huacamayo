@@ -12,10 +12,12 @@ describe('FailureCircuitBreaker', () => {
     expect(cb.check('u1', t0 + 20).allowed).toBe(true);
 
     // Third failure trips the breaker.
-    cb.recordFailure('u1', t0 + 30);
+    cb.recordFailure('u1', t0 + 30, 'provider_insufficient_credits', 'No credits.');
     const blocked = cb.check('u1', t0 + 40);
     expect(blocked.allowed).toBe(false);
     expect(blocked.cooldownRemainingMs).toBeGreaterThan(59_000);
+    expect(blocked.lastErrorCode).toBe('provider_insufficient_credits');
+    expect(blocked.lastErrorMessage).toBe('No credits.');
 
     // Still blocked just before cooldown ends.
     expect(cb.check('u1', t0 + 30 + 59_999).allowed).toBe(false);
