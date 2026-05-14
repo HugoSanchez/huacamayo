@@ -16,6 +16,7 @@ import {
   getConnectionRequest,
   getConnections,
   getSidecarPort,
+  getToolkits,
   openConnectionRequest,
   openExternalUrl,
   setSidecarPort,
@@ -31,6 +32,7 @@ import type {
   ConnectionRequestView,
   ConnectionView,
   StoredChatMessage,
+  ToolkitView,
 } from './types';
 
 declare global {
@@ -59,6 +61,11 @@ export function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
   const [connections, setConnections] = useState<ConnectionView[]>([]);
+  // Full toolkit catalog — used by the chat UI to render logos in tool-call
+  // rows for toolkits the user may not have connected (or whose connection
+  // record lacks a logoUrl). Best-effort: failures here just fall back to the
+  // initial-letter badge.
+  const [toolkitCatalog, setToolkitCatalog] = useState<ToolkitView[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isHydratingSession, setIsHydratingSession] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -112,6 +119,30 @@ export function App() {
       setConnections(result.connections);
     } catch {
       // Ignore best-effort refresh failures.
+    }
+  }, []);
+
+  const refreshToolkitCatalog = useCallback(async () => {
+    if (!getSidecarPort()) return;
+    try {
+      // Walk the cursor through every page. The backend caps each page at
+      // 100 toolkits, so a single fetch can miss toolkits whose slug only
+      // appears in tool_slug parsing (e.g. multi-segment slugs like
+      // `granola_mcp`). 20 pages is well over the current catalog size.
+      const collected: ToolkitView[] = [];
+      let cursor: string | null | undefined;
+      for (let page = 0; page < 20; page += 1) {
+        const result = await getToolkits({
+          limit: 100,
+          ...(cursor ? { cursor } : {}),
+        });
+        collected.push(...result.toolkits);
+        cursor = result.nextCursor;
+        if (!cursor) break;
+      }
+      setToolkitCatalog(collected);
+    } catch {
+      // Best-effort — chat rows just fall back to initial-letter badges.
     }
   }, []);
 
@@ -202,6 +233,7 @@ export function App() {
       setConnected(true);
       void bootstrapSessions();
       void refreshConnections();
+      void refreshToolkitCatalog();
       // Re-broadcast so descendants (InputBar etc.) that mount before
       // App's effect runs can hear about the now-available port.
       window.dispatchEvent(new CustomEvent('verso:sidecar-port-ready', { detail: { port } }));
@@ -244,7 +276,7 @@ export function App() {
       }
       connectionPollers.current.clear();
     };
-  }, [bootstrapSessions, refreshConnections]);
+  }, [bootstrapSessions, refreshConnections, refreshToolkitCatalog]);
 
   useEffect(() => {
     if (!isNativeShell) return;
@@ -696,7 +728,12 @@ export function App() {
       ) : (
         <>
           <div className="chat-thread">
-            <MessageList messages={messages} onConnect={handleConnect} connections={connections} />
+            <MessageList
+              messages={messages}
+              onConnect={handleConnect}
+              connections={connections}
+              toolkitCatalog={toolkitCatalog}
+            />
           </div>
 
           <InputBar

@@ -1,27 +1,8 @@
 import { json, route, type Route } from './router.ts';
 import { ComposioBridgeHttpError, ComposioBridgeService } from '../integrations/composio-bridge.ts';
-import { RemoteBridgeHttpError } from '../integrations/composio-bridge-client.ts';
 
 export function buildComposioBridgeRoutes(bridge: ComposioBridgeService): Route[] {
   return [
-    route('GET', '/composio/session', async (_req, res) => {
-      try {
-        const session = await bridge.getDefaultSession();
-        json(res, 200, {
-          available: bridge.configured,
-          configured: bridge.configured,
-          session,
-        });
-      } catch (error: unknown) {
-        handleBridgeError(res, error);
-      }
-    }),
-
-    route('POST', '/composio/session/reset', async (_req, res) => {
-      bridge.reset();
-      json(res, 200, { ok: true });
-    }),
-
     route('POST', '/composio/tools/search', async (_req, res, _params, body) => {
       try {
         const query = getRequiredString(body, 'query');
@@ -58,11 +39,6 @@ export function buildComposioBridgeRoutes(bridge: ComposioBridgeService): Route[
 
 function handleBridgeError(res: Parameters<typeof json>[0], error: unknown): void {
   if (error instanceof ComposioBridgeHttpError) {
-    json(res, error.status, { error: 'request_failed', message: error.message });
-    return;
-  }
-
-  if (error instanceof RemoteBridgeHttpError) {
     json(res, error.status, { error: 'request_failed', message: error.message });
     return;
   }

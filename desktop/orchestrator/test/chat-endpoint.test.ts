@@ -8,13 +8,11 @@ describe('Chat HTTP Endpoints', () => {
   const envSnapshot = {
     VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
     VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
-    COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY,
   };
 
   beforeAll(async () => {
     process.env.VERSO_HERMES_MANAGED = 'false';
     process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-endpoint-${process.pid}.sqlite`;
-    delete process.env.COMPOSIO_API_KEY;
     const result = await startServer({ port: 0 });
     server = result.server;
     port = result.port;
@@ -27,7 +25,6 @@ describe('Chat HTTP Endpoints', () => {
     }
     process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
     process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
-    process.env.COMPOSIO_API_KEY = envSnapshot.COMPOSIO_API_KEY;
   });
 
   function url(path: string): string {
@@ -48,8 +45,12 @@ describe('Chat HTTP Endpoints', () => {
     expect(body.hasActiveRequest).toBe(false);
   });
 
-  it('reports composio bridge as unauthenticated when no managed session is loaded', async () => {
-    const { status, body } = await fetchJson('/composio/session');
+  it('reports composio tool bridge as unauthenticated when no managed session is loaded', async () => {
+    const { status, body } = await fetchJson('/composio/tools/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'send email' }),
+    });
     expect(status).toBe(401);
     expect(body.error).toBe('request_failed');
     expect(body.message).toMatch(/session/i);

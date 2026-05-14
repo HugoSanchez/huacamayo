@@ -1,14 +1,5 @@
 import { ManagedBackendClient } from './managed-backend-client.ts';
 
-export interface RemoteBridgeSessionView {
-  userId: string;
-  sessionId: string;
-  mcp: {
-    url: string;
-    headers: Record<string, string>;
-  };
-}
-
 export interface RemoteBridgeConnectionRequestView {
   id: string;
   toolkitSlug: string;
@@ -76,8 +67,7 @@ export class RemoteBridgeHttpError extends Error {
 
 /**
  * Composio proxy client that talks to the managed backend's /v1/composio/*
- * surface. Auth uses the user's in-memory session token (same one the chat
- * proxy uses).
+ * surface. Auth uses the user's in-memory managed session token.
  *
  * Tool discovery, schema lookup, and execution are proxied through the managed
  * backend so the Composio project API key never lives in the desktop app.
@@ -95,21 +85,12 @@ export class RemoteComposioBridgeClient {
     return this.baseUrl.length > 0;
   }
 
-  async getSession(_userId: string): Promise<RemoteBridgeSessionView> {
-    const body = await this.request<{ session: RemoteBridgeSessionView }>('POST', '/v1/composio/session');
-    return body.session;
-  }
-
-  async resetSession(_userId: string): Promise<void> {
-    await this.request('POST', '/v1/composio/session/reset');
-  }
-
-  async listConnections(_userId: string): Promise<RemoteBridgeConnectionView[]> {
+  async listConnections(): Promise<RemoteBridgeConnectionView[]> {
     const body = await this.request<{ connections: RemoteBridgeConnectionView[] }>('GET', '/v1/composio/connections');
     return body.connections;
   }
 
-  async listToolkits(_userId: string, query?: string, limit?: number): Promise<RemoteBridgeToolkitView[]> {
+  async listToolkits(query?: string, limit?: number): Promise<RemoteBridgeToolkitView[]> {
     const params = new URLSearchParams();
     if (query && query.trim().length > 0) params.set('query', query.trim());
     if (typeof limit === 'number' && Number.isFinite(limit)) params.set('limit', String(Math.floor(limit)));
@@ -120,7 +101,6 @@ export class RemoteComposioBridgeClient {
   }
 
   async requestConnection(
-    _userId: string,
     toolkit: string,
     callbackUrl: string,
   ): Promise<RemoteBridgeConnectionRequestView> {
@@ -141,7 +121,6 @@ export class RemoteComposioBridgeClient {
   }
 
   async searchTools(
-    _userId: string,
     query: string,
     toolkits?: string[],
   ): Promise<RemoteBridgeSearchToolResult[]> {
@@ -154,7 +133,6 @@ export class RemoteComposioBridgeClient {
   }
 
   async getToolSchemas(
-    _userId: string,
     toolSlugs: string[],
   ): Promise<RemoteBridgeToolSchemaView[]> {
     const body = await this.request<{ tools: RemoteBridgeToolSchemaView[] }>(
@@ -166,7 +144,6 @@ export class RemoteComposioBridgeClient {
   }
 
   async executeTool(
-    _userId: string,
     toolSlug: string,
     arguments_: Record<string, unknown>,
   ): Promise<RemoteBridgeToolExecutionView> {

@@ -3,15 +3,6 @@ import { Composio } from '@composio/core';
 export type ConnectionRequestStatus = 'pending' | 'connected' | 'failed' | 'expired';
 export type ConnectionStatus = 'active' | 'inactive';
 
-export interface BridgeSessionView {
-  userId: string;
-  sessionId: string;
-  mcp: {
-    url: string;
-    headers: Record<string, string>;
-  };
-}
-
 export interface BridgeConnectionRequestView {
   id: string;
   toolkitSlug: string;
@@ -114,8 +105,6 @@ export class ComposioService {
 
   private readonly client: Composio | null;
 
-  private readonly sessionCache = new Map<string, BridgeSessionView>();
-
   private readonly toolRouterSessionCache = new Map<string, CachedToolRouterSession>();
 
   private readonly toolSchemaCache = new Map<string, ComposioToolView>();
@@ -130,40 +119,6 @@ export class ComposioService {
 
   get configured(): boolean {
     return Boolean(this.client);
-  }
-
-  async getSession(userId: string): Promise<BridgeSessionView> {
-    this.assertConfigured();
-    const normalizedUserId = normalizeUserId(userId);
-    const cached = this.sessionCache.get(normalizedUserId);
-    if (cached) return cached;
-
-    // Tool Router MCP keeps Hermes' tool surface small and lets Composio
-    // provide discovery, schemas, execution guidance, and workbench support
-    // at runtime. Do not use Single Toolkit direct MCP here: it exposes raw
-    // app-action schemas up front and makes broad assistants brittle.
-    const session = await this.client!.create(normalizedUserId, {
-      ...buildToolRouterToolkitScope(),
-      manageConnections: false,
-    });
-
-    const view: BridgeSessionView = {
-      userId: normalizedUserId,
-      sessionId: session.sessionId,
-      mcp: {
-        url: session.mcp.url,
-        headers: normalizeHeaders(session.mcp.headers as Record<string, unknown> | undefined),
-      },
-    };
-
-    this.sessionCache.set(normalizedUserId, view);
-    return view;
-  }
-
-  resetSession(userId: string): void {
-    const normalizedUserId = normalizeUserId(userId);
-    this.sessionCache.delete(normalizedUserId);
-    this.toolRouterSessionCache.delete(normalizedUserId);
   }
 
   async listConnections(userId: string): Promise<BridgeConnectionView[]> {
@@ -333,19 +288,35 @@ export class ComposioService {
 
     const schemas = await Promise.all(
       Array.from(wanted).map(async (slug) => {
-        const tool = await this.getToolBySlug(slug);
-        const toolkitSlug = tool.toolkit?.slug ?? null;
-        if (toolkitSlug && !this.isAllowedToolkit(toolkitSlug)) {
-          throw new ComposioServiceError(400, `Toolkit "${toolkitSlug}" is not allowed by policy.`);
+        try {
+          const tool = await this.getToolBySlug(slug);
+          const toolkitSlug = tool.toolkit?.slug ?? null;
+          if (toolkitSlug && !this.isAllowedToolkit(toolkitSlug)) {
+            throw new ComposioServiceError(400, `Toolkit "${toolkitSlug}" is not allowed by policy.`);
+          }
+          return {
+            slug: tool.slug,
+            name: tool.name,
+            description: tool.description ?? null,
+            toolkitSlug,
+            toolkitName: tool.toolkit?.name ?? null,
+            inputParameters: compactInputParameters(tool.inputParameters),
+          } satisfies BridgeToolSchemaView;
+        } catch (error: unknown) {
+          if (!isComposioSchemaValidationError(error)) throw error;
+          this.logToolEvent('composio.getSchemas.schemaUnavailable', {
+            toolSlug: slug,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return {
+            slug,
+            name: slug,
+            description: 'Schema unavailable from Composio (malformed upstream). Call the tool with best-guess arguments.',
+            toolkitSlug: null,
+            toolkitName: null,
+            inputParameters: null,
+          } satisfies BridgeToolSchemaView;
         }
-        return {
-          slug: tool.slug,
-          name: tool.name,
-          description: tool.description ?? null,
-          toolkitSlug,
-          toolkitName: tool.toolkit?.name ?? null,
-          inputParameters: compactInputParameters(tool.inputParameters),
-        } satisfies BridgeToolSchemaView;
       }),
     );
 
@@ -373,36 +344,56 @@ export class ComposioService {
       throw new ComposioServiceError(400, 'Missing required object "arguments".');
     }
 
-    const tool = await this.getToolBySlug(slug);
-    const toolkitSlug = tool.toolkit?.slug ?? null;
+    // When Composio's SDK fails to validate the tool's schema (some toolkits
+    // ship malformed outputParameters), fall back to executing without the
+    // local schema precheck. The session-level toolkit scope at Composio
+    // (buildToolRouterToolkitScope) still enforces which toolkits this user
+    // may invoke, so policy isn't lost — only the missing-required-args
+    // precheck is. Composio's API will return its own validation error if
+    // the arguments are malformed.
+    let tool: ComposioToolView | null = null;
+    try {
+      tool = await this.getToolBySlug(slug);
+    } catch (error: unknown) {
+      if (!isComposioSchemaValidationError(error)) throw error;
+      this.logToolEvent('composio.execute.schemaUnavailable', {
+        toolSlug: slug,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const executionSlug = tool?.slug ?? slug;
+    const toolkitSlug = tool?.toolkit?.slug ?? null;
     if (toolkitSlug && !this.isAllowedToolkit(toolkitSlug)) {
       throw new ComposioServiceError(400, `Toolkit "${toolkitSlug}" is not allowed by policy.`);
     }
 
-    const missingRequiredFields = getMissingRequiredToolArguments(tool.inputParameters, argumentRecord);
-    if (missingRequiredFields.length > 0) {
-      this.logToolEvent('composio.execute.rejected', {
-        toolSlug: tool.slug,
-        reason: 'missing_required_arguments',
-        missingFields: missingRequiredFields,
-        argKeys: Object.keys(argumentRecord),
-      });
-      throw new ComposioServiceError(
-        400,
-        `Missing required argument${missingRequiredFields.length === 1 ? '' : 's'} ${
-          missingRequiredFields.map((field) => `"${field}"`).join(', ')
-        } for ${tool.slug}.`,
-      );
+    if (tool) {
+      const missingRequiredFields = getMissingRequiredToolArguments(tool.inputParameters, argumentRecord);
+      if (missingRequiredFields.length > 0) {
+        this.logToolEvent('composio.execute.rejected', {
+          toolSlug: tool.slug,
+          reason: 'missing_required_arguments',
+          missingFields: missingRequiredFields,
+          argKeys: Object.keys(argumentRecord),
+        });
+        throw new ComposioServiceError(
+          400,
+          `Missing required argument${missingRequiredFields.length === 1 ? '' : 's'} ${
+            missingRequiredFields.map((field) => `"${field}"`).join(', ')
+          } for ${tool.slug}.`,
+        );
+      }
     }
 
     try {
       const session = await this.getToolRouterSession(normalizedUserId);
-      const result = await session.execute(tool.slug, argumentRecord);
+      const result = await session.execute(executionSlug, argumentRecord);
       const resultRecord = asRecord(result);
       const error = resultRecord ? asString(resultRecord.error) : null;
       const logId = resultRecord ? asString(resultRecord.logId ?? resultRecord.log_id) : null;
       this.logToolEvent('composio.execute.completed', {
-        toolSlug: tool.slug,
+        toolSlug: executionSlug,
         argKeys: Object.keys(argumentRecord),
         hasError: Boolean(error),
         logId,
@@ -414,7 +405,7 @@ export class ComposioService {
       };
     } catch (error: unknown) {
       this.logToolEvent('composio.execute.failed', {
-        toolSlug: tool.slug,
+        toolSlug: executionSlug,
         argKeys: Object.keys(argumentRecord),
         error: error instanceof Error ? error.message : String(error),
       });
@@ -744,19 +735,6 @@ function parseToolRouterToolSlugs(response: unknown): string[] {
   return slugs;
 }
 
-function normalizeHeaders(headers: Record<string, unknown> | undefined): Record<string, string> {
-  const normalized: Record<string, string> = {};
-  if (!headers) return normalized;
-
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === 'string' && value.length > 0) {
-      normalized[key] = value;
-    }
-  }
-
-  return normalized;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -998,6 +976,16 @@ function dedupeSearchToolResults(items: BridgeSearchToolResult[]): BridgeSearchT
 
 function shouldFallbackToolkitToolSearch(toolkits: string[] | undefined, error: unknown): boolean {
   if (!toolkits || toolkits.length === 0) return false;
+  return isComposioSchemaValidationError(error);
+}
+
+// Composio's SDK runs Zod validation on the raw tool schemas the upstream API
+// returns. Some toolkits (e.g. GRANOLA_MCP_*) ship malformed `outputParameters`
+// blocks, which makes the SDK throw before we ever get the input schema we
+// actually care about. This predicate identifies that error class so callers
+// can degrade gracefully (skip the precheck, return a stub schema) instead of
+// failing the entire tool call.
+function isComposioSchemaValidationError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('outputParameters')
     || message.includes('invalid_literal')
