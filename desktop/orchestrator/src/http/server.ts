@@ -1,12 +1,13 @@
 import 'dotenv/config';
 import http from 'node:http';
+import path from 'node:path';
 import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
 import { ChatStore } from './chat-store.ts';
 import { buildComposioBridgeRoutes } from './composio-bridge.ts';
 import { buildConnectionsRoutes } from './connections.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
 import { dispatch, json, route, type Route } from './router.ts';
-import { buildSkillsRoutes } from './skills.ts';
+import { buildSkillsRoutes, setSkillsDir } from './skills.ts';
 import { HermesSkillsConfig } from './skills-store.ts';
 import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
@@ -51,6 +52,11 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const connections = new ConnectionsService(managedBackend);
   const composioBridge = new ComposioBridgeService(managedBackend);
   const hermes = new HermesSupervisor({ runtimeMode });
+  // Point the skills scanner at the same Hermes home Hermes itself uses
+  // (profile-aware, e.g. ~/.hermes/profiles/verso/skills). Without this it
+  // falls back to the legacy ~/.hermes/skills path and misses any skills
+  // that only live under the active profile.
+  setSkillsDir(path.join(hermes.hermesHome, 'skills'));
   const skillsConfig = new HermesSkillsConfig();
   const pinnedSkills = new PinnedSkillsStore();
   const cronDescriptions = new CronDescriptionsStore();

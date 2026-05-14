@@ -33,7 +33,20 @@ interface ParsedSkill {
   content: string;
 }
 
-const HERMES_SKILLS_DIR = path.join(os.homedir(), '.hermes', 'skills');
+// The skills directory is set at startup by `setSkillsDir()`, called from
+// the HTTP server bootstrap once HermesSupervisor has resolved which Hermes
+// home is active (profile-aware vs legacy). The default below is only a
+// fallback for tests/tools that import this module without going through the
+// server entrypoint.
+let skillsDirPath = path.join(os.homedir(), '.hermes', 'skills');
+
+export function setSkillsDir(dir: string): void {
+  skillsDirPath = dir;
+}
+
+function currentSkillsDir(): string {
+  return skillsDirPath;
+}
 
 export function buildSkillsRoutes(config: HermesSkillsConfig, pins: PinnedSkillsStore): Route[] {
   return [
@@ -149,7 +162,7 @@ function normalizeSlug(raw: string): string {
 }
 
 function scanSkills(): ParsedSkill[] {
-  return walk(HERMES_SKILLS_DIR)
+  return walk(currentSkillsDir())
     .map((filePath) => parseSkillFile(filePath))
     .filter((skill): skill is ParsedSkill => skill !== null)
     .sort((a, b) => a.slug.localeCompare(b.slug));
@@ -200,7 +213,7 @@ function parseSkillFile(filePath: string): ParsedSkill | null {
 }
 
 function inferCategory(filePath: string): string | null {
-  const relative = path.relative(HERMES_SKILLS_DIR, path.dirname(filePath));
+  const relative = path.relative(currentSkillsDir(), path.dirname(filePath));
   const segments = relative.split(path.sep).filter(Boolean);
   if (segments.length <= 1) return null;
   return segments[0] || null;
@@ -260,7 +273,7 @@ function walkFiles(dir: string, baseDir: string, out: string[]): void {
 }
 
 function skillViewTargetForDir(skillDir: string): string {
-  const rel = path.relative(HERMES_SKILLS_DIR, skillDir);
+  const rel = path.relative(currentSkillsDir(), skillDir);
   if (!rel || rel.startsWith('..')) {
     return path.basename(skillDir);
   }
