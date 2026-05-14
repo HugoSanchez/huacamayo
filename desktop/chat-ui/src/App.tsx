@@ -872,11 +872,18 @@ function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
 
     for (const block of blocks) {
       if (block.type === 'text' && block.text) {
-        if (newContent) {
-          newSteps = [...newSteps, { type: 'text', text: newContent }];
-        }
         newContent = block.text;
       } else if (block.type === 'tool_use') {
+        // Any intermediate prose accumulated in `content` (from streaming
+        // deltas) needs to land in `steps` *before* this tool, so the
+        // collapsible renders text and tool calls in true chronological
+        // order. Once promoted, clear `content` so subsequent deltas for the
+        // next text block start fresh instead of appending to the old text.
+        const trimmed = newContent.trim();
+        if (trimmed) {
+          newSteps = [...newSteps, { type: 'text', text: trimmed }];
+        }
+        newContent = '';
         newSteps = [...newSteps, {
           type: 'tool',
           id: block.id,

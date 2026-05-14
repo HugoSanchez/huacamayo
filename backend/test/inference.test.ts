@@ -497,6 +497,41 @@ describe('POST /v1/chat/completions', () => {
     expect(captured[0].max_tokens).toBe(50);
   });
 
+  test('rejects oversized managed requests before calling the provider', async () => {
+    let called = false;
+    const recordingClient = (_config: BackendConfig) => {
+      const client = new OpenRouterClient({ apiKey: 'unused-in-tests' });
+      (client as unknown as { streamChatCompletion: (req: Record<string, unknown>) => Promise<OpenRouterChatStream> })
+        .streamChatCompletion = async () => {
+        called = true;
+        return tapForTests(makeStreamFromString('data: [DONE]\n'));
+      };
+      return client;
+    };
+
+    ctx = await setup({
+      envOverride: { MANAGED_MAX_REQUEST_BYTES: '200' },
+      buildClient: recordingClient,
+    });
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${ctx.sessionToken}` },
+      payload: {
+        model: 'anthropic/opus-4.7',
+        messages: [{ role: 'user', content: 'x'.repeat(500) }],
+      },
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json().error).toBe('request_too_large');
+    expect(called).toBe(false);
+    const [record] = await ctx.inferenceStore.listByUserId(ctx.userId);
+    expect(record.status).toBe('failed');
+    expect(record.errorCode).toBe('request_too_large');
+  });
+
   test('rejects expired session tokens as 401 expired_session', async () => {
     ctx = await setup();
     // Bypass route auth by simulating an expired session token. Re-use the

@@ -8,12 +8,9 @@ export interface ComposioRouteDeps {
 }
 
 /**
- * Auth'd Composio surface. The backend now only mints the per-user session
- * URL and brokers OAuth connection flows — tool discovery and execution have
- * moved to Composio's hosted MCP server (Hermes connects to it directly).
- *
- * Every route authenticates the bearer and uses `auth.user.id` as the Composio
- * user id, so a client can never act as someone else.
+ * Auth'd Composio proxy. Every route authenticates the bearer and uses
+ * `auth.user.id` as the Composio user id, so a client can never act as someone
+ * else or access the project API key.
  */
 export async function registerComposioRoutes(app: FastifyInstance, deps: ComposioRouteDeps): Promise<void> {
   app.post('/v1/composio/session', async (request, reply) => {
@@ -82,43 +79,39 @@ export async function registerComposioRoutes(app: FastifyInstance, deps: Composi
     }
   });
 
-  app.post('/v1/composio/actions/find', async (request, reply) => {
+  app.post('/v1/composio/tools/search', async (request, reply) => {
     try {
       const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
       const body = (request.body ?? {}) as Record<string, unknown>;
-      const actions = await deps.composioService.findActions(auth.user.id, {
-        app: optionalString(body, 'app'),
-        intent: requiredString(body, 'intent'),
-        limit: optionalNumber(body, 'limit'),
-      });
-      return reply.code(200).send({ actions });
+      const query = requiredString(body, 'query');
+      const toolkits = optionalStringArray(body, 'toolkits');
+      const results = await deps.composioService.searchTools(auth.user.id, query, toolkits);
+      return reply.code(200).send({ results });
     } catch (error) {
       return handleError(reply, error);
     }
   });
 
-  app.post('/v1/composio/actions/schema', async (request, reply) => {
+  app.post('/v1/composio/tools/schemas', async (request, reply) => {
     try {
       const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
       const body = (request.body ?? {}) as Record<string, unknown>;
-      const action = await deps.composioService.getActionSchema(
-        auth.user.id,
-        requiredString(body, 'providerAction'),
-      );
-      return reply.code(200).send({ action });
+      const toolSlugs = requiredStringArray(body, 'toolSlugs');
+      const tools = await deps.composioService.getToolSchemas(auth.user.id, toolSlugs);
+      return reply.code(200).send({ tools });
     } catch (error) {
       return handleError(reply, error);
     }
   });
 
-  app.post('/v1/composio/actions/execute', async (request, reply) => {
+  app.post('/v1/composio/tools/execute', async (request, reply) => {
     try {
       const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
       const body = (request.body ?? {}) as Record<string, unknown>;
-      const result = await deps.composioService.executeAction(auth.user.id, {
-        providerAction: requiredString(body, 'providerAction'),
-        arguments: optionalRecord(body, 'arguments') ?? undefined,
-      });
+      const toolSlug = requiredString(body, 'toolSlug');
+      const args = requiredRecord(body, 'arguments');
+      const connectedAccountId = optionalString(body, 'connectedAccountId');
+      const result = await deps.composioService.executeTool(auth.user.id, toolSlug, args, connectedAccountId);
       return reply.code(200).send({ result });
     } catch (error) {
       return handleError(reply, error);
@@ -171,9 +164,28 @@ function optionalNumber(body: Record<string, unknown> | undefined, key: string):
   return undefined;
 }
 
-function optionalRecord(body: Record<string, unknown>, key: string): Record<string, unknown> | null {
+function requiredStringArray(body: Record<string, unknown>, key: string): string[] {
   const value = body[key];
-  if (value == null) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || item.trim().length === 0)) {
+    throw new ComposioServiceError(400, `Missing "${key}"`);
+  }
+  return value.map((item) => (item as string).trim());
+}
+
+function optionalStringArray(body: Record<string, unknown>, key: string): string[] | undefined {
+  const value = body[key];
+  if (value == null) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new ComposioServiceError(400, `Invalid "${key}"`);
+  }
+  return value.map((item) => (item as string).trim()).filter(Boolean);
+}
+
+function requiredRecord(body: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = body[key];
+  if (value == null) {
+    throw new ComposioServiceError(400, `Missing "${key}"`);
+  }
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new ComposioServiceError(400, `Invalid "${key}"`);
   }

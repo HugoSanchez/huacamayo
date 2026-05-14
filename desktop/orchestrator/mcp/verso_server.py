@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """verso MCP bridge for Hermes.
 
-This server exposes verso's local tool gateway to Hermes: connection flows,
-connection state, app/action discovery, schema inspection, and action execution.
+This server exposes verso's local app bridge to Hermes: connection flows,
+connection state, Composio tool discovery, schema inspection, and execution.
 """
 
 from __future__ import annotations
@@ -26,14 +26,13 @@ ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip
 mcp = FastMCP(
     SERVER_NAME,
     instructions=(
-        "verso app bridge. For external app work, use the app gateway tools: "
-        "apps_list_connections to inspect available connections, "
-        "apps_find_action(app?, intent) to discover a small set of actions, "
-        "apps_get_action_schema(action_id) when you need exact parameters, "
-        "and apps_execute_action(action_id, arguments) to run the selected "
-        "action. Do not guess provider tool slugs or call raw Composio tools.\n\n"
+        "verso app bridge. Use search_toolkits to find the right app first when needed, "
+        "then request_connection/list_connections/get_connection_status for auth and connection state. "
+        "For Composio-backed app actions, use search_composio_tools to find the right "
+        "tool slug, get_composio_tool_schemas to inspect its arguments, then "
+        "execute_composio_tool to run it.\n\n"
         "Connection management for ALL apps goes through verso, not Composio. "
-        "If action discovery or execution reports that no active connection exists, "
+        "If tool discovery or execution reports that no active connection exists, "
         "call verso.request_connection({toolkit: <slug>}) instead. After it "
         "returns, tell the user to use the verso connection card that appears "
         "in chat — never paste the raw authentication URL into the "
@@ -122,14 +121,6 @@ def list_connections() -> types.CallToolResult:
 
 
 @mcp.tool()
-def apps_list_connections() -> types.CallToolResult:
-    """List connected external apps available to the app action gateway."""
-
-    payload = _request("GET", "/connections")
-    return _structured_result(payload)
-
-
-@mcp.tool()
 def get_connection_status(request_id: str) -> types.CallToolResult:
     """Get the latest status for a previously created connection request."""
 
@@ -138,62 +129,70 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 
 
 @mcp.tool()
-def apps_find_action(
-    intent: str,
-    app: str | None = None,
-    limit: int | None = None,
-) -> types.CallToolResult:
-    """Find provider-backed app actions by natural-language intent.
+def search_composio_tools(query: str, toolkits: list[str] | None = None) -> types.CallToolResult:
+    """Search Composio tools by use case.
 
-    Use this before any external app operation. Provide app when known (for
-    example "slack", "gmail", "google drive", or "calendar"). The result
-    contains opaque action_id values; pass those to apps_get_action_schema and
-    apps_execute_action instead of raw provider tool names.
+    Use this before attempting a third-party app action when you do not yet know
+    the best tool slug. Optionally narrow results to toolkit slugs like
+    ["gmail"] or ["slack"].
     """
 
     payload = _request(
         "POST",
-        "/apps/actions/find",
+        "/composio/tools/search",
         {
-            "intent": intent,
-            "app": app,
-            "limit": limit,
+            "query": query,
+            **({"toolkits": toolkits} if toolkits else {}),
         },
     )
     return _structured_result(payload)
 
 
 @mcp.tool()
-def apps_get_action_schema(action_id: str) -> types.CallToolResult:
-    """Get the exact JSON input schema for an action returned by apps_find_action."""
+def get_composio_tool_schemas(tool_slugs: list[str]) -> types.CallToolResult:
+    """Fetch input schemas for Composio tools by slug.
+
+    Call this after search_composio_tools and before execute_composio_tool when
+    you need the exact parameter schema for one or more tool slugs.
+    """
 
     payload = _request(
         "POST",
-        "/apps/actions/schema",
+        "/composio/tools/schemas",
         {
-            "action_id": action_id,
+            "toolSlugs": tool_slugs,
         },
     )
     return _structured_result(payload)
 
 
 @mcp.tool()
-def apps_execute_action(
-    action_id: str,
-    arguments: dict[str, Any] | None = None,
+def execute_composio_tool(
+    tool_slug: str,
+    arguments: dict[str, Any],
 ) -> types.CallToolResult:
-    """Execute an app action returned by apps_find_action.
+    """Execute a Composio-backed tool through verso's bridge.
 
-    Arguments are validated and sanitized by verso's gateway before provider
-    execution. If a required argument is missing, inspect the schema and retry.
+    Use this only after identifying the right tool slug and argument schema.
+    arguments must be a JSON object matching the schema from
+    get_composio_tool_schemas. Do not pass null or omit it.
+    The result is the Composio execution payload: data, error, and logId.
     """
+
+    if not isinstance(arguments, dict):
+        return _structured_result(
+            {
+                "error": "invalid_arguments",
+                "message": "execute_composio_tool requires a non-null arguments object.",
+            }
+        )
 
     payload = _request(
         "POST",
-        "/apps/actions/execute",
+        "/composio/tools/execute",
         {
-            "action_id": action_id,
-            "arguments": arguments or {},
+            "toolSlug": tool_slug,
+            "arguments": arguments,
         },
     )
     return _structured_result(payload)
@@ -222,7 +221,7 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict
             raise RuntimeError(f"Unexpected response payload for {path}")
     except urllib.error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(details or f"HTTP {exc.code} while calling {path}") from exc
+        return _http_error_payload(exc.code, details, path)
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Failed to reach verso orchestrator at {ORCHESTRATOR_BASE_URL}") from exc
 
@@ -233,6 +232,26 @@ def _structured_result(payload: dict[str, Any]) -> types.CallToolResult:
         content=[types.TextContent(type="text", text=text)],
         structuredContent=payload,
     )
+
+
+def _http_error_payload(status: int, details: str, path: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    if details:
+        try:
+            raw = json.loads(details)
+            if isinstance(raw, dict):
+                parsed = raw
+        except json.JSONDecodeError:
+            parsed = {}
+
+    message = parsed.get("message") if isinstance(parsed.get("message"), str) else None
+    error = parsed.get("error") if isinstance(parsed.get("error"), str) else "request_failed"
+    return {
+        "ok": False,
+        "error": error,
+        "status": status,
+        "message": message or details or f"HTTP {status} while calling {path}",
+    }
 
 
 def _toolkit_title(toolkit_slug: str) -> str:

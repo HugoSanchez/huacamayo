@@ -2,9 +2,9 @@ import { Composio } from '@composio/core';
 import { ConnectionsStore } from '../http/connections-store.ts';
 import {
   RemoteComposioBridgeClient,
-  type RemoteBridgeActionCandidateView,
-  type RemoteBridgeActionExecutionView,
-  type RemoteBridgeActionSchemaView,
+  type RemoteBridgeSearchToolResult,
+  type RemoteBridgeToolExecutionView,
+  type RemoteBridgeToolSchemaView,
 } from './composio-bridge-client.ts';
 import { ManagedBackendClient } from './managed-backend-client.ts';
 
@@ -16,6 +16,10 @@ export interface ComposioBridgeSessionView {
     headers: Record<string, string>;
   };
 }
+
+export interface ComposioBridgeSearchToolView extends RemoteBridgeSearchToolResult {}
+export interface ComposioBridgeToolSchemaView extends RemoteBridgeToolSchemaView {}
+export interface ComposioBridgeToolExecutionView extends RemoteBridgeToolExecutionView {}
 
 interface CachedSession {
   view: ComposioBridgeSessionView;
@@ -31,6 +35,14 @@ interface CachedToolRouterSession {
   expiresAt: number;
 }
 
+interface LocalComposioToolView {
+  slug: string;
+  name: string;
+  description: string | null;
+  toolkit: { slug?: string | null; name?: string | null } | null;
+  inputParameters: Record<string, unknown> | null;
+}
+
 export class ComposioBridgeHttpError extends Error {
   readonly status: number;
 
@@ -42,13 +54,9 @@ export class ComposioBridgeHttpError extends Error {
 }
 
 /**
- * Mints (and caches) the per-user Composio MCP session URL. That URL is
- * handed directly to Hermes' MCP client at launch — see
- * HermesSupervisor.refreshComposioMcpSession.
- *
- * Tool search / execution previously lived on this class; they now come from
- * Composio's hosted MCP server, so Hermes talks to Composio directly. The
- * orchestrator is only responsible for resolving the session URL.
+ * Thin Composio bridge used by the local MCP server. In managed mode it proxies
+ * tool-router search/schema/execute calls to the backend; in local development
+ * it can still use COMPOSIO_API_KEY directly.
  */
 export class ComposioBridgeService {
   private readonly store: ConnectionsStore;
@@ -62,6 +70,8 @@ export class ComposioBridgeService {
   private cachedSession: CachedSession | null = null;
 
   private cachedToolRouterSession: CachedToolRouterSession | null = null;
+
+  private readonly localToolSchemaCache = new Map<string, LocalComposioToolView>();
 
   constructor(
     managedBackend: ManagedBackendClient,
@@ -115,92 +125,96 @@ export class ComposioBridgeService {
     }
     this.cachedSession = null;
     this.cachedToolRouterSession = null;
+    this.localToolSchemaCache.clear();
   }
 
-  async findActions(request: {
-    app?: string;
-    intent: string;
-    limit?: number;
-  }): Promise<RemoteBridgeActionCandidateView[]> {
+  async searchTools(query: string, toolkits?: string[]): Promise<ComposioBridgeSearchToolView[]> {
     this.assertConfigured();
-    const intent = request.intent.trim();
-    if (!intent) throw new ComposioBridgeHttpError(400, 'Missing "intent"');
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) throw new ComposioBridgeHttpError(400, 'Missing "query"');
 
     const userId = this.store.ensureversoUserId();
     if (this.bridgeClient.configured) {
-      return this.bridgeClient.findActions(userId, { ...request, intent });
+      return this.bridgeClient.searchTools(userId, normalizedQuery, toolkits);
     }
 
     if (!this.client) throw new ComposioBridgeHttpError(503, 'Composio API key is not configured.');
     const session = await this.getLocalToolRouterSession(userId);
-    const appToolkits = normalizeActionToolkits(request.app);
     const response = await session.search({
-      query: intent,
-      ...(appToolkits ? { toolkits: appToolkits } : {}),
+      query: normalizedQuery,
+      ...(toolkits && toolkits.length > 0 ? { toolkits: normalizeToolkits(toolkits) } : {}),
     });
-    const parsed = parseToolRouterSearchResponse(response);
-    const limit = normalizeActionLimit(request.limit);
-    const actions: RemoteBridgeActionCandidateView[] = [];
-    for (const item of parsed.actions) {
-      if (actions.length >= limit) break;
-      const schema = await this.getActionSchema(item.slug).catch(() => null);
-      if (!schema) continue;
-      if (appToolkits && schema.appSlug && !appToolkits.includes(schema.appSlug)) continue;
-      actions.push({
-        ...schema,
-        guidance: item.guidance,
-        connection: null,
-      });
-    }
-    return actions;
+    const slugs = parseToolRouterToolSlugs(response);
+    const tools = await Promise.all(slugs.map(async (slug) => this.getLocalToolBySlug(slug).catch(() => null)));
+    return tools
+      .filter((tool): tool is NonNullable<typeof tool> => tool !== null)
+      .map((tool) => ({
+        slug: tool.slug,
+        name: tool.name,
+        description: tool.description ?? null,
+        toolkitSlug: tool.toolkit?.slug ?? null,
+        toolkitName: tool.toolkit?.name ?? null,
+      }));
   }
 
-  async getActionSchema(providerAction: string): Promise<RemoteBridgeActionSchemaView> {
+  async getToolSchemas(toolSlugs: string[]): Promise<ComposioBridgeToolSchemaView[]> {
     this.assertConfigured();
-    const action = providerAction.trim();
-    if (!action) throw new ComposioBridgeHttpError(400, 'Missing "providerAction"');
+    const wanted = Array.from(new Set(toolSlugs.map((slug) => slug.trim()).filter(Boolean)));
+    if (wanted.length === 0) throw new ComposioBridgeHttpError(400, 'Missing "toolSlugs"');
 
     const userId = this.store.ensureversoUserId();
     if (this.bridgeClient.configured) {
-      return this.bridgeClient.getActionSchema(userId, action);
+      return this.bridgeClient.getToolSchemas(userId, wanted);
     }
 
-    const tool = await this.getLocalToolBySlug(action);
-    return {
-      provider: 'composio',
-      providerAction: tool.slug,
-      appSlug: tool.toolkit?.slug ?? null,
-      appName: tool.toolkit?.name ?? null,
-      name: tool.name,
-      description: tool.description ?? null,
-      inputSchema: asRecord(tool.inputParameters),
-    };
+    return Promise.all(wanted.map(async (slug) => {
+      const tool = await this.getLocalToolBySlug(slug);
+      return {
+        slug: tool.slug,
+        name: tool.name,
+        description: tool.description ?? null,
+        toolkitSlug: tool.toolkit?.slug ?? null,
+        toolkitName: tool.toolkit?.name ?? null,
+        inputParameters: compactInputParameters(tool.inputParameters),
+      };
+    }));
   }
 
-  async executeAction(
-    providerAction: string,
+  async executeTool(
+    toolSlug: string,
     arguments_: Record<string, unknown>,
-  ): Promise<RemoteBridgeActionExecutionView> {
+  ): Promise<ComposioBridgeToolExecutionView> {
     this.assertConfigured();
-    const action = providerAction.trim();
-    if (!action) throw new ComposioBridgeHttpError(400, 'Missing "providerAction"');
+    const slug = toolSlug.trim();
+    if (!slug) throw new ComposioBridgeHttpError(400, 'Missing "toolSlug"');
+    const argumentRecord = asRecord(arguments_);
+    if (!argumentRecord) {
+      throw new ComposioBridgeHttpError(400, 'Missing required object "arguments".');
+    }
 
     const userId = this.store.ensureversoUserId();
     if (this.bridgeClient.configured) {
-      return this.bridgeClient.executeAction(userId, action, arguments_);
+      return this.bridgeClient.executeTool(userId, slug, argumentRecord);
     }
 
     if (!this.client) throw new ComposioBridgeHttpError(503, 'Composio API key is not configured.');
+    const tool = await this.getLocalToolBySlug(slug);
+    const missingRequiredFields = getMissingRequiredToolArguments(tool.inputParameters, argumentRecord);
+    if (missingRequiredFields.length > 0) {
+      throw new ComposioBridgeHttpError(
+        400,
+        `Missing required argument${missingRequiredFields.length === 1 ? '' : 's'} ${
+          missingRequiredFields.map((field) => `"${field}"`).join(', ')
+        } for ${tool.slug}.`,
+      );
+    }
     const session = await this.getLocalToolRouterSession(userId);
-    const result = await session.execute(action, arguments_);
+    const result = await session.execute(tool.slug, argumentRecord);
     const record = asRecord(result);
     return {
-      provider: 'composio',
-      providerAction: action,
       data: record?.data ?? result ?? null,
       error: asString(record?.error),
       logId: asString(record?.logId ?? record?.log_id),
-      successful: typeof record?.successful === 'boolean' ? record.successful : null,
     };
   }
 
@@ -227,43 +241,34 @@ export class ComposioBridgeService {
     return session;
   }
 
-  private async getLocalToolBySlug(toolSlug: string): Promise<{
-    slug: string;
-    name: string;
-    description?: string | null;
-    toolkit?: { slug?: string | null; name?: string | null } | null;
-    inputParameters?: Record<string, unknown> | null;
-  }> {
-    const response = await fetch(`https://backend.composio.dev/api/v3/tools/${encodeURIComponent(toolSlug)}?toolkit_versions=latest`, {
-      headers: {
-        'x-api-key': this.apiKey!,
-        Accept: 'application/json',
-      },
-    });
+  private async getLocalToolBySlug(toolSlug: string): Promise<LocalComposioToolView> {
+    const slug = toolSlug.trim();
+    const cached = this.localToolSchemaCache.get(slug);
+    if (cached) return cached;
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new ComposioBridgeHttpError(
-        response.status,
-        `Composio tool lookup failed (${response.status}): ${body || response.statusText}`,
-      );
+    const rawTool = await this.client!.tools.getRawComposioToolBySlug(slug) as unknown;
+    const record = asRecord(rawTool);
+    if (!record) {
+      throw new ComposioBridgeHttpError(502, `Composio returned an invalid schema for ${slug}.`);
     }
 
-    const body = await response.json() as {
-      slug: string;
-      name: string;
-      description?: string | null;
-      toolkit?: { slug?: string | null; name?: string | null } | null;
-      input_parameters?: Record<string, unknown> | null;
+    const toolkitRecord = asRecord(record.toolkit);
+    const normalizedTool: LocalComposioToolView = {
+      slug: asString(record.slug) ?? slug,
+      name: asString(record.name) ?? slug,
+      description: asString(record.description),
+      toolkit: toolkitRecord
+        ? {
+          slug: asString(toolkitRecord.slug),
+          name: asString(toolkitRecord.name),
+        }
+        : null,
+      inputParameters: asRecord(record.inputParameters ?? record.input_parameters),
     };
 
-    return {
-      slug: body.slug,
-      name: body.name,
-      description: body.description ?? null,
-      toolkit: body.toolkit ?? null,
-      inputParameters: asRecord(body.input_parameters),
-    };
+    this.localToolSchemaCache.set(slug, normalizedTool);
+    this.localToolSchemaCache.set(normalizedTool.slug, normalizedTool);
+    return normalizedTool;
   }
 }
 
@@ -280,69 +285,40 @@ function normalizeHeaders(headers: Record<string, unknown> | undefined): Record<
   return normalized;
 }
 
-function normalizeActionToolkits(app: string | undefined): string[] | undefined {
-  const value = app?.trim().toLowerCase();
-  if (!value) return undefined;
-  return Array.from(new Set([
-    value,
-    value.replace(/\s+/g, '_'),
-    value.replace(/\s+/g, ''),
-    value.replace(/[_-]+/g, ' '),
-  ].filter(Boolean)));
+function normalizeToolkits(toolkits: string[]): string[] {
+  return Array.from(new Set(toolkits.flatMap((toolkit) => {
+    const value = toolkit.trim().toLowerCase();
+    if (!value) return [];
+    return [
+      value,
+      value.replace(/\s+/g, '_'),
+      value.replace(/\s+/g, ''),
+      value.replace(/[_-]+/g, ' '),
+    ];
+  }).filter(Boolean)));
 }
 
-function normalizeActionLimit(limit: number | undefined): number {
-  if (typeof limit !== 'number' || !Number.isFinite(limit)) return 3;
-  return Math.max(1, Math.min(8, Math.floor(limit)));
-}
-
-function parseToolRouterSearchResponse(response: unknown): {
-  actions: Array<{
-    slug: string;
-    guidance: {
-      executionGuidance: string | null;
-      recommendedPlanSteps: string[];
-      knownPitfalls: string[];
-    } | null;
-  }>;
-} {
+function parseToolRouterToolSlugs(response: unknown): string[] {
   const record = asRecord(response) ?? {};
   const results = Array.isArray(record.results) ? record.results : [];
-  const actions: Array<{
-    slug: string;
-    guidance: {
-      executionGuidance: string | null;
-      recommendedPlanSteps: string[];
-      knownPitfalls: string[];
-    } | null;
-  }> = [];
+  const slugs: string[] = [];
   const seen = new Set<string>();
 
   for (const result of results) {
     const item = asRecord(result);
     if (!item) continue;
-    const slugs = [
+    const candidates = [
       ...asStringArray(item.primaryToolSlugs ?? item.primary_tool_slugs),
       ...asStringArray(item.relatedToolSlugs ?? item.related_tool_slugs),
     ];
-    const guidance = {
-      executionGuidance: asString(item.executionGuidance ?? item.execution_guidance),
-      recommendedPlanSteps: asStringArray(item.recommendedPlanSteps ?? item.recommended_plan_steps),
-      knownPitfalls: asStringArray(item.knownPitfalls ?? item.known_pitfalls),
-    };
-    for (const slug of slugs) {
+    for (const slug of candidates) {
       if (!slug || seen.has(slug)) continue;
       seen.add(slug);
-      actions.push({
-        slug,
-        guidance: guidance.executionGuidance || guidance.recommendedPlanSteps.length > 0 || guidance.knownPitfalls.length > 0
-          ? guidance
-          : null,
-      });
+      slugs.push(slug);
     }
   }
 
-  return { actions };
+  return slugs;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -359,4 +335,52 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
     : [];
+}
+
+function getMissingRequiredToolArguments(
+  inputParameters: Record<string, unknown> | null,
+  arguments_: Record<string, unknown>,
+): string[] {
+  const required = asStringArray(inputParameters?.required);
+  return required.filter((field) => isMissingToolArgument(arguments_[field]));
+}
+
+function isMissingToolArgument(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  return typeof value === 'string' && value.trim().length === 0;
+}
+
+function compactInputParameters(inputParameters: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!inputParameters) return null;
+  const properties = asRecord(inputParameters.properties);
+  if (!properties) return inputParameters;
+
+  const compactProperties: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(properties)) {
+    const property = asRecord(value);
+    compactProperties[name] = property ? compactSchemaProperty(property) : value;
+  }
+
+  return {
+    type: asString(inputParameters.type) ?? 'object',
+    required: asStringArray(inputParameters.required),
+    properties: compactProperties,
+  };
+}
+
+function compactSchemaProperty(property: Record<string, unknown>): Record<string, unknown> {
+  const compact: Record<string, unknown> = {};
+  const type = property.type;
+  if (typeof type === 'string' || Array.isArray(type)) compact.type = type;
+  const description = asString(property.description);
+  if (description) compact.description = truncateSchemaText(description);
+  if ('default' in property) compact.default = property.default;
+  if (Array.isArray(property.enum)) compact.enum = property.enum;
+  const items = asRecord(property.items);
+  if (items) compact.items = compactSchemaProperty(items);
+  return compact;
+}
+
+function truncateSchemaText(value: string): string {
+  return value.length <= 300 ? value : `${value.slice(0, 297)}...`;
 }

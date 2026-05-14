@@ -6,13 +6,14 @@ const optionalString = () => z.preprocess(
   z.string().min(1).optional(),
 );
 
-const DEFAULT_MANAGED_MODEL = 'anthropic/claude-opus-4.7';
-const DEFAULT_ALLOWED_MODELS = ['anthropic/claude-opus-4.7', 'openai/gpt-5.4'];
+const DEFAULT_MANAGED_MODEL = 'openai/gpt-5.4';
+const DEFAULT_ALLOWED_MODELS = ['openai/gpt-5.4', 'anthropic/claude-opus-4.7'];
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 60;
 const DEFAULT_BREAKER_THRESHOLD = 5;
 const DEFAULT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_SESSION_LIFETIME_DAYS = 365;
+const DEFAULT_MAX_REQUEST_BYTES = 180_000;
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -25,6 +26,7 @@ const envSchema = z.object({
   MANAGED_DEFAULT_MODEL: optionalString(),
   MANAGED_ALLOWED_MODELS: optionalString(),
   MANAGED_DEFAULT_MAX_TOKENS: z.coerce.number().int().positive().optional(),
+  MANAGED_MAX_REQUEST_BYTES: z.coerce.number().int().positive().optional(),
   MANAGED_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().optional(),
   MANAGED_BREAKER_THRESHOLD: z.coerce.number().int().positive().optional(),
   MANAGED_BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().optional(),
@@ -42,6 +44,7 @@ export type BackendConfig = z.infer<typeof envSchema> & {
   managedDefaultModel: string;
   managedAllowedModels: string[];
   managedDefaultMaxTokens: number;
+  managedMaxRequestBytes: number;
   managedRateLimitPerMinute: number;
   managedBreakerThreshold: number;
   managedBreakerCooldownMs: number;
@@ -54,6 +57,7 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
   const managedAllowedModels = allowedFromEnv.length > 0 ? allowedFromEnv : DEFAULT_ALLOWED_MODELS;
   const managedDefaultModel = parsed.MANAGED_DEFAULT_MODEL ?? DEFAULT_MANAGED_MODEL;
   const managedDefaultMaxTokens = parsed.MANAGED_DEFAULT_MAX_TOKENS ?? DEFAULT_MAX_TOKENS;
+  const managedMaxRequestBytes = parsed.MANAGED_MAX_REQUEST_BYTES ?? DEFAULT_MAX_REQUEST_BYTES;
   const managedRateLimitPerMinute = parsed.MANAGED_RATE_LIMIT_PER_MINUTE ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
   const managedBreakerThreshold = parsed.MANAGED_BREAKER_THRESHOLD ?? DEFAULT_BREAKER_THRESHOLD;
   const managedBreakerCooldownMs = parsed.MANAGED_BREAKER_COOLDOWN_MS ?? DEFAULT_BREAKER_COOLDOWN_MS;
@@ -68,6 +72,7 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
     managedDefaultModel,
     managedAllowedModels,
     managedDefaultMaxTokens,
+    managedMaxRequestBytes,
     managedRateLimitPerMinute,
     managedBreakerThreshold,
     managedBreakerCooldownMs,

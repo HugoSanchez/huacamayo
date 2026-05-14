@@ -179,6 +179,29 @@ export async function registerInferenceRoutes(app: FastifyInstance, deps: Infere
       forwardBody.max_tokens = deps.config.managedDefaultMaxTokens;
     }
 
+    const requestBytes = Buffer.byteLength(JSON.stringify(forwardBody), 'utf8');
+    if (requestBytes > deps.config.managedMaxRequestBytes) {
+      await deps.inferenceStore.markFailed(recordId, new Date().toISOString(), 'request_too_large');
+      console.warn(JSON.stringify({
+        event: 'managed_request_rejected',
+        reason: 'request_too_large',
+        provider: 'openrouter',
+        userId: auth.user.id,
+        inferenceRequestId: recordId,
+        model: body.model,
+        requestBytes,
+        maxRequestBytes: deps.config.managedMaxRequestBytes,
+        messages: Array.isArray(forwardBody.messages) ? forwardBody.messages.length : null,
+        tools: Array.isArray(forwardBody.tools) ? forwardBody.tools.length : null,
+      }));
+      return reply.code(413).send({
+        error: 'request_too_large',
+        message: `Managed inference request is too large (${requestBytes} bytes). Reduce tool output/history before retrying.`,
+        requestBytes,
+        maxRequestBytes: deps.config.managedMaxRequestBytes,
+      });
+    }
+
     let stream;
     try {
       stream = await client.streamChatCompletion(forwardBody);
@@ -270,6 +293,27 @@ export async function registerInferenceRoutes(app: FastifyInstance, deps: Infere
     breaker.recordSuccess(auth.user.id);
     const usage = await stream.usagePromise;
     await deps.inferenceStore.markCompleted(recordId, completedAt, usage);
+
+    // Mirror the persisted usage to stderr so per-request cost is visible at
+    // dev time without a SQL roundtrip. Same fields landed in
+    // inference_requests via markCompleted above — this is just a tap.
+    console.log(JSON.stringify({
+      event: 'inference_completed',
+      provider: 'openrouter',
+      userId: auth.user.id,
+      inferenceRequestId: recordId,
+      providerRequestId: usage.providerRequestId,
+      model: body.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cachedTokens: usage.cachedTokens,
+      reasoningTokens: usage.reasoningTokens,
+      estimatedCostUsd: usage.estimatedCostUsd,
+      cacheHitRatio:
+        usage.inputTokens && usage.cachedTokens && usage.inputTokens > 0
+          ? Number((usage.cachedTokens / usage.inputTokens).toFixed(3))
+          : null,
+    }));
   });
 }
 

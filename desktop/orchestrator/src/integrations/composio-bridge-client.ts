@@ -41,45 +41,27 @@ export interface RemoteBridgeToolkitView {
   noAuth: boolean;
 }
 
-export interface RemoteBridgeActionGuidanceView {
-  executionGuidance: string | null;
-  recommendedPlanSteps: string[];
-  knownPitfalls: string[];
-}
-
-export interface RemoteBridgeActionCandidateView {
-  provider: 'composio';
-  providerAction: string;
-  appSlug: string | null;
-  appName: string | null;
+export interface RemoteBridgeSearchToolResult {
+  slug: string;
   name: string;
   description: string | null;
-  inputSchema: Record<string, unknown> | null;
-  guidance: RemoteBridgeActionGuidanceView | null;
-  connection: {
-    connected: boolean | null;
-    connectedAccountId: string | null;
-    status: string | null;
-  } | null;
+  toolkitSlug: string | null;
+  toolkitName: string | null;
 }
 
-export interface RemoteBridgeActionSchemaView {
-  provider: 'composio';
-  providerAction: string;
-  appSlug: string | null;
-  appName: string | null;
+export interface RemoteBridgeToolSchemaView {
+  slug: string;
   name: string;
   description: string | null;
-  inputSchema: Record<string, unknown> | null;
+  toolkitSlug: string | null;
+  toolkitName: string | null;
+  inputParameters: Record<string, unknown> | null;
 }
 
-export interface RemoteBridgeActionExecutionView {
-  provider: 'composio';
-  providerAction: string;
+export interface RemoteBridgeToolExecutionView {
   data: unknown;
   error: string | null;
   logId: string | null;
-  successful: boolean | null;
 }
 
 export class RemoteBridgeHttpError extends Error {
@@ -97,10 +79,8 @@ export class RemoteBridgeHttpError extends Error {
  * surface. Auth uses the user's in-memory session token (same one the chat
  * proxy uses).
  *
- * Tool discovery + execution went away in the move to Composio's hosted MCP
- * server (Hermes talks to it directly). What remains here is the session
- * minter and the connection-lifecycle endpoints that drive the verso
- * connection card UX.
+ * Tool discovery, schema lookup, and execution are proxied through the managed
+ * backend so the Composio project API key never lives in the desktop app.
  */
 export class RemoteComposioBridgeClient {
   private readonly managedBackend: ManagedBackendClient;
@@ -160,40 +140,41 @@ export class RemoteComposioBridgeClient {
     return body.request;
   }
 
-  async findActions(
+  async searchTools(
     _userId: string,
-    request: { app?: string; intent: string; limit?: number },
-  ): Promise<RemoteBridgeActionCandidateView[]> {
-    const body = await this.request<{ actions: RemoteBridgeActionCandidateView[] }>(
+    query: string,
+    toolkits?: string[],
+  ): Promise<RemoteBridgeSearchToolResult[]> {
+    const body = await this.request<{ results: RemoteBridgeSearchToolResult[] }>(
       'POST',
-      '/v1/composio/actions/find',
-      request,
+      '/v1/composio/tools/search',
+      { query, ...(toolkits && toolkits.length > 0 ? { toolkits } : {}) },
     );
-    return body.actions;
+    return body.results;
   }
 
-  async getActionSchema(
+  async getToolSchemas(
     _userId: string,
-    providerAction: string,
-  ): Promise<RemoteBridgeActionSchemaView> {
-    const body = await this.request<{ action: RemoteBridgeActionSchemaView }>(
+    toolSlugs: string[],
+  ): Promise<RemoteBridgeToolSchemaView[]> {
+    const body = await this.request<{ tools: RemoteBridgeToolSchemaView[] }>(
       'POST',
-      '/v1/composio/actions/schema',
-      { providerAction },
+      '/v1/composio/tools/schemas',
+      { toolSlugs },
     );
-    return body.action;
+    return body.tools;
   }
 
-  async executeAction(
+  async executeTool(
     _userId: string,
-    providerAction: string,
+    toolSlug: string,
     arguments_: Record<string, unknown>,
-  ): Promise<RemoteBridgeActionExecutionView> {
-    const body = await this.request<{ result: RemoteBridgeActionExecutionView }>(
+  ): Promise<RemoteBridgeToolExecutionView> {
+    const body = await this.request<{ result: RemoteBridgeToolExecutionView }>(
       'POST',
-      '/v1/composio/actions/execute',
+      '/v1/composio/tools/execute',
       {
-        providerAction,
+        toolSlug,
         arguments: arguments_,
       },
     );
