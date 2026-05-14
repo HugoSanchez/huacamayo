@@ -17,8 +17,6 @@ import { ManagedBackendClient } from '../integrations/managed-backend-client.ts'
 import { readRuntimeMode } from '../integrations/runtime-mode.ts';
 import { buildManagedAccountRoutes } from './managed-account.ts';
 import { buildLlmProxyRoutes } from './llm-proxy.ts';
-import { buildToolGatewayRoutes } from './tool-gateway.ts';
-import { ToolGatewayService } from '../integrations/tool-gateway.ts';
 
 function buildRoutes(store: ChatStore, hermes: HermesSupervisor, managedBackend: ManagedBackendClient): Route[] {
   return [
@@ -53,7 +51,6 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const managedBackend = new ManagedBackendClient();
   const connections = new ConnectionsService(managedBackend);
   const composioBridge = new ComposioBridgeService(managedBackend);
-  const toolGateway = new ToolGatewayService(composioBridge);
   const hermes = new HermesSupervisor({ runtimeMode });
   const skillsConfig = new HermesSkillsConfig();
   const pinnedSkills = new PinnedSkillsStore();
@@ -61,7 +58,6 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const routes = [
     ...buildRoutes(store, hermes, managedBackend),
     ...buildComposioBridgeRoutes(composioBridge),
-    ...buildToolGatewayRoutes(toolGateway),
     ...buildManagedAccountRoutes(managedBackend, runtimeMode),
     ...buildLlmProxyRoutes(managedBackend),
     ...buildConnectionsRoutes(connections),

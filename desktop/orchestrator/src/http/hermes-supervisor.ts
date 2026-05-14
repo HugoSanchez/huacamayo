@@ -1,12 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import { delimiter, dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import type { RuntimeMode } from '../integrations/runtime-mode.ts';
-import type { ComposioBridgeService } from '../integrations/composio-bridge.ts';
 import {
   ensureRuntimeVenv,
   getBundledHermesBin,
@@ -67,14 +66,6 @@ export function getHermesGatewayConfig(): HermesGatewayConfig {
 
 function normalizeBaseUrl(rawBaseUrl: string): string {
   return rawBaseUrl.replace(/\/+$/, '');
-}
-
-function sameComposioMcp(
-  left: { url: string; apiKey: string } | null,
-  right: { url: string; apiKey: string } | null,
-): boolean {
-  if (left === null || right === null) return left === right;
-  return left.url === right.url && left.apiKey === right.apiKey;
 }
 
 function getHermesLaunchConfig(): HermesLaunchConfig {
@@ -159,29 +150,13 @@ export interface HermesSupervisorOptions {
   config?: HermesGatewayConfig;
   launch?: HermesLaunchConfig;
   runtimeMode?: RuntimeMode;
-  /** Default model for managed mode; written into the managed Hermes config.yaml. */
+  /** Optional model override for managed mode. Leave unset to preserve Hermes' own config. */
   managedDefaultModel?: string;
-  /**
-   * Source of the per-user Composio MCP session. When provided, we fetch the
-   * session URL + headers at Hermes launch and register them as the `composio`
-   * MCP server in the managed Hermes profile. Hermes then talks to Composio's
-   * hosted MCP server directly — no orchestrator/backend proxy layer.
-   */
-  composioBridge?: ComposioBridgeService;
 }
 
-const DEFAULT_MANAGED_MODEL = 'anthropic/claude-opus-4.7';
-
-/**
- * Hermes ships skills that teach the agent to use shell CLIs (gws, gh,
- * himalaya, …) for services we expose via Composio. Those skills pre-date
- * verso's architecture and actively conflict with it — the model reads both
- * sources of advice and picks unpredictably. We disable them on a fresh
- * managed profile; the user can re-enable any from the Skills sidebar.
- *
- * Names here must match each skill's `name:` frontmatter field, which is
- * what `skills.disabled` in Hermes' config.yaml uses as the lookup key.
- */
+// Exact disable list written by an earlier managed-profile experiment. We keep
+// it only so existing profiles can be restored to the user's normal Hermes
+// skill configuration.
 const DEFAULT_DISABLED_HERMES_SKILLS = [
   'google-workspace',
   'himalaya',
@@ -202,7 +177,7 @@ export class HermesSupervisor {
   private readonly managedHermesHome: string;
   private readonly templateHermesHome: string;
   private readonly runtimeMode: RuntimeMode;
-  private readonly managedDefaultModel: string;
+  private readonly managedDefaultModel: string | null;
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
@@ -214,50 +189,20 @@ export class HermesSupervisor {
   private source: HermesRuntimeSource = 'none';
   private lastError: string | null = null;
   private logTail: string[] = [];
-  private readonly composioBridge: ComposioBridgeService | null;
-  private composioMcp: { url: string; apiKey: string } | null = null;
 
   constructor(options: HermesSupervisorOptions = {}) {
     this.config = options.config ?? getHermesGatewayConfig();
     this.launch = options.launch ?? getHermesLaunchConfig();
     this.runtimeMode = options.runtimeMode ?? 'managed';
     this.managedDefaultModel = (process.env.VERSO_MANAGED_DEFAULT_MODEL?.trim()
-      || options.managedDefaultModel
-      || DEFAULT_MANAGED_MODEL);
+      || options.managedDefaultModel?.trim()
+      || null);
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
     this.baseUrlResolved = this.hasExplicitBaseUrl;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
-    this.composioBridge = options.composioBridge ?? null;
-  }
-
-  // Fetch the per-user Composio MCP session URL + API key from the managed
-  // backend. Called right before Hermes spawn so the config we write reflects
-  // the currently signed-in user. Best-effort: if the user isn't signed in or
-  // the backend is unreachable, we leave Hermes' Composio MCP entry unset and
-  // the agent runs without Composio tools until next launch.
-  private async refreshComposioMcpSession(): Promise<boolean> {
-    const previous = this.composioMcp;
-    if (!this.composioBridge) {
-      this.composioMcp = null;
-      return !sameComposioMcp(previous, this.composioMcp);
-    }
-    try {
-      const session = await this.composioBridge.getDefaultSession();
-      const apiKey = session.mcp.headers['x-api-key'];
-      if (!session.mcp.url || !apiKey) {
-        this.composioMcp = null;
-        return !sameComposioMcp(previous, this.composioMcp);
-      }
-      this.composioMcp = { url: session.mcp.url, apiKey };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[hermes] Composio MCP session unavailable: ${message}`);
-      this.composioMcp = null;
-    }
-    return !sameComposioMcp(previous, this.composioMcp);
   }
 
   // The on-disk Hermes home for the gateway we manage (or the template path
@@ -298,10 +243,6 @@ export class HermesSupervisor {
     if (this.startPromise) {
       await abortable(this.startPromise, signal);
     } else if (this.isChildRunning() && await this.ping(800, signal)) {
-      const composioChanged = await this.refreshComposioMcpSession().catch(() => false);
-      if (composioChanged) {
-        await abortable(this.restartManaged(), signal);
-      }
       this.noteReady();
       return this.config;
     } else if (this.launch.command) {
@@ -366,12 +307,6 @@ export class HermesSupervisor {
 
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
     this.source = 'none';
-  }
-
-  private async restartManaged(): Promise<void> {
-    if (!this.launch.command) return;
-    await this.shutdown();
-    await this.startManaged();
   }
 
   private async ensureResolvedBaseUrl(): Promise<void> {
@@ -486,8 +421,6 @@ export class HermesSupervisor {
     this.lastError = null;
     this.logTail = [];
 
-    await this.refreshComposioMcpSession();
-
     const child = this.spawnManagedProcess();
     this.child = child;
     child.once('exit', (code, signal) => {
@@ -576,13 +509,14 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'auth.json');
+    this.syncManagedAuthStore();
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'SOUL.md');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
-    this.seedVersoSkill();
+    this.syncVersoSkill();
     this.configureManagedMcpServers();
-    this.configureManagedModelOverride();
-    this.applyDefaultDisabledSkillsOnFirstRun();
+    this.syncManagedModelConfig();
+    this.restoreDefaultDisabledSkillsIfOwned();
   }
 
   /**
@@ -591,12 +525,17 @@ export class HermesSupervisor {
    * every launch when the source is newer than the destination, so iterating
    * on the SKILL.md propagates without manual file moves.
    */
-  private seedVersoSkill(): void {
+  private syncVersoSkill(): void {
+    const targetPath = join(this.managedHermesHome, 'skills', 'verso', 'verso-composio', 'SKILL.md');
+    if (process.env.VERSO_ENABLE_COMPOSIO_SKILL?.trim() !== '1') {
+      rmSync(targetPath, { force: true });
+      return;
+    }
+
     const sourceDir = resolveVersoSkillSourceDir();
     if (!sourceDir) return;
     const sourcePath = join(sourceDir, 'SKILL.md');
     if (!existsSync(sourcePath)) return;
-    const targetPath = join(this.managedHermesHome, 'skills', 'verso', 'verso-composio', 'SKILL.md');
     if (existsSync(targetPath)) {
       try {
         const srcMtime = statSync(sourcePath).mtimeMs;
@@ -610,16 +549,35 @@ export class HermesSupervisor {
     copyFileSync(sourcePath, targetPath);
   }
 
+  private syncManagedAuthStore(): void {
+    const sourcePath = join(this.templateHermesHome, 'auth.json');
+    const targetPath = join(this.managedHermesHome, 'auth.json');
+    if (sourcePath === targetPath || !existsSync(sourcePath)) return;
+
+    const sourceAuth = readJsonRecord(sourcePath);
+    if (!isModernHermesAuthStore(sourceAuth)) return;
+
+    const targetAuth = readJsonRecord(targetPath);
+    const targetIsModern = isModernHermesAuthStore(targetAuth);
+    if (targetIsModern) {
+      try {
+        if (statSync(targetPath).mtimeMs >= statSync(sourcePath).mtimeMs) return;
+      } catch {
+        return;
+      }
+    }
+
+    mkdirSync(dirname(targetPath), { recursive: true });
+    copyFileSync(sourcePath, targetPath);
+  }
+
   /**
-   * On the first managed-profile launch (detected by `skills.disabled` being
-   * unset in config.yaml), disable Hermes' built-in skills that overlap with
-   * Composio toolkits — they tell the agent to use shell CLIs like `gws` or
-   * `gh` directly, which bypass verso's Composio path and connection-card UX.
-   *
-   * After this runs once, the user owns the list; we never touch it again.
-   * Re-enable any skill via the verso Skills sidebar to restore it.
+   * Earlier managed-profile experiments disabled several Hermes built-in
+   * skills. That made the managed profile diverge from the working Hermes
+   * setup. If the disabled list is exactly the one we wrote, restore the
+   * template/default list; otherwise respect the user's current setting.
    */
-  private applyDefaultDisabledSkillsOnFirstRun(): void {
+  private restoreDefaultDisabledSkillsIfOwned(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     if (!existsSync(configPath)) return;
 
@@ -635,13 +593,20 @@ export class HermesSupervisor {
     }
 
     const skills = asRecord(config.skills) ?? {};
-    if (skills.disabled !== undefined) {
-      // User (or a previous run) has already established a disable list.
-      // Respect it — do not overwrite.
+    const disabled = Array.isArray(skills.disabled)
+      ? skills.disabled.filter((item): item is string => typeof item === 'string')
+      : null;
+    if (!disabled || !sameStringSet(disabled, DEFAULT_DISABLED_HERMES_SKILLS)) {
       return;
     }
 
-    skills.disabled = [...DEFAULT_DISABLED_HERMES_SKILLS];
+    const templateConfig = readYamlRecord(join(this.templateHermesHome, 'config.yaml'));
+    const templateSkills = asRecord(templateConfig?.skills);
+    const templateDisabled = Array.isArray(templateSkills?.disabled)
+      ? templateSkills.disabled.filter((item): item is string => typeof item === 'string')
+      : [];
+
+    skills.disabled = templateDisabled;
     config.skills = skills;
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
@@ -674,7 +639,7 @@ export class HermesSupervisor {
    * Other config sections (agent, personalities, mcp_servers, etc.) are left
    * untouched so the user's existing Hermes setup is preserved.
    */
-  private configureManagedModelOverride(): void {
+  private syncManagedModelConfig(): void {
     if (this.runtimeMode !== 'managed') return;
     if (!this.orchestratorBaseUrl) return;
 
@@ -690,6 +655,22 @@ export class HermesSupervisor {
       }
     } catch {
       config = {};
+    }
+
+    if (!this.managedDefaultModel) {
+      const currentModel = asRecord(config.model);
+      const baseUrl = typeof currentModel?.base_url === 'string' ? currentModel.base_url : '';
+      const provider = typeof currentModel?.provider === 'string' ? currentModel.provider : '';
+      if (provider !== 'custom' || !baseUrl.endsWith('/llm/v1')) return;
+
+      const templateModel = asRecord(readYamlRecord(join(this.templateHermesHome, 'config.yaml'))?.model);
+      if (templateModel) {
+        config.model = templateModel;
+      } else {
+        delete config.model;
+      }
+      writeFileSync(configPath, YAML.stringify(config), 'utf8');
+      return;
     }
 
     config.model = {
@@ -735,7 +716,7 @@ export class HermesSupervisor {
       }
     }
 
-    // Composio is reached through verso's local tool gateway MCP surface.
+    // Composio is reached through verso's backend-backed MCP bridge.
     // Do not register Composio's hosted MCP server directly with Hermes; raw
     // provider tool schemas are too unstable for the primary product path.
     delete mcpServers.composio;
@@ -953,8 +934,47 @@ function shouldRefreshManagedFile(sourcePath: string, targetPath: string, fileNa
   }
 }
 
+function readYamlRecord(path: string): Record<string, unknown> | null {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = YAML.parse(readFileSync(path, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readJsonRecord(path: string): Record<string, unknown> | null {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isModernHermesAuthStore(value: Record<string, unknown> | null): boolean {
+  return Boolean(
+    value
+    && typeof value.active_provider === 'string'
+    && asRecord(value.providers)
+    && asRecord(value.credential_pool),
+  );
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function sameStringSet(left: string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
 }

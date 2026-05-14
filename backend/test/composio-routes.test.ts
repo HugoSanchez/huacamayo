@@ -3,7 +3,13 @@ import { buildServer } from '../src/server.ts';
 import { getConfig } from '../src/config.ts';
 import { AuthService } from '../src/auth/service.ts';
 import { MemoryAuthStore } from '../src/auth/memory-store.ts';
-import { ComposioService, ComposioServiceError } from '../src/composio/service.ts';
+import {
+  ComposioService,
+  ComposioServiceError,
+  type BridgeSearchToolResult,
+  type BridgeToolExecutionView,
+  type BridgeToolSchemaView,
+} from '../src/composio/service.ts';
 import type { PrivyAuthVerifier, VerifiedPrivyAuthToken } from '../src/auth/types.ts';
 
 class StubVerifier implements PrivyAuthVerifier {
@@ -72,6 +78,44 @@ class StubComposioService extends ComposioService {
 
   override resetSession(_userId: string): void {
     // no-op
+  }
+
+  override async searchTools(userId: string, query: string, _toolkits?: string[]): Promise<BridgeSearchToolResult[]> {
+    this.capturedUserId = userId;
+    return [
+      {
+        slug: query || 'SLACK_SEARCH_MESSAGES',
+        name: 'Search messages',
+        description: null,
+        toolkitSlug: 'slack',
+        toolkitName: 'Slack',
+      },
+    ];
+  }
+
+  override async getToolSchemas(userId: string, toolSlugs: string[]): Promise<BridgeToolSchemaView[]> {
+    this.capturedUserId = userId;
+    return toolSlugs.map((slug) => ({
+      slug,
+      name: 'Search messages',
+      description: null,
+      toolkitSlug: 'slack',
+      toolkitName: 'Slack',
+      inputParameters: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } },
+    }));
+  }
+
+  override async executeTool(
+    userId: string,
+    toolSlug: string,
+    arguments_: Record<string, unknown> | undefined,
+  ): Promise<BridgeToolExecutionView> {
+    this.capturedUserId = userId;
+    return {
+      data: { toolSlug, arguments: arguments_ ?? {} },
+      error: null,
+      logId: 'log_1',
+    };
   }
 }
 
@@ -207,74 +251,130 @@ describe('Composio routes', () => {
     expect(res.json().error).toBe('composio_error');
   });
 
-  test('POST /v1/composio/actions/find uses authenticated user', async () => {
+  test('POST /v1/composio/tools/search uses authenticated user', async () => {
     s = await setup();
     const composio = s.composio;
-    let receivedIntent: string | undefined;
-    composio.findActions = async (userId, request) => {
+    let receivedQuery: string | undefined;
+    let receivedToolkits: string[] | undefined;
+    composio.searchTools = async (userId, query, toolkits) => {
       composio.capturedUserId = userId;
-      receivedIntent = request.intent;
+      receivedQuery = query;
+      receivedToolkits = toolkits;
       return [
         {
-          provider: 'composio' as const,
-          providerAction: 'SLACK_SEARCH_MESSAGES',
-          appSlug: 'slack',
-          appName: 'Slack',
+          slug: 'SLACK_SEARCH_MESSAGES',
           name: 'Search messages',
           description: null,
-          inputSchema: null,
-          guidance: null,
-          connection: null,
+          toolkitSlug: 'slack',
+          toolkitName: 'Slack',
         },
       ];
     };
     const res = await s.app.inject({
       method: 'POST',
-      url: '/v1/composio/actions/find',
+      url: '/v1/composio/tools/search',
       headers: { authorization: `Bearer ${s.sessionToken}` },
       payload: {
         userId: 'usr_attacker_attempting_to_act_as_someone_else',
-        app: 'slack',
-        intent: 'search Slack',
+        query: 'search Slack',
+        toolkits: ['slack'],
       },
     });
     expect(res.statusCode).toBe(200);
-    expect(receivedIntent).toBe('search Slack');
+    expect(receivedQuery).toBe('search Slack');
+    expect(receivedToolkits).toEqual(['slack']);
     expect(s.composio.capturedUserId).toBe(s.userId);
-    expect(res.json().actions[0].providerAction).toBe('SLACK_SEARCH_MESSAGES');
+    expect(res.json().results[0].slug).toBe('SLACK_SEARCH_MESSAGES');
   });
 
-  test('POST /v1/composio/actions/execute forwards provider action and arguments', async () => {
+  test('POST /v1/composio/tools/schemas forwards tool slugs', async () => {
     s = await setup();
     const composio = s.composio;
-    let receivedProviderAction: string | undefined;
-    let receivedArguments: Record<string, unknown> | undefined;
-    composio.executeAction = async (userId, request) => {
+    let receivedToolSlugs: string[] | undefined;
+    composio.getToolSchemas = async (userId, toolSlugs) => {
       composio.capturedUserId = userId;
-      receivedProviderAction = request.providerAction;
-      receivedArguments = request.arguments;
+      receivedToolSlugs = toolSlugs;
+      return [
+        {
+          slug: toolSlugs[0],
+          name: 'Search messages',
+          description: null,
+          toolkitSlug: 'slack',
+          toolkitName: 'Slack',
+          inputParameters: { type: 'object' },
+        },
+      ];
+    };
+    const res = await s.app.inject({
+      method: 'POST',
+      url: '/v1/composio/tools/schemas',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+      payload: {
+        toolSlugs: ['SLACK_SEARCH_MESSAGES'],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(s.composio.capturedUserId).toBe(s.userId);
+    expect(receivedToolSlugs).toEqual(['SLACK_SEARCH_MESSAGES']);
+    expect(res.json().tools[0].slug).toBe('SLACK_SEARCH_MESSAGES');
+  });
+
+  test('POST /v1/composio/tools/execute forwards tool slug and arguments', async () => {
+    s = await setup();
+    const composio = s.composio;
+    let receivedToolSlug: string | undefined;
+    let receivedArguments: Record<string, unknown> | undefined;
+    composio.executeTool = async (userId, toolSlug, arguments_) => {
+      composio.capturedUserId = userId;
+      receivedToolSlug = toolSlug;
+      receivedArguments = arguments_;
       return {
-        provider: 'composio' as const,
-        providerAction: request.providerAction ?? '',
         data: { ok: true },
         error: null,
         logId: 'log_1',
-        successful: true,
       };
     };
     const res = await s.app.inject({
       method: 'POST',
-      url: '/v1/composio/actions/execute',
+      url: '/v1/composio/tools/execute',
       headers: { authorization: `Bearer ${s.sessionToken}` },
       payload: {
-        providerAction: 'SLACK_SEARCH_MESSAGES',
+        toolSlug: 'SLACK_SEARCH_MESSAGES',
         arguments: { query: 'katana' },
       },
     });
     expect(res.statusCode).toBe(200);
     expect(s.composio.capturedUserId).toBe(s.userId);
-    expect(receivedProviderAction).toBe('SLACK_SEARCH_MESSAGES');
+    expect(receivedToolSlug).toBe('SLACK_SEARCH_MESSAGES');
     expect(receivedArguments).toEqual({ query: 'katana' });
+  });
+
+  test('POST /v1/composio/tools/execute rejects missing or null arguments before service execution', async () => {
+    s = await setup();
+    s.composio.executeTool = async () => {
+      throw new Error('executeTool should not be called');
+    };
+
+    const missing = await s.app.inject({
+      method: 'POST',
+      url: '/v1/composio/tools/execute',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+      payload: { toolSlug: 'SLACK_SEARCH_MESSAGES' },
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json().error).toBe('composio_error');
+
+    const nullArgs = await s.app.inject({
+      method: 'POST',
+      url: '/v1/composio/tools/execute',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+      payload: {
+        toolSlug: 'SLACK_SEARCH_MESSAGES',
+        arguments: null,
+      },
+    });
+    expect(nullArgs.statusCode).toBe(400);
+    expect(nullArgs.json().error).toBe('composio_error');
   });
 
   test('surfaces ComposioServiceError status when the service throws', async () => {

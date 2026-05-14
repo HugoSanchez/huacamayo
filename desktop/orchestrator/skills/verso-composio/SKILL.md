@@ -1,6 +1,6 @@
 ---
 name: verso-composio
-description: How to reach external services (Gmail, Slack, Google Workspace, Notion, GitHub, Linear, …) through verso's local app action gateway. Always prefer this over raw Composio tools or shell CLIs like `gws`, `gh`, or `himalaya` — those bypass the verso connection card UX.
+description: How to reach external services (Gmail, Slack, Google Workspace, Notion, GitHub, Linear, etc.) through verso's backend-backed Composio bridge. Always prefer this over shell CLIs like `gws`, `gh`, or `himalaya`; those bypass the verso connection card UX.
 version: 1.0.0
 author: verso
 license: MIT
@@ -9,92 +9,116 @@ metadata:
     tags: [Composio, MCP, Gmail, Slack, Google, Notion, GitHub, Linear, OAuth, verso]
 ---
 
-# Verso Composio integration
+# Verso Composio Integration
 
-External-service tools in verso come through the **local app action gateway** exposed by the `verso` MCP server. Hermes does not call raw Composio tools directly. Instead, it asks verso to find an action by intent, receives opaque `actionId` values, inspects schemas when needed, and executes actions through the gateway.
+External-service tools in verso come through the `verso` MCP server. The Composio API key stays on the backend. Hermes sees a small bridge:
 
-## The cardinal rule
+1. `verso.search_composio_tools`
+2. `verso.get_composio_tool_schemas`
+3. `verso.execute_composio_tool`
 
-**For anything that touches a connected third-party app, use the verso app action gateway.** Do not call raw Composio tools, shell CLIs (`gws`, `gh`, `himalaya`, `slack-cli`, etc.), or Python that calls Google APIs directly. Those paths bypass verso's connection UX, require manual OAuth setup, and break the in-chat connection card.
+## Cardinal Rule
 
-## How to use app actions
+For anything that touches a connected third-party app, use the verso Composio bridge. Do not use shell CLIs (`gws`, `gh`, `himalaya`, `slack-cli`, etc.) or direct provider APIs. Those paths bypass verso's connection UX and do not match the user's Composio connection state.
 
-1. Call `verso.apps_list_connections` if you need to know what is connected.
-2. Call `verso.apps_find_action({ app?, intent })` with a concrete use case.
-3. Pick the best returned `actionId`. If the arguments are not obvious, call `verso.apps_get_action_schema({ action_id })`.
-4. Call `verso.apps_execute_action({ action_id, arguments })`. Pass only fields in the schema. If the gateway returns a validation error, inspect the schema and retry once.
+## Tool Flow
 
-## Connection management
+1. If you need to know what is connected, call `verso.list_connections`.
+2. Search for the right Composio tool:
+   `verso.search_composio_tools({ query: "<specific use case>", toolkits: ["<slug>"] })`
+3. Pick the best returned `slug`, for example `SLACK_SEARCH_MESSAGES`.
+4. Fetch the exact schema:
+   `verso.get_composio_tool_schemas({ tool_slugs: ["SLACK_SEARCH_MESSAGES"] })`
+5. Execute the same slug:
+   `verso.execute_composio_tool({ tool_slug: "SLACK_SEARCH_MESSAGES", arguments: { ... } })`
 
-If a tool returns "no active connection" or you need a new toolkit authorized, **always call** `verso.request_connection({toolkit: <slug>})`. That renders a styled connection card in chat. **Never paste raw OAuth URLs into the conversation** — they don't redirect properly outside the verso shell.
+Do not invent arguments. Use the schema from `get_composio_tool_schemas`.
 
-To check connection state without starting a flow, call `verso.list_connections` or `verso.get_connection_status({request_id})`.
+## Connection Management
 
-## Common toolkits and their slugs
+If a tool reports no active connection, or the user asks to connect a service, call:
 
-| Service | Toolkit slug | Gateway usage |
+```
+verso.request_connection({ toolkit: "<slug>" })
+```
+
+Then tell the user to use the connection card in chat. Do not paste raw OAuth URLs into the conversation.
+
+To check state without starting a flow, call `verso.list_connections` or `verso.get_connection_status({ request_id })`.
+
+## Common Toolkit Slugs
+
+| Service | Toolkit slug | Search example |
 |---|---|---|
-| Gmail | `gmail` | `apps_find_action(app: "gmail", intent: "...")` |
-| Google Calendar | `googlecalendar` | `apps_find_action(app: "googlecalendar", intent: "...")` |
-| Google Drive | `googledrive` | `apps_find_action(app: "googledrive", intent: "...")` |
-| Google Docs | `googledocs` | `apps_find_action(app: "googledocs", intent: "...")` |
-| Google Sheets | `googlesheets` | `apps_find_action(app: "googlesheets", intent: "...")` |
-| Slack | `slack` | `apps_find_action(app: "slack", intent: "...")` |
-| Notion | `notion` | `apps_find_action(app: "notion", intent: "...")` |
-| GitHub | `github` | `apps_find_action(app: "github", intent: "...")` |
-| Linear | `linear` | `apps_find_action(app: "linear", intent: "...")` |
+| Gmail | `gmail` | `search_composio_tools(query: "send Gmail email", toolkits: ["gmail"])` |
+| Google Calendar | `googlecalendar` | `search_composio_tools(query: "create calendar event", toolkits: ["googlecalendar"])` |
+| Google Drive | `googledrive` | `search_composio_tools(query: "find Google Drive file", toolkits: ["googledrive"])` |
+| Google Docs | `googledocs` | `search_composio_tools(query: "read Google Doc", toolkits: ["googledocs"])` |
+| Google Sheets | `googlesheets` | `search_composio_tools(query: "read spreadsheet values", toolkits: ["googlesheets"])` |
+| Slack | `slack` | `search_composio_tools(query: "search Slack messages", toolkits: ["slack"])` |
+| Notion | `notion` | `search_composio_tools(query: "search Notion pages", toolkits: ["notion"])` |
+| GitHub | `github` | `search_composio_tools(query: "find GitHub issue", toolkits: ["github"])` |
+| Linear | `linear` | `search_composio_tools(query: "find Linear issue", toolkits: ["linear"])` |
 
-If the user names a service that isn't in this table, look up the slug with `verso.search_toolkits({query: "<service name>"})`.
+If the user names a service that is not in this table, resolve it with `verso.search_toolkits({ query: "<service name>" })`.
 
-## What NOT to do
+## What Not To Do
 
-- Do **not** call `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_GET_TOOL_SCHEMAS`, `COMPOSIO_MULTI_EXECUTE_TOOL`, `COMPOSIO_MANAGE_CONNECTIONS`, `COMPOSIO_INITIATE_CONNECTION`, or any Composio-native helper directly. Use the gateway tools.
-- Do **not** fabricate provider tool slugs or arguments. Use `actionId` values returned by `apps_find_action`.
-- Do **not** write `subprocess.run(["gws", ...])`, `gh issue create`, `himalaya send`, or similar shell invocations for services that have a Composio toolkit. The user has not set up those CLIs, and even if they had, the auth wouldn't match verso's connection state.
-- Do **not** paste raw OAuth `https://composio.dev/...` URLs into chat. The user clicks the verso connection card; not a link.
+- Do not call Composio hosted MCP helper tools such as `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_GET_TOOL_SCHEMAS`, `COMPOSIO_MULTI_EXECUTE_TOOL`, `COMPOSIO_MANAGE_CONNECTIONS`, or `COMPOSIO_INITIATE_CONNECTION`.
+- Do not fabricate tool slugs. Search first, then use returned slugs.
+- Do not execute a tool with `{}` when the schema has required fields.
+- Do not retry the same failed tool call with the same arguments.
+- Do not paste raw OAuth URLs into chat.
 
-## Error patterns and how to recover
+## Error Recovery
 
 | Error | Cause | Fix |
 |---|---|---|
-| `Missing required argument "X"` | You skipped a required input from the action schema | Call `apps_get_action_schema`, fill that field, retry |
-| `Unknown action_id` | The action cache expired or you guessed an id | Call `apps_find_action` again |
-| `No Active connection for toolkit=X` | User hasn't connected this toolkit yet | Call `verso.request_connection({toolkit: "X"})` and tell the user to use the card |
-| `Rate limit exceeded` | Composio throttled the call | Backoff once, then retry; do not loop |
+| `Missing "query"` | The search call was empty | Retry `search_composio_tools` with a concrete use case |
+| `Missing "toolSlugs"` | Schema lookup had no slug | Use a slug returned by search |
+| `Missing required argument "X"` | Execution skipped a required schema field | Fill that exact field from the schema and retry once |
+| `No Active connection for toolkit=X` | User has not connected the toolkit | Call `verso.request_connection({ toolkit: "X" })` |
+| `Rate limit exceeded` | Composio throttled the call | Back off once; do not loop |
 
-## Workflow examples
+## Examples
 
-**"Search Slack for messages from Will Button about Katana"**
+**Search Slack for messages from Will Button about Katana**
 
 ```
-verso.apps_find_action({ app: "slack", intent: "search Slack messages from Will Button about Katana" })
-verso.apps_get_action_schema({ action_id: "<returned actionId>" })
-verso.apps_execute_action({
-  action_id: "<returned actionId>",
-  arguments: { query: "from:Will Button Katana", count: 10 }
+verso.search_composio_tools({
+  query: "search Slack messages from Will Button about Katana CTO introduction",
+  toolkits: ["slack"]
+})
+verso.get_composio_tool_schemas({ tool_slugs: ["SLACK_SEARCH_MESSAGES"] })
+verso.execute_composio_tool({
+  tool_slug: "SLACK_SEARCH_MESSAGES",
+  arguments: { query: "\"Will Button\" Katana CTO", count: 10 }
 })
 ```
 
-Pass Slack search modifiers directly in `query` — `from:`, `in:`, `before:`, `after:`, etc. work natively.
+Slack search modifiers such as `from:`, `in:`, `before:`, and `after:` belong inside `query` when the schema accepts a query string.
 
-**"Find Google Drive files with Lido in the title"**
+**Find Google Drive files with Lido in the title**
 
 ```
-verso.apps_find_action({ app: "googledrive", intent: "find Google Drive files with Lido in the title" })
-verso.apps_get_action_schema({ action_id: "<returned actionId>" })
-verso.apps_execute_action({
-  action_id: "<returned actionId>",
+verso.search_composio_tools({
+  query: "find Google Drive files by title",
+  toolkits: ["googledrive"]
+})
+verso.get_composio_tool_schemas({ tool_slugs: ["GOOGLEDRIVE_FIND_FILE"] })
+verso.execute_composio_tool({
+  tool_slug: "GOOGLEDRIVE_FIND_FILE",
   arguments: { q: "name contains 'Lido' and trashed = false", pageSize: 10 }
 })
 ```
 
-**"Send an email to alice@example.com with subject Hello"**
+**Send an email**
 
 ```
-verso.apps_find_action({ app: "gmail", intent: "send an email" })
-verso.apps_get_action_schema({ action_id: "<returned actionId>" })
-verso.apps_execute_action({
-  action_id: "<returned actionId>",
+verso.search_composio_tools({ query: "send Gmail email", toolkits: ["gmail"] })
+verso.get_composio_tool_schemas({ tool_slugs: ["<returned Gmail send slug>"] })
+verso.execute_composio_tool({
+  tool_slug: "<returned Gmail send slug>",
   arguments: {
     recipient_email: "alice@example.com",
     subject: "Hello",
@@ -103,23 +127,4 @@ verso.apps_execute_action({
 })
 ```
 
-Always confirm subject + body + recipient with the user before calling — sends are irreversible.
-
-**"List my unread emails from this week"**
-
-```
-verso.apps_find_action({ app: "gmail", intent: "list unread Gmail messages from this week" })
-verso.apps_execute_action({
-  action_id: "<returned actionId>",
-  arguments: { query: "is:unread newer_than:7d", max_results: 25 }
-})
-```
-
-Gmail search syntax works inside `query`.
-
-**"User asks for something that needs Notion, and Notion isn't connected"**
-
-```
-verso.request_connection({ toolkit: "notion" })
-→ tell the user: "I've opened a connection card in this chat — click Connect Notion to authorize, then I'll continue."
-```
+Confirm recipient, subject, and body with the user before sending.

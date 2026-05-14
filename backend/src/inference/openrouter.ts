@@ -113,7 +113,8 @@ export class OpenRouterClient {
         zdr: true,
       },
     };
-    const body = JSON.stringify(merged);
+    const withCache = injectAnthropicCacheControl(merged);
+    const body = JSON.stringify(withCache);
 
     let response: Response;
     try {
@@ -248,6 +249,118 @@ function readUsage(raw: Record<string, unknown>, prev: InferenceRequestUsage): I
     estimatedCostUsd,
     providerRequestId: prev.providerRequestId,
   };
+}
+
+/**
+ * Inject Anthropic prompt-cache breakpoints on stable prefix content. Anthropic
+ * (unlike OpenAI which caches automatically) only caches prefixes that are
+ * explicitly marked with `cache_control: {type: "ephemeral"}`. Without these
+ * markers, every Hermes turn re-bills the system prompt + tool schemas + the
+ * entire growing conversation history at full rate.
+ *
+ * Anthropic allows up to 4 breakpoints. We use three, in order of stability:
+ *   1. End of system / developer message  — ~5K tokens, immutable
+ *   2. End of tools=[] array              — ~30K tokens, changes only when
+ *                                            the agent's tool set changes
+ *   3. End of conversation history        — ~75K+ tokens on later turns,
+ *                                            grows each turn but earlier
+ *                                            content stays byte-identical
+ *
+ * The third breakpoint is the high-leverage one for multi-turn tool-calling
+ * conversations: every turn after the first reuses the prior history as a
+ * cache hit, with only the new user message + latest tool result paying full
+ * rate. Cache writes cost 1.25× input rate, reads cost 0.1×, so caching
+ * pays off after a single reuse.
+ *
+ * No-op for non-Anthropic models so OpenAI/Google paths are untouched.
+ */
+export function injectAnthropicCacheControl(body: Record<string, unknown>): Record<string, unknown> {
+  const model = typeof body.model === 'string' ? body.model : '';
+  if (!model.startsWith('anthropic/')) return body;
+
+  const next: Record<string, unknown> = { ...body };
+
+  // 1. Mark the system / developer message. Convert string content to the
+  //    array-of-blocks shape Anthropic expects when we need to attach
+  //    cache_control to a specific block.
+  if (Array.isArray(next.messages)) {
+    let systemMarked = false;
+    next.messages = (next.messages as unknown[]).map((rawMsg) => {
+      if (systemMarked) return rawMsg;
+      if (!rawMsg || typeof rawMsg !== 'object' || Array.isArray(rawMsg)) return rawMsg;
+      const msg = rawMsg as Record<string, unknown>;
+      const role = msg.role;
+      if (role !== 'system' && role !== 'developer') return rawMsg;
+
+      let content = msg.content;
+      if (typeof content === 'string') {
+        content = [{ type: 'text', text: content }];
+      }
+      if (!Array.isArray(content) || content.length === 0) return rawMsg;
+
+      const blocks = content as Array<Record<string, unknown>>;
+      const lastIndex = blocks.length - 1;
+      const nextBlocks = blocks.map((block, idx) =>
+        idx === lastIndex
+          ? { ...block, cache_control: { type: 'ephemeral' } }
+          : block,
+      );
+      systemMarked = true;
+      return { ...msg, content: nextBlocks };
+    });
+  }
+
+  // 2. Mark the last tool definition. Caches the entire `tools` array prefix
+  //    (which on our Hermes setup is ~30KB of schemas billed on every turn).
+  if (Array.isArray(next.tools) && next.tools.length > 0) {
+    const tools = [...(next.tools as Array<Record<string, unknown>>)];
+    const last = tools[tools.length - 1];
+    if (last && typeof last === 'object') {
+      tools[tools.length - 1] = { ...last, cache_control: { type: 'ephemeral' } };
+      next.tools = tools;
+    }
+  }
+
+  // 3. Mark the end of conversation history. On a 6-iteration tool-call turn
+  //    where prior turns averaged 75K input tokens, this is the dominant
+  //    cost source — without this breakpoint, even with system+tools cached,
+  //    every iteration re-bills the full history at $5/M.
+  if (Array.isArray(next.messages) && next.messages.length > 0) {
+    const messages = [...(next.messages as Array<Record<string, unknown>>)];
+    const lastIdx = messages.length - 1;
+    const lastMsg = messages[lastIdx];
+    if (lastMsg && typeof lastMsg === 'object' && lastMsg.role !== 'system' && lastMsg.role !== 'developer') {
+      messages[lastIdx] = applyCacheControlToMessage(lastMsg);
+      next.messages = messages;
+    }
+  }
+
+  return next;
+}
+
+/**
+ * Add cache_control: ephemeral to the LAST content block of a message.
+ * Mirrors what we do for the system message but applies to whichever block
+ * the message ends with (text, tool_use, tool_result, image, …).
+ */
+function applyCacheControlToMessage(msg: Record<string, unknown>): Record<string, unknown> {
+  let content = msg.content;
+  if (typeof content === 'string') {
+    content = [{ type: 'text', text: content }];
+  }
+  if (!Array.isArray(content) || content.length === 0) {
+    return msg;
+  }
+  const blocks = content as Array<Record<string, unknown>>;
+  const lastIdx = blocks.length - 1;
+  const lastBlock = blocks[lastIdx];
+  if (!lastBlock || typeof lastBlock !== 'object') return msg;
+  const nextBlocks = blocks.map((block, idx) =>
+    idx === lastIdx
+      ? { ...block, cache_control: { type: 'ephemeral' } }
+      : block,
+  );
+  return { ...msg, content: nextBlocks };
 }
 
 function pickNumber(raw: Record<string, unknown>, key: string): number | null {

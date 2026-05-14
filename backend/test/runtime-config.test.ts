@@ -20,8 +20,8 @@ describe('runtime-config route', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      defaultModel: 'anthropic/opus-4.7',
-      allowedModels: ['anthropic/opus-4.7', 'openai/gpt-5.4'],
+      defaultModel: 'openai/gpt-5.4',
+      allowedModels: ['openai/gpt-5.4', 'anthropic/claude-opus-4.7'],
     });
   });
 
