@@ -3,9 +3,9 @@ export type RuntimeMode = 'managed' | 'byo' | 'local';
 const VALID_MODES: RuntimeMode[] = ['managed', 'byo', 'local'];
 
 /**
- * V1 ships only `managed` end-to-end, but the orchestrator exposes the mode
- * concept now so the macOS app can render it and so the chat path can branch
- * on it once Phase 8 wires backend-managed inference in.
+ * The orchestrator exposes the runtime mode so the macOS app can render account
+ * state and future BYO/local paths can branch cleanly. Model inference is owned
+ * by Hermes' configured provider, not by the managed backend.
  */
 export function readRuntimeMode(env: NodeJS.ProcessEnv = process.env): RuntimeMode {
   const raw = env.VERSO_RUNTIME_MODE?.trim().toLowerCase() ?? '';

@@ -1,22 +1,33 @@
 import { useEffect, useState } from 'react';
 import { getSidecarPort } from './chat';
 
-interface UsageSummary {
-  user: {
-    id: string;
+interface ManagedAccountView {
+  backend: {
+    configured: boolean;
+    baseUrl: string | null;
+  };
+  session: {
+    present: boolean;
+    userId: string | null;
     email: string | null;
     displayName: string | null;
+    expiresAt: string | null;
+    receivedAt: string | null;
+    expired: boolean;
   };
-  mode: string;
-  usage: {
-    monthToDateUsd: number;
-    dayToDateUsd: number;
-    monthStart: string;
-    dayStart: string;
-  };
-  limits: {
-    monthlyUsdLimit: number | null;
-    dailyUsdLimit: number | null;
+  account: {
+    state: string;
+    error: string | null;
+    user: {
+      id: string;
+      email: string | null;
+      displayName: string | null;
+    } | null;
+    entitlements: Array<{
+      id: string;
+      mode: string;
+      status: string;
+    }>;
   };
 }
 
@@ -25,7 +36,7 @@ interface Props {
 }
 
 export function SettingsPage({ onBack }: Props) {
-  const [summary, setSummary] = useState<UsageSummary | null>(null);
+  const [account, setAccount] = useState<ManagedAccountView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -42,17 +53,17 @@ export function SettingsPage({ onBack }: Props) {
         return;
       }
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/managed/usage`);
+        const res = await fetch(`http://127.0.0.1:${port}/managed/account`);
         const body = await res.json().catch(() => null);
         if (cancelled) return;
         if (!res.ok) {
           setError(
             (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string')
               ? body.message
-              : `Failed to load usage (HTTP ${res.status}).`,
+              : `Failed to load account (HTTP ${res.status}).`,
           );
         } else {
-          setSummary(body as UsageSummary);
+          setAccount(body as ManagedAccountView);
         }
       } catch (err) {
         if (!cancelled) {
@@ -103,38 +114,31 @@ export function SettingsPage({ onBack }: Props) {
             Retry
           </button>
         </div>
-      ) : summary ? (
+      ) : account ? (
         <div className="settings-body">
           <section className="settings-section">
             <h2>Account</h2>
             <div className="settings-row">
               <span className="settings-label">Signed in as</span>
               <span className="settings-value">
-                {summary.user.email || summary.user.displayName || summary.user.id}
+                {account.account.user?.email
+                  || account.account.user?.displayName
+                  || account.session.email
+                  || account.session.displayName
+                  || account.session.userId
+                  || 'Not signed in'}
               </span>
             </div>
             <div className="settings-row">
-              <span className="settings-label">Mode</span>
-              <span className="settings-value">{titleCase(summary.mode)}</span>
+              <span className="settings-label">Status</span>
+              <span className="settings-value">{titleCase(account.account.state.replace(/_/g, ' '))}</span>
             </div>
-          </section>
-
-          <section className="settings-section">
-            <h2>Usage</h2>
-            <UsageBar
-              label="This month"
-              used={summary.usage.monthToDateUsd}
-              limit={summary.limits.monthlyUsdLimit}
-            />
-            <UsageBar
-              label="Today"
-              used={summary.usage.dayToDateUsd}
-              limit={summary.limits.dailyUsdLimit}
-            />
-            <p className="settings-footnote">
-              Resets at the start of each {summary.limits.monthlyUsdLimit ? 'month / day' : 'period'} (UTC).
-              Only completed requests count toward the totals.
-            </p>
+            {account.account.entitlements[0] ? (
+              <div className="settings-row">
+                <span className="settings-label">Mode</span>
+                <span className="settings-value">{titleCase(account.account.entitlements[0].mode)}</span>
+              </div>
+            ) : null}
           </section>
 
           <section className="settings-section">
@@ -151,34 +155,6 @@ export function SettingsPage({ onBack }: Props) {
       ) : null}
     </div>
   );
-}
-
-function UsageBar({ label, used, limit }: { label: string; used: number; limit: number | null }) {
-  const pct = limit ? Math.min(100, (used / limit) * 100) : 0;
-  return (
-    <div className="usage-bar-row">
-      <div className="usage-bar-header">
-        <span className="settings-label">{label}</span>
-        <span className="settings-value">
-          {formatUsd(used)}
-          {limit !== null ? <span className="usage-bar-limit"> / {formatUsd(limit)}</span> : null}
-        </span>
-      </div>
-      {limit !== null ? (
-        <div className="usage-bar-track">
-          <div className="usage-bar-fill" style={{ width: `${pct}%` }} />
-        </div>
-      ) : (
-        <div className="usage-bar-unlimited">No limit set</div>
-      )}
-    </div>
-  );
-}
-
-function formatUsd(value: number): string {
-  if (value === 0) return '$0.00';
-  if (value < 0.01) return `$${value.toFixed(4)}`;
-  return `$${value.toFixed(2)}`;
 }
 
 function titleCase(value: string): string {

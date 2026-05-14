@@ -340,6 +340,30 @@ textarea {
   color: var(--text-dim);
 }
 
+.tool-step-toolkit-logo {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.tool-step-toolkit-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  background: var(--tool-bg);
+  border: 1px solid var(--tool-border);
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .tool-step-name {
   font-weight: 500;
   color: var(--text);

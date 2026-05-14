@@ -125,7 +125,6 @@ const baseEnv: Record<string, string> = {
   PORT: '8788',
   PRIVY_APP_ID: 'app',
   PRIVY_APP_SECRET: 'secret',
-  OPENROUTER_API_KEY: 'or',
   COMPOSIO_API_KEY: 'composio',
 };
 

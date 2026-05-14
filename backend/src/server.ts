@@ -6,15 +6,8 @@ import { MemoryAuthStore } from './auth/memory-store.ts';
 import type { AuthStore } from './auth/types.ts';
 import { BackendPrivyVerifier } from './auth/privy.ts';
 import { DrizzleAuthStore } from './db/auth-store.ts';
-import { DrizzleInferenceStore } from './db/inference-store.ts';
-import { MemoryInferenceStore } from './inference/memory-store.ts';
-import type { InferenceStore } from './inference/types.ts';
-import type { OpenRouterClient } from './inference/openrouter.ts';
 import { registerHealthRoutes } from './routes/health.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
-import { registerRuntimeConfigRoutes } from './routes/runtime-config.ts';
-import { registerInferenceRoutes } from './routes/inference.ts';
-import { registerUsageRoutes } from './routes/usage.ts';
 import { registerComposioRoutes } from './routes/composio.ts';
 import { ComposioService } from './composio/service.ts';
 
@@ -22,8 +15,6 @@ export interface BuildServerOptions {
   config?: BackendConfig;
   authService?: AuthService;
   authStore?: AuthStore;
-  inferenceStore?: InferenceStore;
-  buildOpenRouterClient?: (config: BackendConfig) => OpenRouterClient;
   composioService?: ComposioService;
 }
 
@@ -39,7 +30,6 @@ export async function buildServer(options: BuildServerOptions = {}) {
   });
 
   const authStore = options.authStore ?? defaultAuthStore(config);
-  const inferenceStore = options.inferenceStore ?? defaultInferenceStore(config);
 
   const authService = options.authService ?? new AuthService(
     config,
@@ -49,14 +39,6 @@ export async function buildServer(options: BuildServerOptions = {}) {
 
   await registerHealthRoutes(app, config);
   await registerAuthRoutes(app, authService);
-  await registerRuntimeConfigRoutes(app, config);
-  await registerInferenceRoutes(app, {
-    config,
-    authService,
-    inferenceStore,
-    buildClient: options.buildOpenRouterClient,
-  });
-  await registerUsageRoutes(app, { authService, inferenceStore });
   const composioService = options.composioService ?? new ComposioService();
   await registerComposioRoutes(app, { authService, composioService });
   return app;
@@ -67,11 +49,4 @@ function defaultAuthStore(config: BackendConfig): AuthStore {
     return new DrizzleAuthStore(config.DATABASE_URL);
   }
   return new MemoryAuthStore();
-}
-
-function defaultInferenceStore(config: BackendConfig): InferenceStore {
-  if (config.databaseConfigured && config.DATABASE_URL) {
-    return new DrizzleInferenceStore(config.DATABASE_URL);
-  }
-  return new MemoryInferenceStore();
 }

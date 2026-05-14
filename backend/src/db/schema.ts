@@ -40,6 +40,8 @@ export const entitlements = pgTable('entitlements', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
 });
 
+// Legacy table retained for production data retention. No runtime code writes
+// managed inference requests after the desktop LLM proxy removal.
 export const inferenceRequests = pgTable('inference_requests', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),

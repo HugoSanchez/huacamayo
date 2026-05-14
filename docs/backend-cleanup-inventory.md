@@ -16,6 +16,15 @@ OpenRouter/custom-provider support should not remain in the main runtime as
 partially active code. If we revisit it, it should come back as an isolated
 fallback with explicit contract tests against Hermes tool calling.
 
+## Implementation Status
+
+First deletion pass completed: backend inference, usage, runtime-config,
+OpenRouter config, desktop `/llm/v1`, and the account UI usage dependency have
+been removed from active runtime code. The inventory below is the cleanup plan
+that drove the pass; remaining second-pass candidates are the Composio hosted
+MCP session endpoint/probe scripts and the `inference_requests` table retention
+decision.
+
 ## Backend Inventory
 
 | Path | Status | Target action | Rationale |
@@ -105,4 +114,3 @@ desktop app will keep calling dead endpoints.
    without an explicit retention decision.
 6. Revisit Composio hosted MCP session endpoints after confirming no live UI or
    Hermes path depends on them.
-

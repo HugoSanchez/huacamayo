@@ -16,7 +16,6 @@ import { ConnectionsService } from '../integrations/composio.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 import { readRuntimeMode } from '../integrations/runtime-mode.ts';
 import { buildManagedAccountRoutes } from './managed-account.ts';
-import { buildLlmProxyRoutes } from './llm-proxy.ts';
 
 function buildRoutes(store: ChatStore, hermes: HermesSupervisor, managedBackend: ManagedBackendClient): Route[] {
   return [
@@ -58,8 +57,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const routes = [
     ...buildRoutes(store, hermes, managedBackend),
     ...buildComposioBridgeRoutes(composioBridge),
-    ...buildManagedAccountRoutes(managedBackend, runtimeMode),
-    ...buildLlmProxyRoutes(managedBackend),
+    ...buildManagedAccountRoutes(managedBackend),
     ...buildConnectionsRoutes(connections),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
