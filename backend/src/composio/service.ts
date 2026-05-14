@@ -3,15 +3,6 @@ import { Composio } from '@composio/core';
 export type ConnectionRequestStatus = 'pending' | 'connected' | 'failed' | 'expired';
 export type ConnectionStatus = 'active' | 'inactive';
 
-export interface BridgeSessionView {
-  userId: string;
-  sessionId: string;
-  mcp: {
-    url: string;
-    headers: Record<string, string>;
-  };
-}
-
 export interface BridgeConnectionRequestView {
   id: string;
   toolkitSlug: string;
@@ -114,8 +105,6 @@ export class ComposioService {
 
   private readonly client: Composio | null;
 
-  private readonly sessionCache = new Map<string, BridgeSessionView>();
-
   private readonly toolRouterSessionCache = new Map<string, CachedToolRouterSession>();
 
   private readonly toolSchemaCache = new Map<string, ComposioToolView>();
@@ -130,40 +119,6 @@ export class ComposioService {
 
   get configured(): boolean {
     return Boolean(this.client);
-  }
-
-  async getSession(userId: string): Promise<BridgeSessionView> {
-    this.assertConfigured();
-    const normalizedUserId = normalizeUserId(userId);
-    const cached = this.sessionCache.get(normalizedUserId);
-    if (cached) return cached;
-
-    // Tool Router MCP keeps Hermes' tool surface small and lets Composio
-    // provide discovery, schemas, execution guidance, and workbench support
-    // at runtime. Do not use Single Toolkit direct MCP here: it exposes raw
-    // app-action schemas up front and makes broad assistants brittle.
-    const session = await this.client!.create(normalizedUserId, {
-      ...buildToolRouterToolkitScope(),
-      manageConnections: false,
-    });
-
-    const view: BridgeSessionView = {
-      userId: normalizedUserId,
-      sessionId: session.sessionId,
-      mcp: {
-        url: session.mcp.url,
-        headers: normalizeHeaders(session.mcp.headers as Record<string, unknown> | undefined),
-      },
-    };
-
-    this.sessionCache.set(normalizedUserId, view);
-    return view;
-  }
-
-  resetSession(userId: string): void {
-    const normalizedUserId = normalizeUserId(userId);
-    this.sessionCache.delete(normalizedUserId);
-    this.toolRouterSessionCache.delete(normalizedUserId);
   }
 
   async listConnections(userId: string): Promise<BridgeConnectionView[]> {
@@ -742,19 +697,6 @@ function parseToolRouterToolSlugs(response: unknown): string[] {
   }
 
   return slugs;
-}
-
-function normalizeHeaders(headers: Record<string, unknown> | undefined): Record<string, string> {
-  const normalized: Record<string, string> = {};
-  if (!headers) return normalized;
-
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === 'string' && value.length > 0) {
-      normalized[key] = value;
-    }
-  }
-
-  return normalized;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

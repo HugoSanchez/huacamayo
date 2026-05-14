@@ -36,15 +36,6 @@ class StubComposioService extends ComposioService {
 
   override get configured(): boolean { return true; }
 
-  override async getSession(userId: string) {
-    this.capturedUserId = userId;
-    return {
-      userId,
-      sessionId: 'session_x',
-      mcp: { url: 'https://mcp.example/x', headers: { 'x-test': '1' } },
-    };
-  }
-
   override async listConnections(userId: string) {
     this.capturedUserId = userId;
     return [
@@ -74,10 +65,6 @@ class StubComposioService extends ComposioService {
         noAuth: false,
       },
     ];
-  }
-
-  override resetSession(_userId: string): void {
-    // no-op
   }
 
   override async searchTools(userId: string, query: string, _toolkits?: string[]): Promise<BridgeSearchToolResult[]> {
@@ -155,21 +142,9 @@ describe('Composio routes', () => {
 
   test('rejects unauthenticated requests with 401', async () => {
     s = await setup();
-    const res = await s.app.inject({ method: 'POST', url: '/v1/composio/session' });
+    const res = await s.app.inject({ method: 'GET', url: '/v1/composio/connections' });
     expect(res.statusCode).toBe(401);
     expect(res.json().error).toBe('missing_session');
-  });
-
-  test('POST /v1/composio/session returns a session for the authenticated user', async () => {
-    s = await setup();
-    const res = await s.app.inject({
-      method: 'POST',
-      url: '/v1/composio/session',
-      headers: { authorization: `Bearer ${s.sessionToken}` },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().session.sessionId).toBe('session_x');
-    expect(s.composio.capturedUserId).toBe(s.userId);
   });
 
   test('GET /v1/composio/connections returns the live list', async () => {
@@ -378,12 +353,12 @@ describe('Composio routes', () => {
 
   test('surfaces ComposioServiceError status when the service throws', async () => {
     s = await setup();
-    s.composio.getSession = async () => {
+    s.composio.listConnections = async () => {
       throw new ComposioServiceError(503, 'Composio backend is unavailable.');
     };
     const res = await s.app.inject({
-      method: 'POST',
-      url: '/v1/composio/session',
+      method: 'GET',
+      url: '/v1/composio/connections',
       headers: { authorization: `Bearer ${s.sessionToken}` },
     });
     expect(res.statusCode).toBe(503);

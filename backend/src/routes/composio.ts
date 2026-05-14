@@ -13,26 +13,6 @@ export interface ComposioRouteDeps {
  * else or access the project API key.
  */
 export async function registerComposioRoutes(app: FastifyInstance, deps: ComposioRouteDeps): Promise<void> {
-  app.post('/v1/composio/session', async (request, reply) => {
-    try {
-      const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
-      const session = await deps.composioService.getSession(auth.user.id);
-      return reply.code(200).send({ session });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
-  app.post('/v1/composio/session/reset', async (request, reply) => {
-    try {
-      const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
-      deps.composioService.resetSession(auth.user.id);
-      return reply.code(200).send({ ok: true });
-    } catch (error) {
-      return handleError(reply, error);
-    }
-  });
-
   app.get('/v1/composio/connections', async (request, reply) => {
     try {
       const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));

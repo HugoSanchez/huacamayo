@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import type { ChatMessage, ActivityStep, ConnectionRequestView, ConnectionView } from './types';
+import type { ChatMessage, ActivityStep, ConnectionRequestView, ConnectionView, ToolkitView } from './types';
 import { generateCronDescription, openExternalUrl } from './chat';
 import { useIsSystemAsleep } from './useSystemSleep';
 
@@ -10,6 +10,7 @@ interface Props {
   messages: ChatMessage[];
   onConnect: (request: ConnectionRequestView) => void;
   connections: ConnectionView[];
+  toolkitCatalog: ToolkitView[];
 }
 
 export interface ToolkitInfo {
@@ -17,12 +18,28 @@ export interface ToolkitInfo {
   logoUrl: string | null;
 }
 
-function buildToolkitMap(connections: ConnectionView[]): Map<string, ToolkitInfo> {
+// Build a slug → {name, logoUrl} map from the full toolkit catalog first
+// (covers every toolkit regardless of connection state), then overlay
+// connection entries so user-customized names and any connection-specific
+// logo URLs win when present.
+function buildToolkitMap(
+  connections: ConnectionView[],
+  catalog: ToolkitView[],
+): Map<string, ToolkitInfo> {
   const map = new Map<string, ToolkitInfo>();
+  for (const tk of catalog) {
+    const slug = tk.slug?.toLowerCase();
+    if (!slug) continue;
+    map.set(slug, { name: tk.name, logoUrl: tk.logoUrl });
+  }
   for (const conn of connections) {
     const slug = conn.toolkitSlug?.toLowerCase();
-    if (!slug || map.has(slug)) continue;
-    map.set(slug, { name: conn.toolkitName, logoUrl: conn.logoUrl });
+    if (!slug) continue;
+    const existing = map.get(slug);
+    map.set(slug, {
+      name: conn.toolkitName || existing?.name || slug,
+      logoUrl: conn.logoUrl ?? existing?.logoUrl ?? null,
+    });
   }
   return map;
 }
@@ -32,8 +49,8 @@ function buildToolkitMap(connections: ConnectionView[]): Map<string, ToolkitInfo
 // browser's natural smooth-scroll deceleration still counts as pinned.
 const STICK_TO_BOTTOM_THRESHOLD_PX = 32;
 
-export function MessageList({ messages, onConnect, connections }: Props) {
-  const toolkits = buildToolkitMap(connections);
+export function MessageList({ messages, onConnect, connections, toolkitCatalog }: Props) {
+  const toolkits = buildToolkitMap(connections, toolkitCatalog);
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   // Tracks whether the user is currently pinned to the bottom. Streaming
@@ -541,14 +558,31 @@ function parseComposioExecute(
     ?? (input as Record<string, unknown>).toolSlug;
   if (typeof rawSlug !== 'string' || rawSlug.length === 0) return null;
 
-  const firstUnderscore = rawSlug.indexOf('_');
-  const toolkitSlug = (firstUnderscore === -1 ? rawSlug : rawSlug.slice(0, firstUnderscore)).toLowerCase();
-  const actionRaw = firstUnderscore === -1 ? '' : rawSlug.slice(firstUnderscore + 1);
+  const lowered = rawSlug.toLowerCase();
+  const parts = lowered.split('_');
 
-  const info = toolkits.get(toolkitSlug);
-  const toolkitName = info?.name ?? titleCase(toolkitSlug);
-  const actionLabel = actionRaw.replace(/_+/g, ' ').toLowerCase().trim() || rawSlug.toLowerCase();
-  return { toolkitName, logoUrl: info?.logoUrl ?? null, actionLabel };
+  // Composio toolkit slugs can themselves contain underscores (e.g.
+  // `granola_mcp`), so we can't just take the substring before the first
+  // underscore. Try the longest prefix first and walk back; first hit in the
+  // catalog wins. Falls back to the first segment so labels stay reasonable
+  // even when the catalog hasn't loaded yet.
+  let matchedSlug: string | null = null;
+  let matchedInfo: ToolkitInfo | undefined;
+  for (let i = parts.length - 1; i >= 1; i -= 1) {
+    const candidate = parts.slice(0, i).join('_');
+    const info = toolkits.get(candidate) ?? toolkits.get(candidate.replace(/_/g, '-'));
+    if (info) {
+      matchedSlug = candidate;
+      matchedInfo = info;
+      break;
+    }
+  }
+
+  const toolkitSlug = matchedSlug ?? parts[0];
+  const actionRaw = lowered.slice(toolkitSlug.length + 1);
+  const toolkitName = matchedInfo?.name ?? titleCase(toolkitSlug);
+  const actionLabel = actionRaw.replace(/_+/g, ' ').trim() || lowered;
+  return { toolkitName, logoUrl: matchedInfo?.logoUrl ?? null, actionLabel };
 }
 
 function titleCase(slug: string): string {

@@ -20,10 +20,10 @@ fallback with explicit contract tests against Hermes tool calling.
 
 First deletion pass completed: backend inference, usage, runtime-config,
 OpenRouter config, desktop `/llm/v1`, and the account UI usage dependency have
-been removed from active runtime code. The inventory below is the cleanup plan
-that drove the pass; remaining second-pass candidates are the Composio hosted
-MCP session endpoint/probe scripts and the `inference_requests` table retention
-decision.
+been removed from active runtime code. Second deletion pass completed: Composio
+hosted MCP session minting, desktop local Composio SDK fallback, and Composio
+probe scripts were removed. The remaining explicit decision is whether/when to
+drop the legacy `inference_requests` table.
 
 ## Backend Inventory
 
@@ -34,7 +34,7 @@ decision.
 | `backend/src/config.ts` | Keep, simplify | Keep `HOST`, `PORT`, `DATABASE_URL`, `PRIVY_*`, `AUTH_SESSION_LIFETIME_DAYS`, `WEB_BASE_URL`; remove OpenRouter and managed-model settings. | Model/provider config belongs to Hermes/Codex, not backend. |
 | `backend/src/routes/health.ts` | Keep | Keep | Low-risk operational endpoint. |
 | `backend/src/routes/auth.ts` | Keep | Keep | Needed for Privy exchange, `/v1/me`, and session revoke. |
-| `backend/src/routes/composio.ts` | Keep, simplify | Keep authenticated Composio routes; consider deleting `/v1/composio/session` if hosted MCP session minting is confirmed unused. | Backend still protects Composio key and maps requests to authenticated user id. |
+| `backend/src/routes/composio.ts` | Keep, simplified | Keep authenticated Composio connection and Tool Router search/schema/execute routes. | Backend still protects Composio key and maps requests to authenticated user id. |
 | `backend/src/routes/inference.ts` | Delete | Remove route and tests. | Only supports backend model proxy/OpenRouter path. |
 | `backend/src/routes/usage.ts` | Delete or replace | Remove once account UI no longer calls `/v1/usage/summary`; replace with simpler account summary if needed. | Cost usage is tied to backend-paid inference. |
 | `backend/src/routes/runtime-config.ts` | Delete | Remove once account UI stops calling `/v1/runtime-config`. | Backend no longer chooses Hermes model/default provider. |
@@ -54,8 +54,8 @@ decision.
 |---|---|---|---|
 | `backend/scripts/smoke-db.ts` | Keep | Keep. | DB operational check. |
 | `backend/scripts/issue-test-session.ts` | Keep | Keep for now. | Useful for exercising managed auth locally. |
-| `backend/scripts/probe-composio-mcp.ts` | Defer | Move to `.context` or delete after Composio bridge stabilizes. | Debug probe, not product code. |
-| `backend/scripts/probe-composio-direct-mcp.ts` | Delete or move | Move to `.context` if still useful for research. | Direct MCP experiment should not live in product backend. |
+| `backend/scripts/probe-composio-mcp.ts` | Deleted | Removed after bridge stabilization. | Debug probe, not product code. |
+| `backend/scripts/probe-composio-direct-mcp.ts` | Deleted | Removed after direct MCP experiment was abandoned. | Direct MCP experiment should not live in product backend. |
 | `backend/scripts/baseline-usage.ts` | Delete | Remove with inference store. | Only reports backend OpenRouter spend. |
 | `backend/scripts/recent-inferences.ts` | Delete | Remove with inference store. | Only reports backend OpenRouter spend. |
 
@@ -90,27 +90,26 @@ desktop app will keep calling dead endpoints.
 | `desktop/orchestrator/test/managed-backend-client.test.ts` | Keep, update | Remove tests for usage/runtime-config/inference methods. | Keep auth/session behavior coverage. |
 | `desktop/runtime-bundles/orchestrator/*` | Defer/generated | Rebuild after source cleanup rather than hand-editing first. | Bundle should follow source. |
 
-## Dependency Notes
+## Historical Dependency Notes
 
-- `/v1/runtime-config` is currently called by `ManagedBackendClient.getRuntimeConfig`,
+- `/v1/runtime-config` was called by `ManagedBackendClient.getRuntimeConfig`,
   then surfaced through `desktop/orchestrator/src/http/managed-account.ts`.
-- `/v1/usage/summary` is currently called by `ManagedBackendClient.getUsageSummary`,
+- `/v1/usage/summary` was called by `ManagedBackendClient.getUsageSummary`,
   then surfaced through `desktop/orchestrator/src/http/managed-account.ts`.
-- `/v1/chat/completions` is currently used by the desktop `/llm/v1` proxy via
+- `/v1/chat/completions` was used by the desktop `/llm/v1` proxy via
   `ManagedBackendClient.forwardChatCompletion` and `streamInference`.
-- `/v1/composio/session` appears to be used only by the orchestrator's
-  `/composio/session` route and related tests. Since Hermes now uses the local
-  `verso` MCP bridge instead of hosted Composio MCP, this endpoint is a likely
-  second-pass deletion candidate after smoke testing.
+- The old `/v1/composio/session` and `/composio/session` hosted MCP session
+  path has been removed. Hermes now uses only the local `verso` MCP bridge.
 
-## Proposed Deletion Order
+## Deletion Order
 
 1. Remove desktop `/llm/v1` proxy registration and backend `/v1/chat/completions`
-   route together.
+   route together. Done.
 2. Remove `ManagedBackendClient` inference methods and backend inference stores.
-3. Remove usage/runtime-config endpoints and simplify account UI responses.
-4. Remove OpenRouter/model/rate-limit config and dependencies.
+   Done.
+3. Remove usage/runtime-config endpoints and simplify account UI responses. Done.
+4. Remove OpenRouter/model/rate-limit config and dependencies. Done.
 5. Migrate or leave-unused `inference_requests`; do not drop production data
-   without an explicit retention decision.
+   without an explicit retention decision. Deferred.
 6. Revisit Composio hosted MCP session endpoints after confirming no live UI or
-   Hermes path depends on them.
+   Hermes path depends on them. Done.
