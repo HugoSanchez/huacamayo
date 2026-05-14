@@ -142,15 +142,6 @@ function MessageBubble({
 
   const assistantMessage = !isUser ? { ...message, steps: stepsForActivity } : message;
 
-  // While the assistant is still streaming and has already invoked tools, any
-  // prose currently accumulating in `content` is most likely intermediate
-  // commentary (it'll get demoted into `steps` the moment the next tool block
-  // arrives). Render it in the same italic/dim style as completed text steps
-  // so it appears as "thinking" from the first token — otherwise it briefly
-  // shows in the normal answer style and then jumps once promoted.
-  const hasToolSteps = !isUser && stepsForActivity.some(s => s.type === 'tool');
-  const renderContentAsThinking = !isUser && !!message.isStreaming && hasToolSteps;
-
   return (
     <div style={{
       display: 'flex',
@@ -176,39 +167,26 @@ function MessageBubble({
           {isUser ? (
             <UserMessageBody content={message.content} />
           ) : message.content ? (
-            renderContentAsThinking ? (
-              <div style={{
-                color: 'var(--text-thinking)',
-                fontSize: '13px',
-                fontStyle: 'italic',
-                lineHeight: 1.5,
-                margin: '2px 0',
-                whiteSpace: 'pre-wrap',
-              }}>
-                {message.content}
-              </div>
-            ) : (
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeHighlight]}
-                components={{
-                  a: ({ href, children, ...props }) => (
-                    <a
-                      {...props}
-                      href={href}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        if (href) openExternalUrl(href);
-                      }}
-                    >
-                      {children}
-                    </a>
-                  ),
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
-            )
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={{
+                a: ({ href, children, ...props }) => (
+                  <a
+                    {...props}
+                    href={href}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      if (href) openExternalUrl(href);
+                    }}
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
           ) : null}
         </div>
 

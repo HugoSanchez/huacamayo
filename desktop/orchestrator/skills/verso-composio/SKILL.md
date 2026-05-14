@@ -34,6 +34,16 @@ For anything that touches a connected third-party app, use the verso Composio br
 
 Do not invent arguments. Use the schema from `get_composio_tool_schemas`.
 
+## Reuse Within a Conversation
+
+Discovery is expensive. Before calling `verso.search_composio_tools` or `verso.get_composio_tool_schemas`, check your earlier tool results in this conversation:
+
+- If you have already retrieved a schema for a slug (e.g. `GRANOLA_MCP_GET_MEETING_TRANSCRIPT`), reuse that schema from the prior `get_composio_tool_schemas` result and go straight to `execute_composio_tool`. Do not re-search and do not re-fetch the schema.
+- If you have already seen `list_connections` output earlier in the conversation, do not call it again unless the user is asking about connection state, you suspect a connection just changed, or a tool call failed with a missing-connection error.
+- If the user's request is clearly the same kind of action as a prior turn (e.g. "fetch my latest Granola transcript" after you already did one), reuse the same slug. Only re-discover if the requested action is genuinely new or the prior slug failed.
+
+When in doubt about whether a prior slug applies, prefer reusing it and executing — a failed execution is cheaper than re-running the full discovery flow.
+
 ## Connection Management
 
 If a tool reports no active connection, or the user asks to connect a service, call:
