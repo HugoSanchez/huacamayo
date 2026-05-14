@@ -29,7 +29,6 @@ const config = getConfig({
   DATABASE_URL: '',
   PRIVY_APP_ID: 'privy-app-id',
   PRIVY_APP_SECRET: 'privy-app-secret',
-  OPENROUTER_API_KEY: '',
 });
 
 describe('auth routes', () => {
@@ -60,7 +59,7 @@ describe('auth routes', () => {
     const body = exchange.json();
     expect(body.user.privyUserId).toBe('did:privy:user-123');
     expect(body.session.token).toMatch(/^v1_/);
-    expect(body.entitlements[0].allowedModels).toEqual(['openai/gpt-5.4']);
+    expect(body.entitlements[0].allowedModels).toBeNull();
 
     const me = await app.inject({
       method: 'GET',

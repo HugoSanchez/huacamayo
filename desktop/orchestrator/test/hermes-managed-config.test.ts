@@ -7,8 +7,8 @@ import { HermesSupervisor } from '../src/http/hermes-supervisor.ts';
 
 /**
  * Verifies that HermesSupervisor's managed-mode seeding preserves Hermes'
- * existing model config by default, only points at the orchestrator LLM proxy
- * when explicitly configured, and preserves the user's other config sections.
+ * existing model config and restores profiles that were previously pointed at
+ * verso's now-deleted local LLM proxy.
  */
 describe('HermesSupervisor: managed config override', () => {
   let tempRoot = '';
@@ -24,7 +24,6 @@ describe('HermesSupervisor: managed config override', () => {
       HERMES_HOME: process.env.HERMES_HOME,
       VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
       VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
-      VERSO_MANAGED_DEFAULT_MODEL: process.env.VERSO_MANAGED_DEFAULT_MODEL,
     };
     process.env.HERMES_HOME = templateHome;
     // Pretend Hermes is launchable so the supervisor doesn't bail out.
@@ -84,22 +83,6 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.toolsets).toEqual(['hermes-cli']);
   });
 
-  it('honours VERSO_MANAGED_DEFAULT_MODEL override', () => {
-    process.env.VERSO_MANAGED_DEFAULT_MODEL = 'anthropic/claude-opus-4.7';
-    try {
-      const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
-      supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
-      (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
-
-      const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as Record<string, unknown>;
-      expect((parsed.model as Record<string, unknown>).provider).toBe('custom');
-      expect((parsed.model as Record<string, unknown>).base_url).toBe('http://127.0.0.1:62000/llm/v1');
-      expect((parsed.model as Record<string, unknown>).default).toBe('anthropic/claude-opus-4.7');
-    } finally {
-      delete process.env.VERSO_MANAGED_DEFAULT_MODEL;
-    }
-  });
-
   it('replaces old managed auth.json with the template Hermes auth store', () => {
     writeFileSync(path.join(tempRoot, 'auth.json'), JSON.stringify({
       version: 2,
@@ -140,13 +123,27 @@ describe('HermesSupervisor: managed config override', () => {
     });
   });
 
-  it('skips the rewrite when no orchestratorBaseUrl is configured yet', () => {
+  it('restores old proxy-owned model config to the template model', () => {
+    mkdirSync(managedHome, { recursive: true });
+    writeFileSync(path.join(managedHome, 'config.yaml'), [
+      'model:',
+      '  provider: custom',
+      '  default: openai/gpt-5.4',
+      '  base_url: http://127.0.0.1:62000/llm/v1',
+      'agent:',
+      '  max_turns: 12',
+    ].join('\n'), 'utf8');
+
     const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
-    // No setOrchestratorBaseUrl call.
     (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
 
     const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as Record<string, unknown>;
-    expect((parsed.model as Record<string, unknown>).provider).toBe('openai-codex');
+    expect(parsed.model).toEqual({
+      provider: 'openai-codex',
+      default: 'gpt-5.5',
+      base_url: 'https://chatgpt.com/backend-api/codex',
+    });
+    expect(parsed.agent).toEqual({ max_turns: 12 });
   });
 
   it('removes direct Composio MCP config and legacy vervo', () => {
@@ -164,10 +161,6 @@ describe('HermesSupervisor: managed config override', () => {
 
     const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
     supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
-    (supervisor as unknown as { composioMcp: { url: string; apiKey: string } }).composioMcp = {
-      url: 'https://backend.composio.dev/tool_router/trs_test/mcp',
-      apiKey: 'test-key',
-    };
     (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
 
     const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {

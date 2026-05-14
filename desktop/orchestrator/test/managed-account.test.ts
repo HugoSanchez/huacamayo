@@ -97,7 +97,6 @@ describe('Managed account routes', () => {
       expect.objectContaining({
         mode: 'managed',
         status: 'active',
-        allowedModels: ['openai/gpt-5.4'],
       }),
     ]);
   });

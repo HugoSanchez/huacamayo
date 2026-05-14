@@ -198,7 +198,7 @@ export class AuthService {
       status: 'active',
       monthlyUsdLimit: null,
       dailyUsdLimit: null,
-      allowedModels: ['openai/gpt-5.4'],
+      allowedModels: null,
       createdAt: nowIso,
       updatedAt: nowIso,
     });

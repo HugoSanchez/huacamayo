@@ -150,8 +150,6 @@ export interface HermesSupervisorOptions {
   config?: HermesGatewayConfig;
   launch?: HermesLaunchConfig;
   runtimeMode?: RuntimeMode;
-  /** Optional model override for managed mode. Leave unset to preserve Hermes' own config. */
-  managedDefaultModel?: string;
 }
 
 // Exact disable list written by an earlier managed-profile experiment. We keep
@@ -177,7 +175,6 @@ export class HermesSupervisor {
   private readonly managedHermesHome: string;
   private readonly templateHermesHome: string;
   private readonly runtimeMode: RuntimeMode;
-  private readonly managedDefaultModel: string | null;
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
@@ -194,9 +191,6 @@ export class HermesSupervisor {
     this.config = options.config ?? getHermesGatewayConfig();
     this.launch = options.launch ?? getHermesLaunchConfig();
     this.runtimeMode = options.runtimeMode ?? 'managed';
-    this.managedDefaultModel = (process.env.VERSO_MANAGED_DEFAULT_MODEL?.trim()
-      || options.managedDefaultModel?.trim()
-      || null);
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
@@ -459,13 +453,6 @@ export class HermesSupervisor {
     const gatewayUrl = new URL(this.config.baseUrl);
     const port = gatewayUrl.port || (gatewayUrl.protocol === 'https:' ? '443' : '80');
     const host = gatewayUrl.hostname;
-    // In managed mode, Hermes resolves its "custom" provider's api_key from
-    // OPENAI_API_KEY. The orchestrator's LLM proxy ignores whatever bearer
-    // Hermes sends and substitutes the real managed session token, so the key
-    // here is purely a placeholder to satisfy Hermes' auth check.
-    const managedEnvOverrides = this.runtimeMode === 'managed'
-      ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY?.trim() || 'no-key-required' }
-      : {};
     const env = {
       ...process.env,
       PORT: port,
@@ -478,7 +465,6 @@ export class HermesSupervisor {
       HERMES_HOME: this.managedHermesHome,
       VERSO_HERMES_GATEWAY_URL: this.config.baseUrl,
       ...(this.orchestratorBaseUrl ? { VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
-      ...managedEnvOverrides,
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {
@@ -515,7 +501,7 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
-    this.syncManagedModelConfig();
+    this.restoreManagedModelConfigIfProxyOwned();
     this.restoreDefaultDisabledSkillsIfOwned();
   }
 
@@ -630,18 +616,14 @@ export class HermesSupervisor {
   }
 
   /**
-   * In managed mode, point Hermes at the orchestrator's local LLM proxy
-   * (`/llm/v1`) by writing the `model:` section in the managed profile's
-   * config.yaml. Hermes' `provider: custom` path reads `base_url` straight
-   * from this config (see ~/.hermes/hermes-agent/agent/auxiliary_client.py
-   * resolve_provider_client → custom branch).
-   *
-   * Other config sections (agent, personalities, mcp_servers, etc.) are left
-   * untouched so the user's existing Hermes setup is preserved.
+   * Earlier managed-profile experiments pointed Hermes at verso's local
+   * `/llm/v1` proxy. That proxy is no longer part of the product path; Hermes
+   * should preserve the user's own Codex/OpenAI auth and model config. If we
+   * find the exact old proxy-owned model config, restore the template model
+   * section. Other model configs are left untouched.
    */
-  private syncManagedModelConfig(): void {
+  private restoreManagedModelConfigIfProxyOwned(): void {
     if (this.runtimeMode !== 'managed') return;
-    if (!this.orchestratorBaseUrl) return;
 
     const configPath = join(this.managedHermesHome, 'config.yaml');
     if (!existsSync(configPath)) return;
@@ -657,28 +639,17 @@ export class HermesSupervisor {
       config = {};
     }
 
-    if (!this.managedDefaultModel) {
-      const currentModel = asRecord(config.model);
-      const baseUrl = typeof currentModel?.base_url === 'string' ? currentModel.base_url : '';
-      const provider = typeof currentModel?.provider === 'string' ? currentModel.provider : '';
-      if (provider !== 'custom' || !baseUrl.endsWith('/llm/v1')) return;
+    const currentModel = asRecord(config.model);
+    const baseUrl = typeof currentModel?.base_url === 'string' ? currentModel.base_url : '';
+    const provider = typeof currentModel?.provider === 'string' ? currentModel.provider : '';
+    if (provider !== 'custom' || !baseUrl.endsWith('/llm/v1')) return;
 
-      const templateModel = asRecord(readYamlRecord(join(this.templateHermesHome, 'config.yaml'))?.model);
-      if (templateModel) {
-        config.model = templateModel;
-      } else {
-        delete config.model;
-      }
-      writeFileSync(configPath, YAML.stringify(config), 'utf8');
-      return;
+    const templateModel = asRecord(readYamlRecord(join(this.templateHermesHome, 'config.yaml'))?.model);
+    if (templateModel) {
+      config.model = templateModel;
+    } else {
+      delete config.model;
     }
-
-    config.model = {
-      provider: 'custom',
-      base_url: `${this.orchestratorBaseUrl}/llm/v1`,
-      default: this.managedDefaultModel,
-    };
-
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 

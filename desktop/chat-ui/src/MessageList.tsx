@@ -2,13 +2,29 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import type { ChatMessage, ActivityStep, ConnectionRequestView } from './types';
+import type { ChatMessage, ActivityStep, ConnectionRequestView, ConnectionView } from './types';
 import { generateCronDescription, openExternalUrl } from './chat';
 import { useIsSystemAsleep } from './useSystemSleep';
 
 interface Props {
   messages: ChatMessage[];
   onConnect: (request: ConnectionRequestView) => void;
+  connections: ConnectionView[];
+}
+
+export interface ToolkitInfo {
+  name: string;
+  logoUrl: string | null;
+}
+
+function buildToolkitMap(connections: ConnectionView[]): Map<string, ToolkitInfo> {
+  const map = new Map<string, ToolkitInfo>();
+  for (const conn of connections) {
+    const slug = conn.toolkitSlug?.toLowerCase();
+    if (!slug || map.has(slug)) continue;
+    map.set(slug, { name: conn.toolkitName, logoUrl: conn.logoUrl });
+  }
+  return map;
 }
 
 // Pixel slack for "user is at the bottom" — any scroll position within this
@@ -16,7 +32,8 @@ interface Props {
 // browser's natural smooth-scroll deceleration still counts as pinned.
 const STICK_TO_BOTTOM_THRESHOLD_PX = 32;
 
-export function MessageList({ messages, onConnect }: Props) {
+export function MessageList({ messages, onConnect, connections }: Props) {
+  const toolkits = buildToolkitMap(connections);
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   // Tracks whether the user is currently pinned to the bottom. Streaming
@@ -73,7 +90,7 @@ export function MessageList({ messages, onConnect }: Props) {
       }}
     >
       {messages.map(msg => (
-        <MessageBubble key={msg.id} message={msg} onConnect={onConnect} />
+        <MessageBubble key={msg.id} message={msg} onConnect={onConnect} toolkits={toolkits} />
       ))}
       <div ref={endRef} />
     </div>
@@ -83,9 +100,11 @@ export function MessageList({ messages, onConnect }: Props) {
 function MessageBubble({
   message,
   onConnect,
+  toolkits,
 }: {
   message: ChatMessage;
   onConnect: (request: ConnectionRequestView) => void;
+  toolkits: Map<string, ToolkitInfo>;
 }) {
   const isUser = message.role === 'user';
 
@@ -134,7 +153,7 @@ function MessageBubble({
           width: isUser ? 'auto' : '100%',
         }}
       >
-        {!isUser && <AssistantActivity message={assistantMessage} onConnect={onConnect} />}
+        {!isUser && <AssistantActivity message={assistantMessage} onConnect={onConnect} toolkits={toolkits} />}
 
         <div className="message-content">
           {isUser ? (
@@ -195,9 +214,11 @@ function MessageBubble({
 function AssistantActivity({
   message,
   onConnect,
+  toolkits,
 }: {
   message: ChatMessage;
   onConnect: (request: ConnectionRequestView) => void;
+  toolkits: Map<string, ToolkitInfo>;
 }) {
   const steps = message.steps ?? [];
   const hasActivity = steps.length > 0;
@@ -228,7 +249,7 @@ function AssistantActivity({
       />
       {expanded && hasActivity && (
         <div style={{ marginTop: '6px', paddingLeft: '18px' }}>
-          {steps.map((step, i) => <StepView key={i} step={step} onConnect={onConnect} />)}
+          {steps.map((step, i) => <StepView key={i} step={step} onConnect={onConnect} toolkits={toolkits} />)}
         </div>
       )}
     </div>
@@ -294,9 +315,11 @@ function ActivityHeader({
 function StepView({
   step,
   onConnect,
+  toolkits,
 }: {
   step: ActivityStep;
   onConnect: (request: ConnectionRequestView) => void;
+  toolkits: Map<string, ToolkitInfo>;
 }) {
   if (step.type === 'text') {
     return (
@@ -323,7 +346,7 @@ function StepView({
     if (card) return <CronToolCard {...card} />;
   }
 
-  return <ToolStep step={step} />;
+  return <ToolStep step={step} toolkits={toolkits} />;
 }
 
 interface CronToolCardProps {
@@ -436,10 +459,17 @@ function CronToolCard({ action, jobId, name, scheduleDisplay }: CronToolCardProp
   );
 }
 
-function ToolStep({ step }: { step: Extract<ActivityStep, { type: 'tool' }> }) {
+function ToolStep({
+  step,
+  toolkits,
+}: {
+  step: Extract<ActivityStep, { type: 'tool' }>;
+  toolkits: Map<string, ToolkitInfo>;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const friendlyName = friendlyToolName(step.name);
-  const inputPreview = previewInput(step.input);
+  const composio = parseComposioExecute(step, toolkits);
+  const friendlyName = composio ? composio.toolkitName : friendlyToolName(step.name);
+  const inputPreview = composio ? composio.actionLabel : previewInput(step.input);
   const hasInput = step.input != null && step.input !== '';
   const hasResult = typeof step.result === 'string' && step.result.length > 0;
   const hasDetails = hasInput || hasResult;
@@ -452,7 +482,11 @@ function ToolStep({ step }: { step: Extract<ActivityStep, { type: 'tool' }> }) {
         onClick={hasDetails ? () => setExpanded((value) => !value) : undefined}
         disabled={!hasDetails}
       >
-        <ToolIcon kind={iconForTool(step.name)} />
+        {composio ? (
+          <ToolkitMark name={composio.toolkitName} logoUrl={composio.logoUrl} />
+        ) : (
+          <ToolIcon kind={iconForTool(step.name)} />
+        )}
         <span className="tool-step-name">{friendlyName}</span>
         {inputPreview && !expanded && (
           <span className="tool-step-preview">{inputPreview}</span>
@@ -487,6 +521,55 @@ function ToolStep({ step }: { step: Extract<ActivityStep, { type: 'tool' }> }) {
         </div>
       )}
     </div>
+  );
+}
+
+interface ComposioExecuteView {
+  toolkitName: string;
+  logoUrl: string | null;
+  actionLabel: string;
+}
+
+function parseComposioExecute(
+  step: Extract<ActivityStep, { type: 'tool' }>,
+  toolkits: Map<string, ToolkitInfo>,
+): ComposioExecuteView | null {
+  if (stripNamespace(step.name).toLowerCase() !== 'execute_composio_tool') return null;
+  const input = step.input;
+  if (!input || typeof input !== 'object') return null;
+  const rawSlug = (input as Record<string, unknown>).tool_slug
+    ?? (input as Record<string, unknown>).toolSlug;
+  if (typeof rawSlug !== 'string' || rawSlug.length === 0) return null;
+
+  const firstUnderscore = rawSlug.indexOf('_');
+  const toolkitSlug = (firstUnderscore === -1 ? rawSlug : rawSlug.slice(0, firstUnderscore)).toLowerCase();
+  const actionRaw = firstUnderscore === -1 ? '' : rawSlug.slice(firstUnderscore + 1);
+
+  const info = toolkits.get(toolkitSlug);
+  const toolkitName = info?.name ?? titleCase(toolkitSlug);
+  const actionLabel = actionRaw.replace(/_+/g, ' ').toLowerCase().trim() || rawSlug.toLowerCase();
+  return { toolkitName, logoUrl: info?.logoUrl ?? null, actionLabel };
+}
+
+function titleCase(slug: string): string {
+  if (!slug) return slug;
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
+
+function ToolkitMark({ name, logoUrl }: { name: string; logoUrl: string | null }) {
+  if (logoUrl) {
+    return (
+      <img
+        src={logoUrl}
+        alt=""
+        aria-hidden="true"
+        className="tool-step-toolkit-logo"
+      />
+    );
+  }
+  const initial = name.trim().charAt(0).toUpperCase() || '?';
+  return (
+    <span className="tool-step-toolkit-fallback" aria-hidden="true">{initial}</span>
   );
 }
 

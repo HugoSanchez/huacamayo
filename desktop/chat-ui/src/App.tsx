@@ -696,7 +696,7 @@ export function App() {
       ) : (
         <>
           <div className="chat-thread">
-            <MessageList messages={messages} onConnect={handleConnect} />
+            <MessageList messages={messages} onConnect={handleConnect} connections={connections} />
           </div>
 
           <InputBar

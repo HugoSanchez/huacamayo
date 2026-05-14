@@ -25,7 +25,6 @@ describe('GET /health', () => {
     expect(body.capabilities).toEqual({
       databaseConfigured: false,
       privyConfigured: false,
-      openRouterConfigured: false,
     });
     expect(body.database.configured).toBe(false);
     expect(body.database.reachable).toBe(false);
@@ -38,7 +37,6 @@ describe('GET /health', () => {
       PORT: '8788',
       PRIVY_APP_ID: 'app',
       PRIVY_APP_SECRET: 'secret',
-      OPENROUTER_API_KEY: 'or-key',
     });
     app = await buildServer({ config });
 
@@ -47,7 +45,6 @@ describe('GET /health', () => {
     expect(response.json().capabilities).toEqual({
       databaseConfigured: false,
       privyConfigured: true,
-      openRouterConfigured: true,
     });
   });
 });

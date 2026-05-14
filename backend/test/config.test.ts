@@ -10,13 +10,11 @@ describe('getConfig', () => {
       DATABASE_URL: 'postgres://example',
       PRIVY_APP_ID: 'app-id',
       PRIVY_APP_SECRET: 'app-secret',
-      OPENROUTER_API_KEY: 'or-key',
       WEB_BASE_URL: 'https://example.com',
     });
 
     expect(config.databaseConfigured).toBe(true);
     expect(config.privyConfigured).toBe(true);
-    expect(config.openRouterConfigured).toBe(true);
     expect(config.PORT).toBe(9000);
   });
 
@@ -28,13 +26,11 @@ describe('getConfig', () => {
       DATABASE_URL: '',
       PRIVY_APP_ID: '',
       PRIVY_APP_SECRET: '',
-      OPENROUTER_API_KEY: '',
       WEB_BASE_URL: '',
     });
 
     expect(config.databaseConfigured).toBe(false);
     expect(config.privyConfigured).toBe(false);
-    expect(config.openRouterConfigured).toBe(false);
     expect(config.DATABASE_URL).toBeUndefined();
     expect(config.WEB_BASE_URL).toBeUndefined();
   });
