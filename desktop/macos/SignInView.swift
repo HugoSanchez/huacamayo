@@ -5,59 +5,78 @@ struct SignInView: View {
     @ObservedObject var managedSessionStore: ManagedSessionStore
     @State private var errorMessage: String?
 
+    private static let contentWidth: CGFloat = 300
+
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 38/255, green: 47/255, blue: 45/255),
-                    Color(red: 20/255, green: 22/255, blue: 24/255),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            Color(red: 243/255, green: 245/255, blue: 247/255)
+                .ignoresSafeArea()
 
-            VStack(spacing: 28) {
+            VStack(spacing: 0) {
+                header
                 Spacer()
-
-                VStack(spacing: 12) {
-                    Text("verso")
-                        .font(.system(size: 36, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text("Sign in to start chatting.")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-
-                Button(action: signIn) {
-                    Text("Sign in to verso")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 22)
-                        .padding(.vertical, 12)
-                        .frame(minWidth: 220)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
-                        .padding(.horizontal, 24)
-                        .multilineTextAlignment(.center)
-                }
-
+                centerContent
                 Spacer()
-
-                Text("Sign-in opens in your browser and returns to verso when finished.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.35))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
-                    .padding(.bottom, 24)
             }
-            .padding(.horizontal, 32)
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            HStack {
+                HStack(spacing: 8) {
+                    WindowControlButton(color: Color(red: 1.0, green: 0.38, blue: 0.35), action: .close)
+                    WindowControlButton(color: Color(red: 1.0, green: 0.78, blue: 0.24), action: .miniaturize)
+                    WindowControlButton(color: Color(red: 0.30, green: 0.85, blue: 0.39), action: .zoom)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+
+            Text("verso.")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.black.opacity(0.85))
+        }
+        .frame(height: 38)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var centerContent: some View {
+        VStack(spacing: 32) {
+            VStack(spacing: 24) {
+               
+
+                VStack(spacing: 16) {
+                    (Text("Welcome").font(.system(size: 35, weight: .semibold)))
+                        .foregroundStyle(.black.opacity(0.85))
+
+                    Text("Please sign in by clicking the button bellow. You will be redirected back to verso once done.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.black.opacity(0.55))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(2)
+                        .frame(width: Self.contentWidth)
+                }
+            }
+
+            Button(action: signIn) {
+                Text("Sign in")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(.black, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .frame(width: Self.contentWidth)
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(red: 192/255, green: 57/255, blue: 43/255))
+                    .multilineTextAlignment(.center)
+                    .frame(width: Self.contentWidth)
+            }
         }
     }
 
