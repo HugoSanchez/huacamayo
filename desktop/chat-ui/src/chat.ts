@@ -377,6 +377,31 @@ export function openExternalUrl(url: string): void {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+export interface CodexStatus {
+  connected: boolean;
+  count: number;
+}
+
+export async function getCodexStatus(): Promise<CodexStatus> {
+  const res = await fetch(`${baseURL()}/model-auth/codex/status`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load Codex status'));
+  }
+  return await res.json() as CodexStatus;
+}
+
+export async function disconnectCodex(): Promise<{ removed: number }> {
+  const res = await fetch(`${baseURL()}/model-auth/codex/disconnect`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to disconnect Codex'));
+  }
+  return await res.json() as { removed: number };
+}
+
+export function codexConnectUrl(): string {
+  return `${baseURL()}/model-auth/codex/start`;
+}
+
 async function readError(res: Response, fallback: string): Promise<string> {
   try {
     const body = await res.text();

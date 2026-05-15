@@ -1719,7 +1719,7 @@ private struct SidebarToggleIcon: View {
 
             Rectangle()
                 .fill(color)
-                .frame(width: 1.25)
+                .frame(width: 1.0)
                 .offset(x: side == .left ? -2.0 : 2.0)
         }
         .frame(width: 13, height: 12)

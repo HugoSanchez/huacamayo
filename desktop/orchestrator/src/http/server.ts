@@ -17,6 +17,7 @@ import { ConnectionsService } from '../integrations/composio.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 import { readRuntimeMode } from '../integrations/runtime-mode.ts';
 import { buildManagedAccountRoutes } from './managed-account.ts';
+import { CodexAuthService, buildModelAuthRoutes } from './model-auth.ts';
 
 function buildRoutes(store: ChatStore, hermes: HermesSupervisor, managedBackend: ManagedBackendClient): Route[] {
   return [
@@ -60,6 +61,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const skillsConfig = new HermesSkillsConfig();
   const pinnedSkills = new PinnedSkillsStore();
   const cronDescriptions = new CronDescriptionsStore();
+  const codexAuth = new CodexAuthService(hermes);
   const routes = [
     ...buildRoutes(store, hermes, managedBackend),
     ...buildComposioBridgeRoutes(composioBridge),
@@ -67,6 +69,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     ...buildConnectionsRoutes(connections),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
+    ...buildModelAuthRoutes(codexAuth),
     ...buildChatRoutes(store, hermes),
   ];
 

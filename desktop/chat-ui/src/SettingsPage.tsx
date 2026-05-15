@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { getSidecarPort } from './chat';
+import {
+  disconnectCodex,
+  getCodexStatus,
+  getSidecarPort,
+  type CodexStatus,
+} from './chat';
+import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
 
 interface ManagedAccountView {
   backend: {
@@ -102,7 +108,6 @@ export function SettingsPage({ onBack }: Props) {
         <button type="button" className="settings-back" onClick={onBack}>
           ← Back
         </button>
-        <h1>Settings</h1>
       </div>
 
       {isLoading ? (
@@ -141,15 +146,20 @@ export function SettingsPage({ onBack }: Props) {
             ) : null}
           </section>
 
-          <section className="settings-section">
-            <button
-              type="button"
-              className="settings-button settings-signout"
-              onClick={handleSignOut}
-              disabled={isSigningOut}
-            >
-              {isSigningOut ? 'Signing out…' : 'Sign out'}
-            </button>
+          <CodexSection />
+
+          <section className="settings-section settings-section-signout">
+            <div className="settings-row">
+              <span className="settings-label">Session</span>
+              <button
+                type="button"
+                className="settings-button settings-button-danger"
+                onClick={handleSignOut}
+                disabled={isSigningOut}
+              >
+                {isSigningOut ? 'Signing out…' : 'Sign out'}
+              </button>
+            </div>
           </section>
         </div>
       ) : null}
@@ -160,4 +170,76 @@ export function SettingsPage({ onBack }: Props) {
 function titleCase(value: string): string {
   if (!value) return value;
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function CodexSection() {
+  const [status, setStatus] = useState<CodexStatus | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const { phase, start, cancel, reset } = useCodexConnect({
+    onConnected: () => { void refreshStatus(); },
+  });
+
+  useEffect(() => { void refreshStatus(); }, []);
+
+  async function refreshStatus() {
+    try {
+      const next = await getCodexStatus();
+      setStatus(next);
+      setStatusError(null);
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleDisconnect() {
+    if (isDisconnecting) return;
+    setIsDisconnecting(true);
+    try {
+      await disconnectCodex();
+      await refreshStatus();
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsDisconnecting(false);
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h2>Codex</h2>
+
+      {statusError ? (
+        <p className="settings-footnote codex-error">{statusError}</p>
+      ) : null}
+
+      {phase.kind === 'idle' && status !== null ? (
+        <div className="settings-row">
+          <span className="settings-label">Connection</span>
+          {status.connected ? (
+            <button
+              type="button"
+              className="settings-button settings-button-primary"
+              onClick={handleDisconnect}
+              disabled={isDisconnecting}
+            >
+              <CodexMark />
+              <span>{isDisconnecting ? 'Disconnecting…' : 'Disconnect'}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="settings-button settings-button-primary"
+              onClick={start}
+            >
+              <CodexMark />
+              <span>Connect Codex</span>
+            </button>
+          )}
+        </div>
+      ) : null}
+
+      <CodexConnectFlow phase={phase} onRetry={start} onCancel={phase.kind === 'error' ? reset : cancel} />
+    </section>
+  );
 }

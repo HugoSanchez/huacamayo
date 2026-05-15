@@ -152,15 +152,17 @@ export interface HermesSupervisorOptions {
   runtimeMode?: RuntimeMode;
 }
 
-// Exact disable list written by an earlier managed-profile experiment. We keep
-// it only so existing profiles can be restored to the user's normal Hermes
-// skill configuration.
+// First-party Hermes skills that teach use of shell CLIs or direct provider
+// SDKs (gws, himalaya, gh, etc.). We disable them so all third-party access
+// flows through the verso/Composio bridge. Self-authored skills that already
+// use the verso bridge (e.g. granola-meeting-notes) are intentionally NOT in
+// this list — they encode learned tool slugs and let the model skip the
+// discovery ritual on repeat tasks.
 const DEFAULT_DISABLED_HERMES_SKILLS = [
   'google-workspace',
   'himalaya',
   'notion',
   'linear',
-  'granola-meeting-notes',
   'github-auth',
   'github-repo-management',
   'github-pr-workflow',
@@ -204,6 +206,17 @@ export class HermesSupervisor {
   // session JSON live under this directory, so the /crons routes need it.
   get hermesHome(): string {
     return this.manualMode ? this.templateHermesHome : this.managedHermesHome;
+  }
+
+  // Resolved path/command of the Hermes binary the supervisor will spawn.
+  // Exposed so one-off helpers (auth flows, etc.) can shell out to the same
+  // binary without duplicating the detection logic.
+  get launchCommand(): string | null {
+    return this.launch.command;
+  }
+
+  get launchCwd(): string | null {
+    return this.launch.cwd;
   }
 
   prepare(): void {
