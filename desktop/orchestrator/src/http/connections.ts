@@ -68,7 +68,7 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
         return sendHtml(
           res,
           404,
-          renderCallbackPage('Connection unavailable', 'This connection link is no longer available. Return to verso and try again.', 'error'),
+          renderCallbackPage('Connection unavailable', 'This connection link is no longer available. Return to verso and try again.'),
         );
       }
 
@@ -83,7 +83,7 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
       const message = isFailed
         ? 'The connection did not complete. You can return to verso and try again.'
         : 'You can return to verso now. The app will update automatically.';
-      sendHtml(res, 200, renderCallbackPage(title, message, isFailed ? 'error' : 'success'));
+      sendHtml(res, 200, renderCallbackPage(title, message));
     }),
   ];
 }
@@ -93,8 +93,7 @@ function requestBaseUrl(req: IncomingMessage): string {
   return `http://${host}`;
 }
 
-function renderCallbackPage(title: string, message: string, kind: 'success' | 'error' = 'error'): string {
-  const icon = kind === 'success' ? renderSuccessIcon() : renderErrorIcon();
+function renderCallbackPage(title: string, message: string): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -102,66 +101,59 @@ function renderCallbackPage(title: string, message: string, kind: 'success' | 'e
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
     <style>
-      :root { color-scheme: light dark; }
+      :root { color-scheme: light; }
+      html, body { height: 100%; }
       body {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
         background: #F3F5F7;
         color: rgba(0, 0, 0, 0.85);
-        display: grid;
+        display: flex;
+        flex-direction: column;
         min-height: 100vh;
-        place-items: center;
+      }
+      header {
+        height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 600;
+        color: rgba(0, 0, 0, 0.85);
       }
       main {
-        text-align: center;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
         padding: 24px;
-        max-width: 420px;
-      }
-      .icon {
-        display: inline-flex;
-        margin-bottom: 20px;
       }
       h1 {
-        margin: 0 0 8px;
-        font-size: 22px;
+        margin: 0 0 16px;
+        font-size: 35px;
         font-weight: 600;
         letter-spacing: -0.01em;
+        color: rgba(0, 0, 0, 0.85);
       }
       p {
         margin: 0;
-        font-size: 14px;
-        line-height: 1.5;
+        max-width: 300px;
+        text-align: center;
+        font-size: 13px;
+        line-height: 1.55;
         color: rgba(0, 0, 0, 0.55);
-      }
-      @media (prefers-color-scheme: dark) {
-        body { background: #141618; color: rgba(255, 255, 255, 0.88); }
-        p { color: rgba(255, 255, 255, 0.55); }
       }
     </style>
   </head>
   <body>
+    <header>verso.</header>
     <main>
-      <div class="icon">${icon}</div>
       <h1>${escapeHtml(title)}</h1>
       <p>${escapeHtml(message)}</p>
     </main>
   </body>
 </html>`;
-}
-
-function renderSuccessIcon(): string {
-  return `<svg width="56" height="56" viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="12" r="11" fill="#2e7d32" />
-    <polyline points="7 12.5 10.5 16 17 9" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-  </svg>`;
-}
-
-function renderErrorIcon(): string {
-  return `<svg width="56" height="56" viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="12" r="11" fill="#c0392b" />
-    <line x1="8" y1="8" x2="16" y2="16" stroke="white" stroke-width="2.4" stroke-linecap="round" />
-    <line x1="16" y1="8" x2="8" y2="16" stroke="white" stroke-width="2.4" stroke-linecap="round" />
-  </svg>`;
 }
 
 function sendHtml(res: ServerResponse, status: number, html: string): void {
