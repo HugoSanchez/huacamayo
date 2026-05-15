@@ -152,15 +152,24 @@ export interface HermesSupervisorOptions {
   runtimeMode?: RuntimeMode;
 }
 
-// First-party Hermes skills that teach use of shell CLIs or direct provider
-// SDKs (gws, himalaya, gh, etc.). We disable them so all third-party access
-// flows through the verso/Composio bridge. Self-authored skills that already
-// use the verso bridge (e.g. granola-meeting-notes) are intentionally NOT in
-// this list — they encode learned tool slugs and let the model skip the
-// discovery ritual on repeat tasks.
-const DEFAULT_DISABLED_HERMES_SKILLS = [
+// Skills the user must never be able to enable. They overlap with — and
+// would conflict with — the verso/Composio bridge or shell out to local
+// CLIs in ways we don't support. Hidden from the UI and force-added to
+// `skills.disabled` on every launch.
+export const ALWAYS_DISABLED_HERMES_SKILLS: readonly string[] = [
   'google-workspace',
   'himalaya',
+];
+
+// First-party Hermes skills that teach use of shell CLIs or direct provider
+// SDKs (gh, notion, etc.). We disable them so all third-party access flows
+// through the verso/Composio bridge. Unlike ALWAYS_DISABLED, these are only
+// seeded on first profile creation — users can re-enable them via the UI.
+// Self-authored skills that already use the verso bridge (e.g.
+// granola-meeting-notes) are intentionally NOT in this list — they encode
+// learned tool slugs and let the model skip the discovery ritual.
+const DEFAULT_DISABLED_HERMES_SKILLS = [
+  ...ALWAYS_DISABLED_HERMES_SKILLS,
   'notion',
   'linear',
   'github-auth',
@@ -519,6 +528,7 @@ export class HermesSupervisor {
     if (!configExistedBeforeSeed) {
       this.seedDefaultDisabledSkills();
     }
+    this.enforceAlwaysDisabledSkills();
   }
 
   /**
@@ -571,6 +581,42 @@ export class HermesSupervisor {
 
     mkdirSync(dirname(targetPath), { recursive: true });
     copyFileSync(sourcePath, targetPath);
+  }
+
+  /**
+   * Force-add `ALWAYS_DISABLED_HERMES_SKILLS` to the profile's
+   * `skills.disabled` list on every launch. Non-destructive — leaves
+   * anything else the user disabled in place. Pairs with the UI-side
+   * filter that hides these skills entirely so the user never sees
+   * a (broken) toggle for them.
+   */
+  private enforceAlwaysDisabledSkills(): void {
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    let config: Record<string, unknown> = {};
+    if (existsSync(configPath)) {
+      try {
+        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          config = parsed as Record<string, unknown>;
+        }
+      } catch {
+        config = {};
+      }
+    }
+
+    const skills = asRecord(config.skills) ?? {};
+    const existing = Array.isArray(skills.disabled)
+      ? skills.disabled.filter((item): item is string => typeof item === 'string')
+      : [];
+    const existingSet = new Set(existing);
+    if (ALWAYS_DISABLED_HERMES_SKILLS.every((name) => existingSet.has(name))) {
+      return;
+    }
+
+    skills.disabled = [...new Set([...existing, ...ALWAYS_DISABLED_HERMES_SKILLS])].sort();
+    config.skills = skills;
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
   /**

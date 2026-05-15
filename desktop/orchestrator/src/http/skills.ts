@@ -2,8 +2,11 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { json, route, type Route } from './router.ts';
+import { ALWAYS_DISABLED_HERMES_SKILLS } from './hermes-supervisor.ts';
 import type { HermesSkillsConfig } from './skills-store.ts';
 import type { PinnedSkillsStore } from './pinned-skills-store.ts';
+
+const HIDDEN_SKILL_NAMES = new Set<string>(ALWAYS_DISABLED_HERMES_SKILLS);
 
 export interface SkillSummary {
   slug: string;
@@ -51,15 +54,17 @@ function currentSkillsDir(): string {
 export function buildSkillsRoutes(config: HermesSkillsConfig, pins: PinnedSkillsStore): Route[] {
   return [
     route('GET', '/skills', async (_req, res) => {
-      const skills = scanSkills().map((skill) =>
-        toSummary(skill, config.isEnabled(skill.name), pins.isPinned(skill.name)),
-      );
+      const skills = scanSkills()
+        .filter((skill) => !HIDDEN_SKILL_NAMES.has(skill.name))
+        .map((skill) =>
+          toSummary(skill, config.isEnabled(skill.name), pins.isPinned(skill.name)),
+        );
       json(res, 200, { skills });
     }),
 
     route('GET', '/skills/:slug', async (_req, res, params) => {
       const skill = findSkillBySlug(params.slug);
-      if (!skill) {
+      if (!skill || HIDDEN_SKILL_NAMES.has(skill.name)) {
         return json(res, 404, { error: 'not_found', message: `Unknown skill: ${params.slug}` });
       }
       json(res, 200, {
@@ -69,7 +74,7 @@ export function buildSkillsRoutes(config: HermesSkillsConfig, pins: PinnedSkills
 
     route('POST', '/skills/:slug/toggle', async (_req, res, params, body) => {
       const skill = findSkillBySlug(params.slug);
-      if (!skill) {
+      if (!skill || HIDDEN_SKILL_NAMES.has(skill.name)) {
         return json(res, 404, { error: 'not_found', message: `Unknown skill: ${params.slug}` });
       }
       const requested = (body as { enabled?: unknown } | null)?.enabled;
