@@ -505,6 +505,7 @@ export class HermesSupervisor {
   private ensureManagedHermesHome(): void {
     this.migrateLegacyVervoProfile();
     mkdirSync(this.managedHermesHome, { recursive: true });
+    const configExistedBeforeSeed = existsSync(join(this.managedHermesHome, 'config.yaml'));
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'auth.json');
@@ -515,7 +516,9 @@ export class HermesSupervisor {
     this.syncVersoSkill();
     this.configureManagedMcpServers();
     this.restoreManagedModelConfigIfProxyOwned();
-    this.restoreDefaultDisabledSkillsIfOwned();
+    if (!configExistedBeforeSeed) {
+      this.seedDefaultDisabledSkills();
+    }
   }
 
   /**
@@ -571,42 +574,34 @@ export class HermesSupervisor {
   }
 
   /**
-   * Earlier managed-profile experiments disabled several Hermes built-in
-   * skills. That made the managed profile diverge from the working Hermes
-   * setup. If the disabled list is exactly the one we wrote, restore the
-   * template/default list; otherwise respect the user's current setting.
+   * Run once, the first time we materialize the managed profile's
+   * config.yaml: union our default-disabled list with whatever the
+   * template carried over. After that, the UI is the only writer —
+   * we never overwrite a user's choices on subsequent launches.
    */
-  private restoreDefaultDisabledSkillsIfOwned(): void {
+  private seedDefaultDisabledSkills(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
-    if (!existsSync(configPath)) return;
-
     let config: Record<string, unknown> = {};
-    try {
-      const raw = readFileSync(configPath, 'utf8');
-      const parsed = YAML.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        config = parsed as Record<string, unknown>;
+    if (existsSync(configPath)) {
+      try {
+        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          config = parsed as Record<string, unknown>;
+        }
+      } catch {
+        config = {};
       }
-    } catch {
-      config = {};
     }
 
     const skills = asRecord(config.skills) ?? {};
-    const disabled = Array.isArray(skills.disabled)
+    const existing = Array.isArray(skills.disabled)
       ? skills.disabled.filter((item): item is string => typeof item === 'string')
-      : null;
-    if (!disabled || !sameStringSet(disabled, DEFAULT_DISABLED_HERMES_SKILLS)) {
-      return;
-    }
-
-    const templateConfig = readYamlRecord(join(this.templateHermesHome, 'config.yaml'));
-    const templateSkills = asRecord(templateConfig?.skills);
-    const templateDisabled = Array.isArray(templateSkills?.disabled)
-      ? templateSkills.disabled.filter((item): item is string => typeof item === 'string')
       : [];
+    const merged = [...new Set([...existing, ...DEFAULT_DISABLED_HERMES_SKILLS])].sort();
 
-    skills.disabled = templateDisabled;
+    skills.disabled = merged;
     config.skills = skills;
+    mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
@@ -957,8 +952,3 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function sameStringSet(left: string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  const rightSet = new Set(right);
-  return left.every((item) => rightSet.has(item));
-}
