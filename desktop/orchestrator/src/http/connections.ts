@@ -68,7 +68,7 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
         return sendHtml(
           res,
           404,
-          renderCallbackPage('Connection unavailable', 'This connection link is no longer available. Return to verso and try again.'),
+          renderCallbackPage('Connection unavailable', 'This connection link is no longer available. Return to verso and try again.', 'error'),
         );
       }
 
@@ -83,7 +83,7 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
       const message = isFailed
         ? 'The connection did not complete. You can return to verso and try again.'
         : 'You can return to verso now. The app will update automatically.';
-      sendHtml(res, 200, renderCallbackPage(title, message));
+      sendHtml(res, 200, renderCallbackPage(title, message, isFailed ? 'error' : 'success'));
     }),
   ];
 }
@@ -93,7 +93,8 @@ function requestBaseUrl(req: IncomingMessage): string {
   return `http://${host}`;
 }
 
-function renderCallbackPage(title: string, message: string): string {
+function renderCallbackPage(title: string, message: string, kind: 'success' | 'error' = 'error'): string {
+  const icon = kind === 'success' ? renderSuccessIcon() : renderErrorIcon();
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -104,31 +105,63 @@ function renderCallbackPage(title: string, message: string): string {
       :root { color-scheme: light dark; }
       body {
         margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-        background: #141618;
-        color: rgba(255, 255, 255, 0.88);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+        background: #F3F5F7;
+        color: rgba(0, 0, 0, 0.85);
         display: grid;
         min-height: 100vh;
         place-items: center;
       }
       main {
-        width: min(460px, calc(100vw - 32px));
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 18px;
-        padding: 28px;
-        background: rgba(255, 255, 255, 0.04);
+        text-align: center;
+        padding: 24px;
+        max-width: 420px;
       }
-      h1 { margin: 0 0 12px; font-size: 20px; }
-      p { margin: 0; line-height: 1.5; color: rgba(255, 255, 255, 0.68); }
+      .icon {
+        display: inline-flex;
+        margin-bottom: 20px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: rgba(0, 0, 0, 0.55);
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #141618; color: rgba(255, 255, 255, 0.88); }
+        p { color: rgba(255, 255, 255, 0.55); }
+      }
     </style>
   </head>
   <body>
     <main>
+      <div class="icon">${icon}</div>
       <h1>${escapeHtml(title)}</h1>
       <p>${escapeHtml(message)}</p>
     </main>
   </body>
 </html>`;
+}
+
+function renderSuccessIcon(): string {
+  return `<svg width="56" height="56" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="11" fill="#2e7d32" />
+    <polyline points="7 12.5 10.5 16 17 9" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>`;
+}
+
+function renderErrorIcon(): string {
+  return `<svg width="56" height="56" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="11" fill="#c0392b" />
+    <line x1="8" y1="8" x2="16" y2="16" stroke="white" stroke-width="2.4" stroke-linecap="round" />
+    <line x1="16" y1="8" x2="8" y2="16" stroke="white" stroke-width="2.4" stroke-linecap="round" />
+  </svg>`;
 }
 
 function sendHtml(res: ServerResponse, status: number, html: string): void {

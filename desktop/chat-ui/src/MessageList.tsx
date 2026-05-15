@@ -5,12 +5,14 @@ import rehypeHighlight from 'rehype-highlight';
 import type { ChatMessage, ActivityStep, ConnectionRequestView, ConnectionView, ToolkitView } from './types';
 import { generateCronDescription, openExternalUrl } from './chat';
 import { useIsSystemAsleep } from './useSystemSleep';
+import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
 
 interface Props {
   messages: ChatMessage[];
   onConnect: (request: ConnectionRequestView) => void;
   connections: ConnectionView[];
   toolkitCatalog: ToolkitView[];
+  onCodexConnected: (widgetMessageId: string) => void;
 }
 
 export interface ToolkitInfo {
@@ -49,7 +51,7 @@ function buildToolkitMap(
 // browser's natural smooth-scroll deceleration still counts as pinned.
 const STICK_TO_BOTTOM_THRESHOLD_PX = 32;
 
-export function MessageList({ messages, onConnect, connections, toolkitCatalog }: Props) {
+export function MessageList({ messages, onConnect, connections, toolkitCatalog, onCodexConnected }: Props) {
   const toolkits = buildToolkitMap(connections, toolkitCatalog);
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -107,7 +109,13 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog }
       }}
     >
       {messages.map(msg => (
-        <MessageBubble key={msg.id} message={msg} onConnect={onConnect} toolkits={toolkits} />
+        <MessageBubble
+          key={msg.id}
+          message={msg}
+          onConnect={onConnect}
+          toolkits={toolkits}
+          onCodexConnected={onCodexConnected}
+        />
       ))}
       <div ref={endRef} />
     </div>
@@ -118,12 +126,22 @@ function MessageBubble({
   message,
   onConnect,
   toolkits,
+  onCodexConnected,
 }: {
   message: ChatMessage;
   onConnect: (request: ConnectionRequestView) => void;
   toolkits: Map<string, ToolkitInfo>;
+  onCodexConnected: (widgetMessageId: string) => void;
 }) {
   const isUser = message.role === 'user';
+
+  if (message.kind === 'codex_connect_required') {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '12px' }}>
+        <CodexConnectRequiredCard onConnected={() => onCodexConnected(message.id)} />
+      </div>
+    );
+  }
 
   // Connection cards live alongside the assistant's response text, not inside
   // the "N tool calls" collapsible. Pull them out of the activity stream and
@@ -202,6 +220,33 @@ function MessageBubble({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function CodexConnectRequiredCard({ onConnected }: { onConnected: () => void }) {
+  const { phase, start, cancel, reset } = useCodexConnect({ onConnected });
+
+  return (
+    <div className="codex-connect-card">
+      {phase.kind === 'idle' ? (
+        <>
+          <p className="codex-connect-card-text">
+            Connect your Codex account to start chatting. We&rsquo;ll open the OpenAI sign-in
+            page in your browser and you can come back here once you&rsquo;re done.
+          </p>
+          <button
+            type="button"
+            className="settings-button settings-button-primary"
+            onClick={start}
+          >
+            <CodexMark />
+            <span>Connect Codex</span>
+          </button>
+        </>
+      ) : null}
+
+      <CodexConnectFlow phase={phase} onRetry={start} onCancel={phase.kind === 'error' ? reset : cancel} />
     </div>
   );
 }

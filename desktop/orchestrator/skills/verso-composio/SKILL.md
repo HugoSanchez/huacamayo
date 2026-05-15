@@ -44,6 +44,31 @@ Discovery is expensive. Before calling `verso.search_composio_tools` or `verso.g
 
 When in doubt about whether a prior slug applies, prefer reusing it and executing — a failed execution is cheaper than re-running the full discovery flow.
 
+## Reuse Across Conversations — Save What You Learn
+
+Within a conversation, the schemas live in your context. Across conversations, they don't — unless you save them as a skill. After you have successfully discovered and used Composio tools for a toolkit, persist what you learned via `skill_manage` so future sessions skip the discovery flow entirely:
+
+```
+skill_manage({
+  action: "create",
+  name: "<toolkit>-quick-actions",   // e.g. "granola-meeting-notes", "slack-quick-actions"
+  category: "productivity",
+  content: "<SKILL.md body — see below>"
+})
+```
+
+Capture in the SKILL.md body:
+
+- The Composio toolkit slug (e.g. `granola_mcp`, `slack`, `gmail`).
+- The specific tool slugs you used and a one-line description of each (e.g. `GRANOLA_MCP_GET_MEETING_TRANSCRIPT — verbatim transcript by meeting UUID`).
+- A short "when to use this skill" sentence so it activates on the right user intents.
+- Any non-obvious gotchas you hit and resolved (parameter quirks, validation errors, fallback paths). Real failures you overcame are the most valuable part.
+- Brief examples of `verso.execute_composio_tool` calls with realistic arguments.
+
+If you later use a skill and find it incomplete or wrong (e.g. a slug renamed, a parameter shape changed), patch it immediately with `skill_manage({ action: "patch", ... })` — do not wait to be asked. The goal is that the second time a user asks for a given kind of task, you go straight from `skill_view` to `execute_composio_tool`, with no `search_composio_tools` or `get_composio_tool_schemas` in between.
+
+Note: the verso MCP server is named `verso`, so its tools appear as `mcp_verso_*` (e.g. `mcp_verso_list_connections`). When writing skills, refer to tools by these current names.
+
 ## Connection Management
 
 If a tool reports no active connection, or the user asks to connect a service, call:

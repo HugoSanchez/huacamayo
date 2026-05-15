@@ -13,6 +13,7 @@ import {
   createChatSession,
   getChatMessages,
   getChatSessions,
+  getCodexStatus,
   getConnectionRequest,
   getConnections,
   getSidecarPort,
@@ -53,6 +54,13 @@ declare global {
 
 const SESSION_STORAGE_KEY = 'verso.chat.sessionId';
 
+// Hermes surfaces a CLI-flavoured error when there are no Codex creds. We
+// match liberally — any of "no codex credentials", "hermes auth", or
+// "hermes model" indicates the user needs to (re-)authenticate.
+function isCodexAuthError(err: string): boolean {
+  return /no\s+codex\s+credentials|hermes\s+auth|hermes\s+model/i.test(err);
+}
+
 export function App() {
   const isNativeShell = hasNativeShell();
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
@@ -60,6 +68,10 @@ export function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
+  // null = unknown (e.g. before the orchestrator is ready or the check is in
+  // flight). We only intercept sends when we're sure the user is disconnected,
+  // so unknown lets the normal Hermes flow proceed and surface its own error.
+  const [codexConnected, setCodexConnected] = useState<boolean | null>(null);
   const [connections, setConnections] = useState<ConnectionView[]>([]);
   // Full toolkit catalog — used by the chat UI to render logos in tool-call
   // rows for toolkits the user may not have connected (or whose connection
@@ -119,6 +131,17 @@ export function App() {
       setConnections(result.connections);
     } catch {
       // Ignore best-effort refresh failures.
+    }
+  }, []);
+
+  const refreshCodexStatus = useCallback(async () => {
+    if (!getSidecarPort()) return;
+    try {
+      const next = await getCodexStatus();
+      setCodexConnected(next.connected);
+    } catch {
+      // Best-effort: leave codexConnected as-is so we don't accidentally
+      // block sends because of a transient status fetch failure.
     }
   }, []);
 
@@ -234,6 +257,7 @@ export function App() {
       void bootstrapSessions();
       void refreshConnections();
       void refreshToolkitCatalog();
+      void refreshCodexStatus();
       // Re-broadcast so descendants (InputBar etc.) that mount before
       // App's effect runs can hear about the now-available port.
       window.dispatchEvent(new CustomEvent('verso:sidecar-port-ready', { detail: { port } }));
@@ -276,7 +300,7 @@ export function App() {
       }
       connectionPollers.current.clear();
     };
-  }, [bootstrapSessions, refreshConnections, refreshToolkitCatalog]);
+  }, [bootstrapSessions, refreshConnections, refreshToolkitCatalog, refreshCodexStatus]);
 
   useEffect(() => {
     if (!isNativeShell) return;
@@ -293,6 +317,8 @@ export function App() {
 
         if (resolvedSessionId) {
           setSelectedSkillSlug(null);
+          setSelectedCronId(null);
+          setIsSettingsOpen(false);
         }
 
         if (resolvedSessionId === sessionIdRef.current) {
@@ -503,6 +529,8 @@ export function App() {
   const handleSelectSession = useCallback((sessionId: string) => {
     if (isStreaming || isHydratingSession || sessionId === selectedSessionId) return;
     setSelectedSkillSlug(null);
+    setSelectedCronId(null);
+    setIsSettingsOpen(false);
     void hydrateSession(sessionId);
   }, [hydrateSession, isHydratingSession, isStreaming, selectedSessionId]);
 
@@ -525,29 +553,11 @@ export function App() {
     })();
   }, [isHydratingSession, isStreaming, selectedSessionId, sessions]);
 
-  const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
-    const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
-    if (!hasContent || isStreaming || !connected) return;
-
-    const displayText = attached?.kind === 'cron' && text.trim().length === 0
-      ? `[Reviewing routine: ${attached.name}]`
-      : text;
-
-    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: displayText };
-    const assistantMsg: ChatMessage = {
-      id: nextId(),
-      role: 'assistant',
-      content: '',
-      steps: [],
-      isStreaming: true,
-      startedAt: Date.now(),
-    };
-
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+  // Wires up the SSE handlers for an assistant placeholder that's already in
+  // `messages`. Shared by the normal send path and the post-connect replay so
+  // both flows produce identical streaming behaviour.
+  const streamInto = useCallback((assistantId: string, text: string, attached: AttachedContext | null) => {
     setIsStreaming(true);
-
-    const assistantId = assistantMsg.id;
-
     void (async () => {
       try {
         const sessionId = await ensureSession(text);
@@ -560,6 +570,28 @@ export function App() {
               sessionIdRef.current = resolvedSessionId;
               setSelectedSessionId(resolvedSessionId);
               window.localStorage.setItem(SESSION_STORAGE_KEY, resolvedSessionId);
+            }
+
+            // Catch the Hermes "no credentials" event mid-stream and swap the
+            // assistant placeholder for a Codex connect widget instead of
+            // letting applySSEEvent surface the raw CLI-flavoured error.
+            if (event.type === 'error' && typeof event.message === 'string' && isCodexAuthError(event.message)) {
+              setMessages((prev) => prev.map((message) =>
+                message.id === assistantId
+                  ? {
+                      ...message,
+                      kind: 'codex_connect_required' as const,
+                      pendingText: text,
+                      pendingAttached: attached,
+                      content: '',
+                      steps: [],
+                      isStreaming: false,
+                      endedAt: Date.now(),
+                    }
+                  : message,
+              ));
+              setCodexConnected(false);
+              return;
             }
 
             setMessages((prev) => prev.map((message) => {
@@ -578,11 +610,33 @@ export function App() {
             });
           },
           (err: string) => {
-            setMessages((prev) => prev.map((message) =>
-              message.id === assistantId
-                ? { ...message, content: message.content + `\n\n**Error:** ${err}`, isStreaming: false, endedAt: Date.now() }
-                : message,
-            ));
+            if (isCodexAuthError(err)) {
+              // Our pre-send check missed (status fetch race, or the user
+              // ran `hermes auth remove` outside the app). Convert the failed
+              // assistant placeholder into a connect widget and stash the
+              // payload so finishing auth replays the send.
+              setMessages((prev) => prev.map((message) =>
+                message.id === assistantId
+                  ? {
+                      ...message,
+                      kind: 'codex_connect_required' as const,
+                      pendingText: text,
+                      pendingAttached: attached,
+                      content: '',
+                      steps: [],
+                      isStreaming: false,
+                      endedAt: Date.now(),
+                    }
+                  : message,
+              ));
+              setCodexConnected(false);
+            } else {
+              setMessages((prev) => prev.map((message) =>
+                message.id === assistantId
+                  ? { ...message, content: message.content + `\n\n**Error:** ${err}`, isStreaming: false, endedAt: Date.now() }
+                  : message,
+              ));
+            }
             setIsStreaming(false);
             abortRef.current = null;
             void refreshSessionList().then(() => {
@@ -595,15 +649,101 @@ export function App() {
         abortRef.current = abort;
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        setMessages((prev) => prev.map((entry) =>
-          entry.id === assistantId
-            ? { ...entry, content: `**Error:** ${message}`, isStreaming: false, endedAt: Date.now() }
-            : entry,
-        ));
+        if (isCodexAuthError(message)) {
+          setMessages((prev) => prev.map((entry) =>
+            entry.id === assistantId
+              ? {
+                  ...entry,
+                  kind: 'codex_connect_required' as const,
+                  pendingText: text,
+                  pendingAttached: attached,
+                  content: '',
+                  steps: [],
+                  isStreaming: false,
+                  endedAt: Date.now(),
+                }
+              : entry,
+          ));
+          setCodexConnected(false);
+        } else {
+          setMessages((prev) => prev.map((entry) =>
+            entry.id === assistantId
+              ? { ...entry, content: `**Error:** ${message}`, isStreaming: false, endedAt: Date.now() }
+              : entry,
+          ));
+        }
         setIsStreaming(false);
       }
     })();
-  }, [connected, ensureSession, isNativeShell, isStreaming, refreshSessionList]);
+  }, [ensureSession, isNativeShell, refreshSessionList]);
+
+  const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
+    const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
+    if (!hasContent || isStreaming || !connected) return;
+
+    const displayText = attached?.kind === 'cron' && text.trim().length === 0
+      ? `[Reviewing routine: ${attached.name}]`
+      : text;
+
+    // If we know the user hasn't connected Codex yet, don't bother hitting
+    // Hermes — it'll just error with a CLI-flavoured "no credentials"
+    // message that doesn't help our users. Stash the user's message on the
+    // synthetic widget so we can replay the send once they finish auth.
+    if (codexConnected === false) {
+      const userMsg: ChatMessage = { id: nextId(), role: 'user', content: displayText };
+      const widgetMsg: ChatMessage = {
+        id: nextId(),
+        role: 'assistant',
+        content: '',
+        kind: 'codex_connect_required',
+        pendingText: text,
+        pendingAttached: attached,
+      };
+      setMessages((prev) => [...prev, userMsg, widgetMsg]);
+      return;
+    }
+
+    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: displayText };
+    const assistantMsg: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      content: '',
+      steps: [],
+      isStreaming: true,
+      startedAt: Date.now(),
+    };
+
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    streamInto(assistantMsg.id, text, attached);
+  }, [codexConnected, connected, isStreaming, streamInto]);
+
+  const handleCodexConnected = useCallback((widgetId: string) => {
+    setCodexConnected(true);
+    const widget = messages.find((m) => m.id === widgetId && m.kind === 'codex_connect_required');
+    const pendingText = widget?.pendingText ?? '';
+    const pendingAttached = widget?.pendingAttached ?? null;
+
+    if (!pendingText) {
+      // Nothing to replay (shouldn't happen — handleSend always stashes text
+      // before showing the widget). Just remove the widget.
+      setMessages((prev) => prev.filter((m) => m.id !== widgetId));
+      return;
+    }
+
+    // Swap the widget for a fresh assistant placeholder and start streaming.
+    // The user's original message stays in place above it, so the result
+    // looks identical to a normal send.
+    const assistantMsg: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      content: '',
+      steps: [],
+      isStreaming: true,
+      startedAt: Date.now(),
+    };
+    setMessages((prev) => prev.map((m) => m.id === widgetId ? assistantMsg : m));
+    streamInto(assistantMsg.id, pendingText, pendingAttached);
+  }, [messages, streamInto]);
 
   const handleOpenSkillInNewSession = useCallback((slug: string) => {
     if (!connected || isStreaming || isHydratingSession) return;
@@ -712,7 +852,7 @@ export function App() {
       )}
 
       {isSettingsOpen ? (
-        <SettingsPage onBack={() => setIsSettingsOpen(false)} />
+        <SettingsPage onBack={() => { setIsSettingsOpen(false); void refreshCodexStatus(); }} />
       ) : selectedCronId ? (
         <CronDetailPage
           id={selectedCronId}
@@ -732,6 +872,7 @@ export function App() {
               messages={messages}
               onConnect={handleConnect}
               connections={connections}
+              onCodexConnected={handleCodexConnected}
               toolkitCatalog={toolkitCatalog}
             />
           </div>

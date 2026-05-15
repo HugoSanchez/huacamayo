@@ -6,6 +6,15 @@ export interface ChatMessage {
   isStreaming?: boolean;
   startedAt?: number;
   endedAt?: number;
+  // Client-only marker. When set, the renderer swaps the normal message body
+  // for a special widget (e.g. an inline Codex connect flow). Synthetic
+  // messages with `kind` are never persisted to the orchestrator.
+  kind?: 'codex_connect_required';
+  // For `codex_connect_required` widgets: the message the user was trying to
+  // send when we intercepted them. Once they finish connecting, we replay
+  // this send in place of the widget so the chat continues seamlessly.
+  pendingText?: string;
+  pendingAttached?: AttachedContext | null;
 }
 
 export interface ChatSessionSummary {
