@@ -152,15 +152,24 @@ export interface HermesSupervisorOptions {
   runtimeMode?: RuntimeMode;
 }
 
-// First-party Hermes skills that teach use of shell CLIs or direct provider
-// SDKs (gws, himalaya, gh, etc.). We disable them so all third-party access
-// flows through the verso/Composio bridge. Self-authored skills that already
-// use the verso bridge (e.g. granola-meeting-notes) are intentionally NOT in
-// this list — they encode learned tool slugs and let the model skip the
-// discovery ritual on repeat tasks.
-const DEFAULT_DISABLED_HERMES_SKILLS = [
+// Skills the user must never be able to enable. They overlap with — and
+// would conflict with — the verso/Composio bridge or shell out to local
+// CLIs in ways we don't support. Hidden from the UI and force-added to
+// `skills.disabled` on every launch.
+export const ALWAYS_DISABLED_HERMES_SKILLS: readonly string[] = [
   'google-workspace',
   'himalaya',
+];
+
+// First-party Hermes skills that teach use of shell CLIs or direct provider
+// SDKs (gh, notion, etc.). We disable them so all third-party access flows
+// through the verso/Composio bridge. Unlike ALWAYS_DISABLED, these are only
+// seeded on first profile creation — users can re-enable them via the UI.
+// Self-authored skills that already use the verso bridge (e.g.
+// granola-meeting-notes) are intentionally NOT in this list — they encode
+// learned tool slugs and let the model skip the discovery ritual.
+const DEFAULT_DISABLED_HERMES_SKILLS = [
+  ...ALWAYS_DISABLED_HERMES_SKILLS,
   'notion',
   'linear',
   'github-auth',
@@ -505,6 +514,7 @@ export class HermesSupervisor {
   private ensureManagedHermesHome(): void {
     this.migrateLegacyVervoProfile();
     mkdirSync(this.managedHermesHome, { recursive: true });
+    const configExistedBeforeSeed = existsSync(join(this.managedHermesHome, 'config.yaml'));
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
     seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'auth.json');
@@ -515,7 +525,10 @@ export class HermesSupervisor {
     this.syncVersoSkill();
     this.configureManagedMcpServers();
     this.restoreManagedModelConfigIfProxyOwned();
-    this.restoreDefaultDisabledSkillsIfOwned();
+    if (!configExistedBeforeSeed) {
+      this.seedDefaultDisabledSkills();
+    }
+    this.enforceAlwaysDisabledSkills();
   }
 
   /**
@@ -571,42 +584,70 @@ export class HermesSupervisor {
   }
 
   /**
-   * Earlier managed-profile experiments disabled several Hermes built-in
-   * skills. That made the managed profile diverge from the working Hermes
-   * setup. If the disabled list is exactly the one we wrote, restore the
-   * template/default list; otherwise respect the user's current setting.
+   * Force-add `ALWAYS_DISABLED_HERMES_SKILLS` to the profile's
+   * `skills.disabled` list on every launch. Non-destructive — leaves
+   * anything else the user disabled in place. Pairs with the UI-side
+   * filter that hides these skills entirely so the user never sees
+   * a (broken) toggle for them.
    */
-  private restoreDefaultDisabledSkillsIfOwned(): void {
+  private enforceAlwaysDisabledSkills(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
-    if (!existsSync(configPath)) return;
-
     let config: Record<string, unknown> = {};
-    try {
-      const raw = readFileSync(configPath, 'utf8');
-      const parsed = YAML.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        config = parsed as Record<string, unknown>;
+    if (existsSync(configPath)) {
+      try {
+        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          config = parsed as Record<string, unknown>;
+        }
+      } catch {
+        config = {};
       }
-    } catch {
-      config = {};
     }
 
     const skills = asRecord(config.skills) ?? {};
-    const disabled = Array.isArray(skills.disabled)
+    const existing = Array.isArray(skills.disabled)
       ? skills.disabled.filter((item): item is string => typeof item === 'string')
-      : null;
-    if (!disabled || !sameStringSet(disabled, DEFAULT_DISABLED_HERMES_SKILLS)) {
+      : [];
+    const existingSet = new Set(existing);
+    if (ALWAYS_DISABLED_HERMES_SKILLS.every((name) => existingSet.has(name))) {
       return;
     }
 
-    const templateConfig = readYamlRecord(join(this.templateHermesHome, 'config.yaml'));
-    const templateSkills = asRecord(templateConfig?.skills);
-    const templateDisabled = Array.isArray(templateSkills?.disabled)
-      ? templateSkills.disabled.filter((item): item is string => typeof item === 'string')
-      : [];
-
-    skills.disabled = templateDisabled;
+    skills.disabled = [...new Set([...existing, ...ALWAYS_DISABLED_HERMES_SKILLS])].sort();
     config.skills = skills;
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
+  }
+
+  /**
+   * Run once, the first time we materialize the managed profile's
+   * config.yaml: union our default-disabled list with whatever the
+   * template carried over. After that, the UI is the only writer —
+   * we never overwrite a user's choices on subsequent launches.
+   */
+  private seedDefaultDisabledSkills(): void {
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    let config: Record<string, unknown> = {};
+    if (existsSync(configPath)) {
+      try {
+        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          config = parsed as Record<string, unknown>;
+        }
+      } catch {
+        config = {};
+      }
+    }
+
+    const skills = asRecord(config.skills) ?? {};
+    const existing = Array.isArray(skills.disabled)
+      ? skills.disabled.filter((item): item is string => typeof item === 'string')
+      : [];
+    const merged = [...new Set([...existing, ...DEFAULT_DISABLED_HERMES_SKILLS])].sort();
+
+    skills.disabled = merged;
+    config.skills = skills;
+    mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
@@ -957,8 +998,3 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function sameStringSet(left: string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  const rightSet = new Set(right);
-  return left.every((item) => rightSet.has(item));
-}

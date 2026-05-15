@@ -11,7 +11,7 @@
  */
 
 .shell {
-  --surface: rgba(255, 255, 255, 0.7);
+  --surface: rgba(255, 255, 255, 8);
   --surface-border: rgba(0, 0, 0, 0.08);
   --text-soft: rgba(0, 0, 0, 0.58);
   --pill-bg: rgba(255, 255, 255, 0.7);

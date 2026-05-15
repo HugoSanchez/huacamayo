@@ -58,7 +58,11 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   // falls back to the legacy ~/.hermes/skills path and misses any skills
   // that only live under the active profile.
   setSkillsDir(path.join(hermes.hermesHome, 'skills'));
-  const skillsConfig = new HermesSkillsConfig();
+  // Same `config.yaml` Hermes itself reads at request time. If we leave
+  // this at the legacy `~/.hermes/config.yaml` default, the UI toggle
+  // writes to one file while Hermes reads from another — disables never
+  // take effect.
+  const skillsConfig = new HermesSkillsConfig(path.join(hermes.hermesHome, 'config.yaml'));
   const pinnedSkills = new PinnedSkillsStore();
   const cronDescriptions = new CronDescriptionsStore();
   const codexAuth = new CodexAuthService(hermes);

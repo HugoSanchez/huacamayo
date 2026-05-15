@@ -60,10 +60,6 @@ export default function HomePage() {
         </div>
       </main>
 
-      <footer className={styles.siteFooter}>
-        Built with <span className={styles.heart} aria-hidden="true">♥</span>{' '}
-        by Hugo.
-      </footer>
     </div>
   );
 }
