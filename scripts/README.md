@@ -82,9 +82,8 @@ WORK=$(mktemp -d)
 
 HOME="$WORK/home" PATH="/usr/bin:/bin" \
   VERSO_BUNDLED_PYTHON_DIR="$RESOURCES/python" \
-  VERSO_BUNDLED_WHEELS_DIR="$RESOURCES/wheels" \
+  VERSO_BUNDLED_SITE_PACKAGES_DIR="$RESOURCES/site-packages" \
   VERSO_BUNDLED_DEFAULTS="$RESOURCES/hermes-defaults" \
-  VERSO_RUNTIME_DIR="$WORK/home/Library/Application Support/Verso/runtime" \
   VERSO_HERMES_HOME="$WORK/home/Library/Application Support/Verso/hermes-home" \
   VERSO_BUNDLE_VERSION="$(cat "$RESOURCES/BUNDLE_VERSION")" \
   VERSO_BACKEND_URL=https://verso-backend-2lg3.onrender.com \

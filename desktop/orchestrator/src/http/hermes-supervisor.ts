@@ -7,9 +7,8 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import type { RuntimeMode } from '../integrations/runtime-mode.ts';
 import {
-  ensureRuntimeVenv,
-  getBundledHermesBin,
-  getBundledVenvPython,
+  getBundledHermesInvocation,
+  getBundledPython,
   isBundledRuntime,
   seedHermesHomeFromBundle,
 } from './runtime-bootstrap.ts';
@@ -79,6 +78,20 @@ function getHermesLaunchConfig(): HermesLaunchConfig {
       startupTimeoutMs,
     };
   }
+
+  // Release builds: spawn the bundled Python on the bundled hermes
+  // console-script, with PYTHONPATH wired up in spawnManagedProcess.
+  const bundled = getBundledHermesInvocation();
+  if (bundled) {
+    return {
+      command: bundled.python,
+      args: [bundled.hermesScript, 'gateway', 'run', '--replace'],
+      cwd,
+      startupTimeoutMs,
+    };
+  }
+
+  // Debug builds / manual override: use the developer's installed Hermes.
   const command = process.env.VERSO_HERMES_COMMAND?.trim() || detectInstalledHermesCommand();
 
   return {
@@ -113,12 +126,9 @@ function parseLaunchArgs(raw: string | undefined): string[] {
 }
 
 function detectInstalledHermesCommand(): string | null {
-  // In Release builds the orchestrator owns a private venv it manages itself,
-  // so always point at that path — even if it doesn't exist yet. ensureReady()
-  // creates the venv before spawn.
-  const bundled = getBundledHermesBin();
-  if (bundled) return bundled;
-
+  // Used only as the Debug-build fallback — Release builds resolve Hermes
+  // via getBundledHermesInvocation() in getHermesLaunchConfig and never
+  // reach this branch.
   const home = process.env.HOME?.trim();
   const candidates = [
     home ? join(home, '.local', 'bin', 'hermes') : null,
@@ -219,13 +229,39 @@ export class HermesSupervisor {
 
   // Resolved path/command of the Hermes binary the supervisor will spawn.
   // Exposed so one-off helpers (auth flows, etc.) can shell out to the same
-  // binary without duplicating the detection logic.
+  // binary without duplicating the detection logic. Callers that need to
+  // run a Hermes subcommand should prefer invoke() below — launchCommand
+  // alone is the bundled-python binary in Release builds, which spawns
+  // garbage if passed Hermes subcommand args directly.
   get launchCommand(): string | null {
     return this.launch.command;
   }
 
   get launchCwd(): string | null {
     return this.launch.cwd;
+  }
+
+  /**
+   * Build a spawn-compatible invocation for an arbitrary Hermes subcommand.
+   * In Release builds the supervisor runs `<bundled-python> <hermes-script>
+   * <args...>` with `PYTHONPATH=<bundled-site-packages>`; in Debug builds
+   * it runs the developer's installed `hermes` directly with the bare args.
+   * Helpers (codex auth, status checks, etc.) call this so they don't have
+   * to special-case the bundled vs Debug code paths.
+   */
+  invoke(args: readonly string[]): { command: string; args: string[]; env: Record<string, string> } | null {
+    if (!this.launch.command) return null;
+    const bundled = getBundledHermesInvocation();
+    if (bundled) {
+      return {
+        command: bundled.python,
+        args: [bundled.hermesScript, ...args],
+        env: {
+          PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':'),
+        },
+      };
+    }
+    return { command: this.launch.command, args: [...args], env: {} };
   }
 
   prepare(): void {
@@ -414,14 +450,14 @@ export class HermesSupervisor {
       return;
     }
 
-    // First-launch bootstrap (Release builds only): build the user venv from
-    // bundled Python + offline wheels, and seed hermes-home from bundled
-    // config templates. No-op when the bundled-runtime env vars aren't set
-    // (Debug builds use the developer's existing ~/.hermes install).
+    // First-launch bootstrap (Release builds only): seed hermes-home from the
+    // bundled config templates. No-op when the bundled-runtime env vars
+    // aren't set (Debug builds use the developer's existing ~/.hermes
+    // install). The venv is pre-installed at bundle time and ships inside
+    // Resources/site-packages/<arch>/ — no first-launch pip install needed.
     if (isBundledRuntime()) {
       this.state = 'starting';
       try {
-        await ensureRuntimeVenv();
         seedHermesHomeFromBundle();
       } catch (error) {
         this.lastError = `Failed to prepare bundled runtime: ${error instanceof Error ? error.message : String(error)}`;
@@ -475,8 +511,18 @@ export class HermesSupervisor {
     const gatewayUrl = new URL(this.config.baseUrl);
     const port = gatewayUrl.port || (gatewayUrl.protocol === 'https:' ? '443' : '80');
     const host = gatewayUrl.hostname;
+    // Release builds run the bundled hermes script via the bundled Python.
+    // Python needs PYTHONPATH to find the pre-installed packages — without
+    // this, `from hermes_cli.main import main` fails immediately. Debug
+    // builds leave PYTHONPATH untouched so the developer's venv-resolved
+    // imports keep working.
+    const bundled = getBundledHermesInvocation();
+    const pythonPathExtras = bundled
+      ? { PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':') }
+      : {};
     const env = {
       ...process.env,
+      ...pythonPathExtras,
       PORT: port,
       HOST: host,
       HERMES_PORT: port,
@@ -729,12 +775,22 @@ export class HermesSupervisor {
       const pythonPath = resolveHermesPython(this.templateHermesHome);
       const serverPath = resolveversoMcpServerPath();
       if (pythonPath && serverPath) {
+        // In Release the bundled CPython has no site-packages of its own —
+        // we ship one separately and wire it up via PYTHONPATH. Without
+        // this, `import mcp` in verso_server.py fails on first connect and
+        // Hermes gives up after a few retries. Debug builds (no bundled
+        // invocation) skip this; their python already sees its own venv.
+        const bundled = getBundledHermesInvocation();
+        const env: Record<string, string> = {
+          VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
+        };
+        if (bundled) {
+          env.PYTHONPATH = bundled.sitePackages;
+        }
         mcpServers.verso = {
           command: pythonPath,
           args: [serverPath],
-          env: {
-            VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
-          },
+          env,
           timeout: 120,
           connect_timeout: 60,
         };
@@ -920,9 +976,9 @@ function resolveHermesRoot(home: string): string {
 }
 
 function resolveHermesPython(templateHome: string): string | null {
-  // In Release the bundled-runtime venv owns Python; prefer it.
-  const bundledVenvPython = getBundledVenvPython();
-  if (bundledVenvPython && existsSync(bundledVenvPython)) return bundledVenvPython;
+  // In Release the bundled CPython owns Python; prefer it.
+  const bundledPython = getBundledPython();
+  if (bundledPython && existsSync(bundledPython)) return bundledPython;
 
   const candidate = join(resolveHermesRoot(templateHome), 'hermes-agent', 'venv', 'bin', 'python');
   return existsSync(candidate) ? candidate : null;

@@ -19,12 +19,22 @@ interface CodexStatus {
 export class CodexAuthService {
   constructor(private readonly hermes: HermesSupervisor) {}
 
-  private resolveCommand(): { command: string; cwd: string | null } {
-    const command = this.hermes.launchCommand;
-    if (!command) {
+  private resolveInvocation(args: readonly string[]): {
+    command: string;
+    args: string[];
+    env: NodeJS.ProcessEnv;
+    cwd: string | null;
+  } {
+    const invocation = this.hermes.invoke(args);
+    if (!invocation) {
       throw new Error('Hermes command is not configured. Set VERSO_HERMES_COMMAND or install hermes locally.');
     }
-    return { command, cwd: this.hermes.launchCwd };
+    return {
+      command: invocation.command,
+      args: invocation.args,
+      env: { ...this.env(), ...invocation.env },
+      cwd: this.hermes.launchCwd,
+    };
   }
 
   private env(): NodeJS.ProcessEnv {
@@ -44,11 +54,11 @@ export class CodexAuthService {
   }
 
   async getStatus(): Promise<CodexStatus> {
-    const { command, cwd } = this.resolveCommand();
+    const invocation = this.resolveInvocation(['auth', 'list', PROVIDER]);
     try {
-      const { stdout } = await execFile(command, ['auth', 'list', PROVIDER], {
-        env: this.env(),
-        cwd: cwd ?? undefined,
+      const { stdout } = await execFile(invocation.command, invocation.args, {
+        env: invocation.env,
+        cwd: invocation.cwd ?? undefined,
         timeout: 10_000,
       });
       const stripped = stdout.replace(ANSI_PATTERN, '');
@@ -64,15 +74,15 @@ export class CodexAuthService {
   // parsing every label/id, and matches the only mutation the UI offers
   // ("disconnect" = forget everything).
   async disconnect(): Promise<{ removed: number }> {
-    const { command, cwd } = this.resolveCommand();
     let removed = 0;
     for (let i = 0; i < 20; i++) {
       const status = await this.getStatus();
       if (status.count === 0) break;
+      const invocation = this.resolveInvocation(['auth', 'remove', PROVIDER, '1']);
       try {
-        await execFile(command, ['auth', 'remove', PROVIDER, '1'], {
-          env: this.env(),
-          cwd: cwd ?? undefined,
+        await execFile(invocation.command, invocation.args, {
+          env: invocation.env,
+          cwd: invocation.cwd ?? undefined,
           timeout: 10_000,
         });
         removed++;
@@ -89,12 +99,9 @@ export class CodexAuthService {
   // credentials are already saved to ~/.hermes/auth.json and the gateway
   // will pick them up on its next request.
   startLogin(req: IncomingMessage, res: ServerResponse): void {
-    let command: string;
-    let cwd: string | null;
+    let invocation: ReturnType<CodexAuthService['resolveInvocation']>;
     try {
-      const resolved = this.resolveCommand();
-      command = resolved.command;
-      cwd = resolved.cwd;
+      invocation = this.resolveInvocation(['auth', 'add', PROVIDER, '--type', 'oauth', '--no-browser']);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       writeSseHeaders(res);
@@ -105,15 +112,11 @@ export class CodexAuthService {
 
     writeSseHeaders(res);
 
-    const child = spawn(
-      command,
-      ['auth', 'add', PROVIDER, '--type', 'oauth', '--no-browser'],
-      {
-        env: this.env(),
-        cwd: cwd ?? undefined,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
+    const child = spawn(invocation.command, invocation.args, {
+      env: invocation.env,
+      cwd: invocation.cwd ?? undefined,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     const state = { url: null as string | null, code: null as string | null };
     let promptSent = false;
@@ -169,9 +172,25 @@ export class CodexAuthService {
       res.end();
     };
 
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       if (stdoutBuffer.length > 0) parseLine(stdoutBuffer);
       if (code === 0) {
+        // Hermes's `auth add openai-codex` only writes credentials — it
+        // leaves config.yaml alone. The interactive `hermes model` flow
+        // (`main.py:2350`) does the second step, calling
+        // `_update_config_for_provider("openai-codex", DEFAULT_CODEX_BASE_URL)`
+        // to set provider + base_url + default_model. Without that, the
+        // gateway keeps trying the bundled default (claude-opus-4.6),
+        // hits "no credentials," and returns errors that surface as the
+        // Codex-connect widget — a misleading loop where the user keeps
+        // reconnecting Codex but nothing changes.
+        //
+        // We invoke the same internal Hermes function here. Failure is
+        // logged but non-fatal — auth itself succeeded, the user can
+        // recover by editing config manually if needed.
+        await applyCodexModelConfig(this.hermes).catch((err) => {
+          console.error('[codex-auth] post-auth config update failed:', err instanceof Error ? err.message : err);
+        });
         sendEvent(res, { type: 'connected' });
       } else {
         const message = errorMessage
@@ -191,6 +210,36 @@ export class CodexAuthService {
       closeOnce();
     });
   }
+}
+
+// Default Codex model to write into config.yaml after a successful auth.
+// Matches what `hermes model` interactive flow defaults to when picking
+// OpenAI Codex (see hermes_cli/codex_models.py for the model list).
+const DEFAULT_CODEX_MODEL = 'gpt-5.5';
+
+// Bridge to Hermes's own _update_config_for_provider helper — the
+// canonical way to mutate config.yaml after an auth flow. We invoke it
+// via the bundled python (or whatever python the supervisor's invoke()
+// returns) so we don't duplicate Hermes's YAML-writing logic.
+async function applyCodexModelConfig(hermes: HermesSupervisor): Promise<void> {
+  const invocation = hermes.invoke([]);
+  if (!invocation) {
+    throw new Error('Hermes is not configured; cannot update model config.');
+  }
+  const py = invocation.command;
+  const script =
+    'from hermes_cli.auth import _update_config_for_provider, DEFAULT_CODEX_BASE_URL; '
+    + `_update_config_for_provider("openai-codex", DEFAULT_CODEX_BASE_URL, default_model="${DEFAULT_CODEX_MODEL}")`;
+
+  await execFile(py, ['-c', script], {
+    env: {
+      ...process.env,
+      ...invocation.env,
+      HERMES_HOME: hermes.hermesHome,
+      PYTHONUNBUFFERED: '1',
+    },
+    timeout: 30_000,
+  });
 }
 
 function writeSseHeaders(res: ServerResponse): void {

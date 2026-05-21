@@ -3,22 +3,26 @@
 # sign-bundle-binaries.sh
 # ───────────────────────
 # Xcode Run Script build phase. After Bundle Runtime Components copies the
-# node + python + orchestrator + wheels artifacts into Resources/, this
-# script signs every Mach-O binary under Resources/ with our Developer ID
-# identity + hardened runtime + entitlements. Xcode's own signing step then
-# re-signs the outer .app last, which is the order codesign requires.
+# node + python + orchestrator + site-packages artifacts into Resources/,
+# this script signs every Mach-O binary under Resources/ AND inside the
+# embedded Sparkle.framework with our Developer ID identity + hardened
+# runtime + entitlements. Xcode's own signing step then re-signs the outer
+# .app last, which is the order codesign requires.
 #
 #   • Debug builds: no-op. Local "Sign to Run Locally" ad-hoc signature
 #     is good enough for Cmd+R.
 #
 #   • Release builds: signs every node / python / *.dylib / *.so found
-#     under $RESOURCES with the same identity + entitlements Xcode uses
-#     for the outer app.
+#     under $RESOURCES, plus the four nested binaries inside
+#     Frameworks/Sparkle.framework/ (Updater.app, Autoupdate,
+#     Downloader.xpc, Installer.xpc), with the same identity + entitlements
+#     Xcode uses for the outer app.
 #
-# Wheels (.whl files) are NOT signed — their .so contents extract into the
-# user's venv at first launch, and Python loads them under our hardened-
-# runtime + disable-library-validation entitlement, which permits unsigned
-# dylibs in our process.
+# Sparkle ships its nested binaries with Sparkle's own ad-hoc signature.
+# Apple notarization requires every Mach-O in our bundle to be signed by
+# OUR Developer ID with a secure timestamp — so we re-sign them here. The
+# Sparkle framework documents this pattern: third-party embedders MUST
+# re-sign the nested binaries when shipping outside the Mac App Store.
 
 set -euo pipefail
 
@@ -41,30 +45,40 @@ if [ -z "${ENTITLEMENTS_REL}" ] || [ ! -f "${SRCROOT}/${ENTITLEMENTS_REL}" ]; th
 fi
 ENTITLEMENTS="${SRCROOT}/${ENTITLEMENTS_REL}"
 
-RESOURCES="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources"
+CONTENTS="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}"
+RESOURCES="${CONTENTS}/Resources"
 if [ ! -d "${RESOURCES}" ]; then
     echo "[sign-bundles] Resources dir not found: ${RESOURCES}" >&2
     exit 1
 fi
 
 echo "[sign-bundles] identity: ${IDENTITY}"
-echo "[sign-bundles] scanning ${RESOURCES} for Mach-O binaries"
 
-# Find every candidate file and ask `file(1)` whether it's a Mach-O. This is
-# cheaper than signing every executable bit, and it skips the bash scripts
-# in node_modules/.bin which set +x but aren't Mach-O.
+# ── Collect candidate Mach-O files ───────────────────────────────────────────
+# Resources/ holds everything we install: node binary, the per-arch CPython
+# tree, every .so / .dylib inside site-packages/, plus orchestrator's
+# native node-modules (esbuild, fsevents, etc.). We walk everything and let
+# `file(1)` decide what's Mach-O.
+#
+# NOTE: Sparkle.framework is NOT signed here. Xcode embeds it AFTER this
+# script runs, so on clean builds the framework directory doesn't even
+# exist yet. notarize-app.sh re-signs Sparkle's nested binaries +
+# re-seals the framework + re-signs the outer .app as part of its
+# pre-submit pipeline (see that script for details).
+
 candidates_file="$(mktemp)"
+trap 'rm -f "${candidates_file}"' EXIT
+
+echo "[sign-bundles] scanning ${RESOURCES} for Mach-O binaries"
 find "${RESOURCES}" \
-    \( -path '*/__pycache__' -o -path '*/wheels' \) -prune -o \
+    -path '*/__pycache__' -prune -o \
     \( -name '*.dylib' -o -name '*.so' -o -type f \) -print > "${candidates_file}"
 
-# Sign dylibs/.so first (deepest dependencies), then executables. codesign
-# permits any order for siblings, but keeping it deep-first matches Apple's
-# guidance and makes failures easier to diagnose.
+# Filter to actual Mach-O files. `file -b` is fast and skips the bash scripts
+# in node_modules/.bin that have +x but aren't Mach-O.
 binaries=()
 while IFS= read -r path; do
     if [ ! -f "${path}" ]; then continue; fi
-    # `file -b` is fast; we only care about the magic.
     kind="$(/usr/bin/file -b "${path}" 2>/dev/null || echo "")"
     case "${kind}" in
         *Mach-O*)
@@ -72,12 +86,13 @@ while IFS= read -r path; do
             ;;
     esac
 done < "${candidates_file}"
-rm -f "${candidates_file}"
 
 count=${#binaries[@]}
 echo "[sign-bundles] signing ${count} binaries"
 
-# Sort: dylib/so first, then the rest.
+# Sort the work: dylibs/.so first (deepest dependencies), then everything
+# else. codesign permits any order for siblings, but Apple's guidance is
+# deep-first because it surfaces dependency-chain failures earlier.
 sorted=()
 for b in "${binaries[@]}"; do
     case "${b}" in
