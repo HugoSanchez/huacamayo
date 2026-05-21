@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5D76BBBF2FB9BF9400132604 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5D76BBBE2FB9BF9400132604 /* Sparkle */; };
 		A10000010000000000000001 /* versoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000001 /* versoApp.swift */; };
 		A10000010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000002 /* ContentView.swift */; };
 		A10000010000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000003 /* Assets.xcassets */; };
@@ -23,14 +24,14 @@
 		A10000020000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A10000020000000000000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A10000020000000000000004 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
-		A10000020000000000000005 /* verso.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "verso.entitlements"; sourceTree = "<group>"; };
+		A10000020000000000000005 /* verso.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = verso.entitlements; sourceTree = "<group>"; };
 		A10000020000000000000006 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		A1000002000000000000000C /* ChatWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebView.swift; sourceTree = "<group>"; };
 		A1000002000000000000000D /* chat-ui */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "chat-ui"; sourceTree = "<group>"; };
 		A1000002000000000000000E /* ManagedSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedSessionStore.swift; sourceTree = "<group>"; };
-		A10000020000000000000010 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		A1000002000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A10000030000000000000001 /* verso.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "verso.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000020000000000000010 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
+		A10000030000000000000001 /* verso.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = verso.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -38,6 +39,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5D76BBBF2FB9BF9400132604 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -47,27 +49,27 @@
 		A10000050000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				A10000050000000000000002 /* macos */,
+				A10000050000000000000002 /* desktop/macos */,
 				A10000050000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A10000050000000000000002 /* macos */ = {
+		A10000050000000000000002 /* desktop/macos */ = {
 			isa = PBXGroup;
 			children = (
-					A10000020000000000000001 /* versoApp.swift */,
-					A10000020000000000000002 /* ContentView.swift */,
-					A10000020000000000000006 /* SidecarManager.swift */,
-					A1000002000000000000000C /* ChatWebView.swift */,
-					A1000002000000000000000E /* ManagedSessionStore.swift */,
-					A10000020000000000000010 /* SignInView.swift */,
-					A1000002000000000000000F /* Info.plist */,
-					A1000002000000000000000D /* chat-ui */,
+				A10000020000000000000001 /* versoApp.swift */,
+				A10000020000000000000002 /* ContentView.swift */,
+				A10000020000000000000006 /* SidecarManager.swift */,
+				A1000002000000000000000C /* ChatWebView.swift */,
+				A1000002000000000000000E /* ManagedSessionStore.swift */,
+				A10000020000000000000010 /* SignInView.swift */,
+				A1000002000000000000000F /* Info.plist */,
+				A1000002000000000000000D /* chat-ui */,
 				A10000020000000000000003 /* Assets.xcassets */,
 				A10000020000000000000005 /* verso.entitlements */,
 				A10000050000000000000004 /* Preview Content */,
 			);
-			path = "desktop/macos";
+			path = desktop/macos;
 			sourceTree = "<group>";
 		};
 		A10000050000000000000003 /* Products */ = {
@@ -104,8 +106,8 @@
 			);
 			dependencies = (
 			);
-			name = "verso";
-			productName = "verso";
+			name = verso;
+			productName = verso;
 			productReference = A10000030000000000000001 /* verso.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -133,6 +135,9 @@
 				Base,
 			);
 			mainGroup = A10000050000000000000001;
+			packageReferences = (
+				5D76BBBD2FB9BF9400132604 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			productRefGroup = A10000050000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -141,6 +146,19 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000070000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000004 /* Preview Assets.xcassets in Resources */,
+				A10000010000000000000003 /* Assets.xcassets in Resources */,
+				A1000001000000000000000C /* chat-ui in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		A100000B0000000000000001 /* Build Chat UI */ = {
@@ -190,31 +208,18 @@
 		};
 /* End PBXShellScriptBuildPhase section */
 
-/* Begin PBXResourcesBuildPhase section */
-		A10000070000000000000002 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A10000010000000000000004 /* Preview Assets.xcassets in Resources */,
-				A10000010000000000000003 /* Assets.xcassets in Resources */,
-				A1000001000000000000000C /* chat-ui in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
-
 /* Begin PBXSourcesBuildPhase section */
 		A10000070000000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-					A10000010000000000000002 /* ContentView.swift in Sources */,
-					A10000010000000000000001 /* versoApp.swift in Sources */,
-					A10000010000000000000005 /* SidecarManager.swift in Sources */,
-					A1000001000000000000000B /* ChatWebView.swift in Sources */,
-					A1000001000000000000000D /* ManagedSessionStore.swift in Sources */,
-					A1000001000000000000000F /* SignInView.swift in Sources */,
-				);
+				A10000010000000000000002 /* ContentView.swift in Sources */,
+				A10000010000000000000001 /* versoApp.swift in Sources */,
+				A10000010000000000000005 /* SidecarManager.swift in Sources */,
+				A1000001000000000000000B /* ChatWebView.swift in Sources */,
+				A1000001000000000000000D /* ManagedSessionStore.swift in Sources */,
+				A1000001000000000000000F /* SignInView.swift in Sources */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
@@ -341,7 +346,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "desktop/macos/verso.entitlements";
+				CODE_SIGN_ENTITLEMENTS = desktop/macos/verso.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -355,7 +360,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "xyz.itsverso.app";
+				PRODUCT_BUNDLE_IDENTIFIER = xyz.itsverso.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -367,15 +372,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "desktop/macos/verso.entitlements";
+				CODE_SIGN_ENTITLEMENTS = desktop/macos/verso.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_ASSET_PATHS = "\"desktop/macos/Preview Content\"";
 				DEVELOPMENT_TEAM = 2T2JL5F698;
 				ENABLE_HARDENED_RUNTIME = YES;
-				OTHER_CODE_SIGN_FLAGS = "--timestamp";
-				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"desktop/macos/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = desktop/macos/Info.plist;
@@ -384,8 +388,9 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "xyz.itsverso.app";
+				MARKETING_VERSION = 1.0.1;
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
+				PRODUCT_BUNDLE_IDENTIFIER = xyz.itsverso.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -395,15 +400,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000080000000000000002 /* Build configuration list for PBXProject "verso" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A100000A0000000000000001 /* Debug */,
-				A100000A0000000000000002 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		A10000080000000000000001 /* Build configuration list for PBXNativeTarget "verso" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -413,8 +409,35 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A10000080000000000000002 /* Build configuration list for PBXProject "verso" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A100000A0000000000000001 /* Debug */,
+				A100000A0000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		5D76BBBD2FB9BF9400132604 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5D76BBBE2FB9BF9400132604 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5D76BBBD2FB9BF9400132604 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A10000090000000000000001 /* Project object */;
 }

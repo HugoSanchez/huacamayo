@@ -35,5 +35,11 @@
 	<string></string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUFeedURL</key>
+	<string>https://www.itsverso.xyz/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>GpEYWMJ6pQkdx7GsHJLM4YZGsqcLik5BX0jhqm1yJuc=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

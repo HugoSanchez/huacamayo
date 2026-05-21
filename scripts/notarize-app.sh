@@ -43,6 +43,57 @@ if [ ! -d "${APP_PATH}" ]; then
     exit 1
 fi
 
+# ── Re-sign Sparkle.framework's nested binaries ─────────────────────────────
+# Xcode's "Embed Frameworks" step copies Sparkle.framework into the .app
+# AFTER our build-phase Run Scripts execute, so sign-bundle-binaries.sh
+# can't reach it. Xcode's own final CodeSign signs the framework wrapper
+# but doesn't recurse into Updater.app / Autoupdate / Downloader.xpc /
+# Installer.xpc — those keep Sparkle's ad-hoc signature, which Apple's
+# notary rejects ("not signed with valid Developer ID certificate").
+#
+# We re-sign here, deepest-first, then re-seal each containing bundle so
+# CodeResources manifests reflect the new inner signatures. Finally we
+# re-sign the outer .app because the framework's signature changed.
+IDENTITY="Developer ID Application: Hugo Sanchez (2T2JL5F698)"
+ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/desktop/macos/verso.entitlements"
+SPARKLE="${APP_PATH}/Contents/Frameworks/Sparkle.framework"
+
+if [ -d "${SPARKLE}" ]; then
+    echo "[notarize] re-signing Sparkle.framework nested binaries"
+    sparkle_root="${SPARKLE}/Versions/Current"
+    sign_mach_o=(
+        "${sparkle_root}/Autoupdate"
+        "${sparkle_root}/Updater.app/Contents/MacOS/Updater"
+        "${sparkle_root}/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+        "${sparkle_root}/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+    )
+    for target in "${sign_mach_o[@]}"; do
+        [ -e "${target}" ] || continue
+        /usr/bin/codesign --force --sign "${IDENTITY}" --options runtime --timestamp "${target}" 2>&1 | sed 's/^/[notarize]   /'
+    done
+
+    echo "[notarize] re-sealing Sparkle bundle containers"
+    seal_bundles=(
+        "${sparkle_root}/XPCServices/Downloader.xpc"
+        "${sparkle_root}/XPCServices/Installer.xpc"
+        "${sparkle_root}/Updater.app"
+        "${SPARKLE}"
+    )
+    for target in "${seal_bundles[@]}"; do
+        [ -e "${target}" ] || continue
+        /usr/bin/codesign --force --sign "${IDENTITY}" --options runtime --timestamp "${target}" 2>&1 | sed 's/^/[notarize]   /'
+    done
+
+    echo "[notarize] re-signing outer .app to refresh CodeResources"
+    /usr/bin/codesign \
+        --force \
+        --sign "${IDENTITY}" \
+        --options runtime \
+        --entitlements "${ENTITLEMENTS}" \
+        --timestamp \
+        "${APP_PATH}" 2>&1 | sed 's/^/[notarize]   /'
+fi
+
 # Sanity-check the signature locally before paying for the round trip.
 echo "[notarize] verifying local signature"
 if ! codesign --verify --deep --strict --verbose=2 "${APP_PATH}" 2>&1 | tail -5; then

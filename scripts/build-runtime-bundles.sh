@@ -6,14 +6,16 @@
 # inside Verso.app for Release builds:
 #
 #   desktop/runtime-bundles/
-#   ├── node/bin/node                     Node.js (universal arm64 + x86_64)
-#   ├── orchestrator/                     Source + node_modules, ready to run
-#   ├── python/{arm64,x86_64}/python/...  python-build-standalone (one per arch)
-#   ├── hermes-agent/                     NousResearch/hermes-agent snapshot
-#   ├── wheels/{arm64,x86_64}/*.whl       Pre-downloaded pip wheels for Hermes
-#   ├── hermes-defaults/                  Seed config.yaml + memory templates
-#   └── BUNDLE_VERSION                    Stamp used by the orchestrator to
-#                                         decide when to rebuild the user venv
+#   ├── node/bin/node                              Node.js (universal arm64 + x86_64)
+#   ├── orchestrator/                              Source + node_modules, ready to run
+#   ├── python/arm64/python/...                    python-build-standalone (arm64)
+#   ├── hermes-agent/                              NousResearch/hermes-agent snapshot
+#   ├── site-packages/arm64/                       Pre-installed Hermes + deps
+#   │   ├── site-packages/                           Python packages (add to PYTHONPATH)
+#   │   └── bin/hermes                               Console-script entry (run via python)
+#   ├── hermes-defaults/                           Seed config.yaml + memory templates
+#   └── BUNDLE_VERSION                             Stamp used by the orchestrator to
+#                                                  decide when to invalidate caches
 #
 # This script is needed only for Archive (Release) builds. Cmd+R in Xcode
 # uses the developer's system Node + system Hermes install directly (see
@@ -26,6 +28,8 @@
 #   • Hermes upstream releases a new commit you want to ship
 #
 # Idempotent: each stage no-ops if the right artifact is already present.
+#
+# arm64-only for F&F v1 — see .context/attachments/ff-installation-plan.md.
 
 set -euo pipefail
 
@@ -45,6 +49,18 @@ HERMES_REF="edff2fbe7efd7d1798b6f6116d2e4b55b3ce69f9"
 # and not needed for the macOS UI flow.
 HERMES_EXTRAS="mcp,cli,cron"
 
+# Extra packages we install alongside Hermes. aiohttp is required by Hermes'
+# api_server adapter — the orchestrator talks to Hermes over the HTTP API
+# (API_SERVER_ENABLED=true), so without aiohttp the gateway boots in
+# cron-only mode and the orchestrator can't reach it. Not in mcp/cli/cron
+# extras (only listed under messaging/homeassistant/sms), so we pin it
+# directly. Without this, hermes logs "API Server: aiohttp not installed".
+HERMES_EXTRA_PINS=("aiohttp>=3.9,<4")
+
+# Target architecture(s) we ship. arm64-only for v1 — add "x86_64" back here
+# (and to the per-arch loops below) when we have Intel-Mac friends to support.
+SUPPORTED_ARCHES=("arm64")
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DESKTOP_ROOT="${REPO_ROOT}/desktop"
@@ -53,7 +69,7 @@ NODE_DIR="${BUNDLE_DIR}/node"
 ORCHESTRATOR_BUNDLE="${BUNDLE_DIR}/orchestrator"
 PYTHON_DIR="${BUNDLE_DIR}/python"
 HERMES_BUNDLE="${BUNDLE_DIR}/hermes-agent"
-WHEELS_DIR="${BUNDLE_DIR}/wheels"
+SITE_PACKAGES_DIR="${BUNDLE_DIR}/site-packages"
 DEFAULTS_DIR="${BUNDLE_DIR}/hermes-defaults"
 BUNDLE_VERSION_FILE="${BUNDLE_DIR}/BUNDLE_VERSION"
 
@@ -135,9 +151,8 @@ if [ ! -x "${ORCHESTRATOR_BUNDLE}/node_modules/.bin/tsx" ]; then
 fi
 
 # ── Python (per-arch) ───────────────────────────────────────────────────────
-# python-build-standalone ships a relocatable CPython per architecture. We
-# bundle both and pick at runtime via `uname -m` because Python is not
-# lipo-friendly: many extension modules ship as arch-specific .so files.
+# python-build-standalone ships a relocatable CPython per architecture. The
+# `SUPPORTED_ARCHES` loop downloads the right one(s) — arm64-only for v1.
 
 # Map our short names → python-build-standalone arch slug.
 # (No `declare -A` — macOS ships bash 3.2 which lacks associative arrays.)
@@ -149,7 +164,7 @@ pbs_arch_for() {
     esac
 }
 
-for arch in arm64 x86_64; do
+for arch in "${SUPPORTED_ARCHES[@]}"; do
     target_dir="${PYTHON_DIR}/${arch}"
     bin="${target_dir}/python/bin/python3.11"
     if [ -x "${bin}" ]; then
@@ -184,6 +199,22 @@ for arch in arm64 x86_64; do
     echo "[bundle] python ${arch}: $("${bin}" --version)"
 done
 
+# Wipe any stale per-arch Python dirs from previous (multi-arch) runs. Keeps
+# the bundle clean and prevents lingering x86_64 binaries from confusing
+# notarization or bloating the .app.
+for arch_dir in "${PYTHON_DIR}"/*; do
+    [ -d "${arch_dir}" ] || continue
+    arch_name="$(basename "${arch_dir}")"
+    keep=false
+    for supported in "${SUPPORTED_ARCHES[@]}"; do
+        if [ "${supported}" = "${arch_name}" ]; then keep=true; break; fi
+    done
+    if ! ${keep}; then
+        echo "[bundle] removing stale unused python arch: ${arch_name}"
+        rm -rf "${arch_dir}"
+    fi
+done
+
 # ── Hermes source snapshot ──────────────────────────────────────────────────
 
 needs_hermes_clone=true
@@ -208,95 +239,139 @@ fi
 # (the .git/index we'd ship wouldn't match the user's filesystem anyway).
 rm -rf "${HERMES_BUNDLE}/.git"
 
-# ── Hermes wheels (per-arch, offline-installable) ───────────────────────────
-# pip download with --platform + --only-binary=:all: pulls binary wheels for
-# the target macOS arch. Pure-Python deps fall back to their `py3-none-any`
-# wheels. First launch installs from this dir with --no-index so users never
-# hit PyPI.
-#
-# We use a temporary native venv to run `pip download` — host pip works fine
-# even though the target wheels are for a different arch.
+# ── Pre-installed Hermes + deps (per-arch site-packages) ────────────────────
+# Instead of shipping raw wheels and pip-installing on first launch, we
+# install Hermes into a throwaway venv at bundle time using the bundled
+# Python, then copy out site-packages/ and bin/hermes. The runtime can then
+# point PYTHONPATH at site-packages/ and exec the bundled python on the
+# bin/hermes script directly — no first-launch network, no pip, and (the
+# whole reason for this approach) every .so on disk is loose and signable
+# so Apple notarization passes.
 
-mkdir -p "${WHEELS_DIR}"
+mkdir -p "${SITE_PACKAGES_DIR}"
 
 pip_tmp="$(mktemp -d)"
 trap 'rm -rf "${pip_tmp}"' EXIT
 
-# Bootstrap a tiny "host" venv just for pip download (uses the bundled arm64
-# Python on Apple Silicon dev machines; either arch works because we'll
-# cross-download both wheel sets from it).
-host_python="${PYTHON_DIR}/arm64/python/bin/python3.11"
-if [ ! -x "${host_python}" ]; then
-    host_python="${PYTHON_DIR}/x86_64/python/bin/python3.11"
-fi
-"${host_python}" -m venv "${pip_tmp}/venv"
-"${pip_tmp}/venv/bin/pip" install --quiet --upgrade pip
-
-# Map our arch name → pip's --platform tag. Cover several macOS minor
-# versions so pip picks a wheel even when a package only publishes a newer
-# tag like `macosx_14_0_arm64`.
-pip_platform_flags_for() {
-    case "$1" in
-        arm64)
-            echo "--platform macosx_11_0_arm64 --platform macosx_12_0_arm64 --platform macosx_13_0_arm64 --platform macosx_14_0_arm64 --platform macosx_15_0_arm64"
-            ;;
-        x86_64)
-            echo "--platform macosx_11_0_x86_64 --platform macosx_12_0_x86_64 --platform macosx_13_0_x86_64 --platform macosx_14_0_x86_64 --platform macosx_15_0_x86_64"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
-}
-
-expected_stamp="${HERMES_REF}|${HERMES_EXTRAS}|${PYTHON_VERSION}"
-
-# Step 1: build hermes-agent into a pure-Python wheel (universal — Hermes
-# itself ships no compiled code). Stashed in pip_tmp/hermes_wheel/.
+# Step 1: build the hermes-agent wheel once from our snapshotted source.
+# Reused across arches (it's pure-Python).
 echo "[bundle] building hermes-agent wheel from snapshot"
 hermes_wheel_tmp="${pip_tmp}/hermes_wheel"
 mkdir -p "${hermes_wheel_tmp}"
-"${pip_tmp}/venv/bin/pip" wheel \
+
+# Bootstrap a host venv with pip — we use the bundled arm64 Python so the
+# wheel-build environment exactly matches what the app will use at runtime.
+host_python="${PYTHON_DIR}/arm64/python/bin/python3.11"
+if [ ! -x "${host_python}" ]; then
+    # Fall back to whatever bundled Python we have if arm64 isn't (shouldn't
+    # happen with the current SUPPORTED_ARCHES, but cheap to keep).
+    for arch in "${SUPPORTED_ARCHES[@]}"; do
+        candidate="${PYTHON_DIR}/${arch}/python/bin/python3.11"
+        if [ -x "${candidate}" ]; then host_python="${candidate}"; break; fi
+    done
+fi
+"${host_python}" -m venv "${pip_tmp}/host_venv"
+"${pip_tmp}/host_venv/bin/pip" install --quiet --upgrade pip
+"${pip_tmp}/host_venv/bin/pip" wheel \
     --quiet \
     --no-deps \
     --wheel-dir "${hermes_wheel_tmp}" \
     "${HERMES_BUNDLE}"
 
-# Step 2: for each arch, copy in the hermes wheel + `pip download` its deps
-# cross-arch. We point pip at the hermes wheel via --find-links so it doesn't
-# try to rebuild from source (which would fail with --only-binary=:all:).
-for arch in arm64 x86_64; do
-    target="${WHEELS_DIR}/${arch}"
+# Stamp keyed on inputs that would force a rebuild. Includes the extra pins
+# so adding/removing/changing them re-triggers an install.
+expected_stamp="${HERMES_REF}|${HERMES_EXTRAS}|${HERMES_EXTRA_PINS[*]}|${PYTHON_VERSION}"
+
+# Step 2: per-arch venv install + copy out. We pip-install hermes-agent into
+# a throwaway venv per arch using that arch's Python, then rsync site-packages/
+# and bin/hermes out into our bundle layout.
+for arch in "${SUPPORTED_ARCHES[@]}"; do
+    target="${SITE_PACKAGES_DIR}/${arch}"
     stamp="${target}/.stamp"
     if [ -f "${stamp}" ] && [ "$(cat "${stamp}")" = "${expected_stamp}" ]; then
-        wheel_count=$(find "${target}" -name '*.whl' | wc -l | tr -d ' ')
-        echo "[bundle] wheels (${arch}) already current (${wheel_count} wheels)"
+        sp_count=$(find "${target}/site-packages" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')
+        echo "[bundle] site-packages (${arch}) already current (${sp_count} top-level entries)"
         continue
     fi
 
-    echo "[bundle] downloading dep wheels for ${arch}"
+    echo "[bundle] installing hermes-agent[${HERMES_EXTRAS}] into ${arch} venv"
     rm -rf "${target}"
-    mkdir -p "${target}"
+    mkdir -p "${target}/site-packages" "${target}/bin"
 
-    cp "${hermes_wheel_tmp}"/hermes_agent-*.whl "${target}/"
+    arch_python="${PYTHON_DIR}/${arch}/python/bin/python3.11"
+    if [ ! -x "${arch_python}" ]; then
+        echo "[bundle] ERROR: python for arch ${arch} missing at ${arch_python}" >&2
+        exit 1
+    fi
 
-    pip_platform_flags="$(pip_platform_flags_for "${arch}")"
-    # shellcheck disable=SC2086  # we want the platform flags word-split
-    "${pip_tmp}/venv/bin/pip" download \
+    # Cross-arch install on Apple Silicon hosts requires Rosetta. Today
+    # SUPPORTED_ARCHES=(arm64) so this branch never fires, but it's here for
+    # the day we add x86_64 back.
+    prefix=""
+    host_arch="$(uname -m)"
+    if [ "${arch}" != "${host_arch}" ] && [ "${arch}" = "x86_64" ] && [ "${host_arch}" = "arm64" ]; then
+        prefix="arch -x86_64"
+    fi
+
+    venv_tmp="${pip_tmp}/venv_${arch}"
+    rm -rf "${venv_tmp}"
+    ${prefix} "${arch_python}" -m venv "${venv_tmp}"
+    ${prefix} "${venv_tmp}/bin/pip" install --quiet --upgrade pip
+    ${prefix} "${venv_tmp}/bin/pip" install \
         --quiet \
-        --dest "${target}" \
         --find-links "${hermes_wheel_tmp}" \
-        --python-version 3.11 \
-        --implementation cp \
-        --abi cp311 \
-        ${pip_platform_flags} \
-        --only-binary=:all: \
-        "hermes-agent[${HERMES_EXTRAS}]"
+        "hermes-agent[${HERMES_EXTRAS}]" \
+        "${HERMES_EXTRA_PINS[@]}"
 
-    wheel_count=$(find "${target}" -name '*.whl' | wc -l | tr -d ' ')
-    echo "[bundle] wheels (${arch}): ${wheel_count} files"
+    # Copy the venv's site-packages out flat. Use rsync so we preserve perms /
+    # symlinks (some packages ship symlinked .so aliases).
+    venv_site="${venv_tmp}/lib/python3.11/site-packages"
+    if [ ! -d "${venv_site}" ]; then
+        echo "[bundle] ERROR: expected venv site-packages at ${venv_site}" >&2
+        exit 1
+    fi
+    rsync -a --delete "${venv_site}/" "${target}/site-packages/"
+
+    # Drop __pycache__ — Python regenerates these at runtime and Apple gets
+    # noisy about per-build path differences inside .pyc magic numbers.
+    find "${target}/site-packages" -type d -name '__pycache__' -prune -exec rm -rf {} +
+
+    # Copy bin/hermes (the pip-generated console-script). Its shebang points
+    # at the *temporary* venv's python and would break after copy; we don't
+    # care because the runtime invokes it as `python3.11 bin/hermes ...`,
+    # which makes the shebang irrelevant.
+    if [ ! -x "${venv_tmp}/bin/hermes" ]; then
+        echo "[bundle] ERROR: expected venv bin/hermes at ${venv_tmp}/bin/hermes" >&2
+        exit 1
+    fi
+    cp "${venv_tmp}/bin/hermes" "${target}/bin/hermes"
+    chmod +x "${target}/bin/hermes"
+
+    sp_count=$(find "${target}/site-packages" -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ')
+    echo "[bundle] site-packages (${arch}): ${sp_count} top-level entries"
     echo "${expected_stamp}" > "${stamp}"
 done
+
+# Wipe any stale arch dirs from previous (multi-arch) runs.
+for arch_dir in "${SITE_PACKAGES_DIR}"/*; do
+    [ -d "${arch_dir}" ] || continue
+    arch_name="$(basename "${arch_dir}")"
+    keep=false
+    for supported in "${SUPPORTED_ARCHES[@]}"; do
+        if [ "${supported}" = "${arch_name}" ]; then keep=true; break; fi
+    done
+    if ! ${keep}; then
+        echo "[bundle] removing stale unused site-packages arch: ${arch_name}"
+        rm -rf "${arch_dir}"
+    fi
+done
+
+# Wipe the legacy wheels/ dir if it's still hanging around from before this
+# script switched from wheels-at-first-launch to pre-installed site-packages.
+if [ -d "${BUNDLE_DIR}/wheels" ]; then
+    echo "[bundle] removing legacy wheels/ directory (replaced by site-packages/)"
+    rm -rf "${BUNDLE_DIR}/wheels"
+fi
 
 rm -rf "${pip_tmp}"
 
@@ -328,10 +403,11 @@ mkdir -p "${DEFAULTS_DIR}/memories"
 : > "${DEFAULTS_DIR}/memories/USER.md"
 
 # ── Bundle version stamp ────────────────────────────────────────────────────
-# The orchestrator reads this on first spawn and compares to a stamp written
-# beside the user venv. Mismatch ⇒ rebuild venv (e.g. Hermes upgraded).
+# The orchestrator reads this and surfaces it in diagnostics. It used to also
+# trigger first-launch venv rebuilds; now that we ship the venv pre-installed,
+# the stamp is purely informational.
 
-echo "node=${NODE_VERSION} python=${PYTHON_VERSION} hermes=${HERMES_REF} extras=${HERMES_EXTRAS}" \
+echo "node=${NODE_VERSION} python=${PYTHON_VERSION} hermes=${HERMES_REF} extras=${HERMES_EXTRAS} arches=${SUPPORTED_ARCHES[*]}" \
     > "${BUNDLE_VERSION_FILE}"
 
 bundle_size=$(du -sh "${BUNDLE_DIR}" | cut -f1)

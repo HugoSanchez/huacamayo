@@ -557,33 +557,47 @@ final class SidecarManager: ObservableObject {
     }
 
     /// Wire env vars that tell the orchestrator where the bundled Hermes
-    /// runtime lives, plus the per-user runtime directory the orchestrator
-    /// creates the venv inside. Only fires when the bundled artifacts are
-    /// actually present (Release builds; Debug builds leave the env clean
-    /// and HermesSupervisor falls back to the ~/.hermes install).
+    /// runtime lives. Only fires when the bundled artifacts are actually
+    /// present (Release builds; Debug builds leave the env clean and
+    /// HermesSupervisor falls back to the ~/.hermes install).
+    ///
+    /// As of the venv-bundling refactor, the runtime ships pre-installed
+    /// inside Resources/site-packages/<arch>/ — no first-launch pip install
+    /// and no per-user runtime venv directory. The legacy VERSO_RUNTIME_DIR
+    /// env var is no longer set; the orchestrator reads
+    /// VERSO_BUNDLED_SITE_PACKAGES_DIR instead.
     private static func applyBundledRuntimeEnv(_ env: inout [String: String]) {
         guard let resources = Bundle.main.resourcePath else { return }
         let pythonDir = (resources as NSString).appendingPathComponent("python")
-        let wheelsDir = (resources as NSString).appendingPathComponent("wheels")
+        let sitePackagesDir = (resources as NSString).appendingPathComponent("site-packages")
         let defaultsDir = (resources as NSString).appendingPathComponent("hermes-defaults")
         let versionFile = (resources as NSString).appendingPathComponent("BUNDLE_VERSION")
         let fm = FileManager.default
         guard fm.fileExists(atPath: pythonDir),
-              fm.fileExists(atPath: wheelsDir),
+              fm.fileExists(atPath: sitePackagesDir),
               fm.fileExists(atPath: defaultsDir) else {
             return
         }
 
         let appSupport = (NSHomeDirectory() as NSString)
             .appendingPathComponent("Library/Application Support/Verso")
-        let runtimeDir = (appSupport as NSString).appendingPathComponent("runtime")
         let hermesHome = (appSupport as NSString).appendingPathComponent("hermes-home")
 
         env["VERSO_BUNDLED_PYTHON_DIR"] = pythonDir
-        env["VERSO_BUNDLED_WHEELS_DIR"] = wheelsDir
+        env["VERSO_BUNDLED_SITE_PACKAGES_DIR"] = sitePackagesDir
         env["VERSO_BUNDLED_DEFAULTS"] = defaultsDir
-        env["VERSO_RUNTIME_DIR"] = runtimeDir
         env["VERSO_HERMES_HOME"] = hermesHome
+
+        // CRITICAL: prevent Python from writing __pycache__/*.pyc files into
+        // the signed .app bundle on first launch. The bundle is read-only by
+        // Gatekeeper convention — any post-sign mutation breaks the code
+        // signature and the next codesign --verify --deep fails with "file
+        // added". This propagates to every Python child the orchestrator
+        // spawns (Hermes gateway, verso MCP server, Codex auth helper, ...)
+        // because they all inherit the orchestrator's environment. Cost: a
+        // small one-time-per-process import slowdown the first time each
+        // module is loaded; negligible for a desktop app.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
 
         if let bundleVersion = try? String(contentsOfFile: versionFile, encoding: .utf8) {
             env["VERSO_BUNDLE_VERSION"] = bundleVersion.trimmingCharacters(in: .whitespacesAndNewlines)
