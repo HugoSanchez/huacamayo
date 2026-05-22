@@ -79,7 +79,6 @@ struct ChatWebView: NSViewRepresentable {
     let onSkillsCatalogStateChange: ((Bool) -> Void)?
     let onCronsChanged: (() -> Void)?
     let onConnectionsChanged: (() -> Void)?
-    let onSessionsChanged: (() -> Void)?
     let onSkillsChanged: (() -> Void)?
     let onSignOutRequested: (() -> Void)?
     /// Single consolidated JS→Swift channel. Future home for every action
@@ -94,7 +93,6 @@ struct ChatWebView: NSViewRepresentable {
             onSkillsCatalogStateChange: onSkillsCatalogStateChange,
             onCronsChanged: onCronsChanged,
             onConnectionsChanged: onConnectionsChanged,
-            onSessionsChanged: onSessionsChanged,
             onSkillsChanged: onSkillsChanged,
             onSignOutRequested: onSignOutRequested,
             onShellAction: onShellAction
@@ -268,7 +266,6 @@ struct ChatWebView: NSViewRepresentable {
         var onSkillsCatalogStateChange: ((Bool) -> Void)?
         var onCronsChanged: (() -> Void)?
         var onConnectionsChanged: (() -> Void)?
-        var onSessionsChanged: (() -> Void)?
         var onSkillsChanged: (() -> Void)?
         var onSignOutRequested: (() -> Void)?
         var onShellAction: ((ShellAction) -> Void)?
@@ -293,7 +290,6 @@ struct ChatWebView: NSViewRepresentable {
             onSkillsCatalogStateChange: ((Bool) -> Void)?,
             onCronsChanged: (() -> Void)?,
             onConnectionsChanged: (() -> Void)?,
-            onSessionsChanged: (() -> Void)?,
             onSkillsChanged: (() -> Void)?,
             onSignOutRequested: (() -> Void)?,
             onShellAction: ((ShellAction) -> Void)?
@@ -302,7 +298,6 @@ struct ChatWebView: NSViewRepresentable {
             self.onSkillsCatalogStateChange = onSkillsCatalogStateChange
             self.onCronsChanged = onCronsChanged
             self.onConnectionsChanged = onConnectionsChanged
-            self.onSessionsChanged = onSessionsChanged
             self.onSkillsChanged = onSkillsChanged
             self.onSignOutRequested = onSignOutRequested
             self.onShellAction = onShellAction
@@ -570,13 +565,6 @@ struct ChatWebView: NSViewRepresentable {
             if type == "connectionsChanged" {
                 DispatchQueue.main.async { [onConnectionsChanged] in
                     onConnectionsChanged?()
-                }
-                return
-            }
-
-            if type == "sessionsChanged" {
-                DispatchQueue.main.async { [onSessionsChanged] in
-                    onSessionsChanged?()
                 }
                 return
             }

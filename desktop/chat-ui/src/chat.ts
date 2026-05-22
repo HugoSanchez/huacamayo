@@ -15,7 +15,12 @@ let sidecarPort: number | null = null;
 // listens via WKScriptMessageHandler('chatBridge') and refetches the
 // corresponding endpoint. Using this on every mutating helper means the
 // sidebar stays in sync without a polling timer.
-function notifyHost(type: 'sessionsChanged' | 'skillsChanged' | 'connectionsChanged'): void {
+//
+// Session mutations no longer use this — they post `ShellAction.sessionMutated`
+// via `postShellAction` instead, which Swift's `handleShellAction` routes
+// through the consolidated channel. Only `skillsChanged` remains until the
+// skills/pins mutators migrate too.
+function notifyHost(type: 'skillsChanged'): void {
   window.webkit?.messageHandlers?.chatBridge?.postMessage({ type });
 }
 
@@ -42,7 +47,6 @@ export async function createChatSession(title?: string): Promise<ChatSessionSumm
     throw new Error(await readError(res, 'Failed to create chat session'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
-  notifyHost('sessionsChanged');
   return body.session;
 }
 
@@ -63,7 +67,6 @@ export async function archiveChatSession(sessionId: string): Promise<ChatSession
     throw new Error(await readError(res, 'Failed to archive chat session'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
-  notifyHost('sessionsChanged');
   return body.session;
 }
 
@@ -75,7 +78,6 @@ export async function unarchiveChatSession(sessionId: string): Promise<ChatSessi
     throw new Error(await readError(res, 'Failed to restore chat session'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
-  notifyHost('sessionsChanged');
   return body.session;
 }
 
