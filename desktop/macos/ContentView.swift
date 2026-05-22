@@ -108,6 +108,11 @@ struct ContentView: View {
     @State private var crons: [SidebarCron] = []
     @State private var pendingCronOpen: CronOpenRequest?
     @State private var pendingSettingsOpen: SettingsOpenRequest?
+    // Bumped after a Swift-side session mutation (rename/archive/unarchive)
+    // so ChatWebView nudges the chat-ui to refresh its sessions cache. Without
+    // this, renaming a session in the leftbar didn't propagate to the chat
+    // header while it was the active chat.
+    @State private var sessionsChangedToken: UUID?
     @State private var hasCompletedInitialSelection = false
     @State private var isSystemAsleep = false
 
@@ -244,6 +249,7 @@ struct ContentView: View {
                 isSkillsCatalogOpen: isSkillsCatalogExpanded,
                 pendingCronOpen: pendingCronOpen,
                 pendingSettingsOpen: pendingSettingsOpen,
+                sessionsChangedToken: sessionsChangedToken,
                 onSessionStateChange: handleWebSessionStateChange,
                 onCatalogStateChange: { open in
                     isConnectionsCatalogExpanded = open
@@ -517,6 +523,7 @@ struct ContentView: View {
             let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
             sessions = sortSessions(replacing(decoded.session, in: sessions))
             setSelectedSession(decoded.session.id)
+            sessionsChangedToken = UUID()
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
@@ -545,6 +552,7 @@ struct ContentView: View {
             if selectedSessionId == decoded.session.id {
                 setSelectedSession(nil)
             }
+            sessionsChangedToken = UUID()
             sessionError = nil
             showSidebarToast("Session archived")
         } catch {
@@ -575,6 +583,7 @@ struct ContentView: View {
             if selectedSessionId == decoded.session.id {
                 setSelectedSession(decoded.session.id)
             }
+            sessionsChangedToken = UUID()
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
@@ -600,6 +609,7 @@ struct ContentView: View {
             let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
             sessions = sortSessions(replacing(decoded.session, in: sessions))
             setSelectedSession(decoded.session.id)
+            sessionsChangedToken = UUID()
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription

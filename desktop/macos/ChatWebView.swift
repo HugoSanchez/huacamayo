@@ -12,6 +12,9 @@ struct ChatWebView: NSViewRepresentable {
     let isSkillsCatalogOpen: Bool
     let pendingCronOpen: CronOpenRequest?
     let pendingSettingsOpen: SettingsOpenRequest?
+    // Nonced token: bumped by ContentView after a Swift-side session mutation
+    // (rename, archive, …) so the chat-ui refreshes its own sessions cache.
+    let sessionsChangedToken: UUID?
     let onSessionStateChange: ((String?) -> Void)?
     let onCatalogStateChange: ((Bool) -> Void)?
     let onSkillsCatalogStateChange: ((Bool) -> Void)?
@@ -102,6 +105,9 @@ struct ChatWebView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
 
@@ -176,6 +182,16 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
+        // Sessions-changed nudges follow the same nonced-token pattern. Fires
+        // after a Swift-side mutation (rename, archive, …) so the chat-ui
+        // refreshes its own sessions cache and updates the header title.
+        if let token = sessionsChangedToken, token != context.coordinator.lastInjectedSessionsChangedToken {
+            if context.coordinator.pageLoaded {
+                context.coordinator.injectSessionsChanged()
+            }
+            context.coordinator.lastInjectedSessionsChangedToken = token
+        }
+
         // Update color scheme
         if isDarkMode != context.coordinator.lastDarkMode {
             context.coordinator.lastDarkMode = isDarkMode
@@ -209,6 +225,7 @@ struct ChatWebView: NSViewRepresentable {
         var pendingCronOpen: CronOpenRequest?
         var lastInjectedSettingsToken: UUID?
         var pendingSettingsOpen: SettingsOpenRequest?
+        var lastInjectedSessionsChangedToken: UUID?
         var lastDarkMode: Bool?
         var pageLoaded = false
 
@@ -409,6 +426,14 @@ struct ChatWebView: NSViewRepresentable {
             lastInjectedCronToken = request.token
         }
 
+        func injectSessionsChanged() {
+            guard let webView else { return }
+            webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('verso:sessions-changed'));",
+                completionHandler: nil
+            )
+        }
+
         func injectOpenSettings(_ request: SettingsOpenRequest) {
             guard let webView else { return }
             let js = """
@@ -512,6 +537,13 @@ struct ChatWebView: NSViewRepresentable {
             if type == "signOut" {
                 DispatchQueue.main.async { [onSignOutRequested] in
                     onSignOutRequested?()
+                }
+                return
+            }
+
+            if type == "notifyResponseReady" {
+                DispatchQueue.main.async {
+                    AppDelegate.shared?.notifyResponseReady()
                 }
                 return
             }
