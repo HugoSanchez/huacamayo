@@ -256,9 +256,6 @@ struct ContentView: View {
                 onConnectionsChanged: {
                     Task { await refreshConnections() }
                 },
-                onSessionsChanged: {
-                    Task { await refreshSessions() }
-                },
                 onSkillsChanged: {
                     Task { await refreshSkills() }
                 },
