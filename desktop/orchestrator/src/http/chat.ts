@@ -7,7 +7,6 @@ import {
   type ChatSessionRecord,
   type ChatSessionSummary,
 } from './chat-store.ts';
-import { HermesSessionsClient } from './hermes-sessions.ts';
 import { HermesSupervisor, type HermesGatewayConfig } from './hermes-supervisor.ts';
 import {
   buildSkillInvocationPrompt,
@@ -69,7 +68,7 @@ export function buildChatRoutes(
     }),
 
     route('GET', '/chat/sessions', async (_req, res) => {
-      const sessions = await hydrateSessionSummaries(store, hermes);
+      const sessions = hydrateSessionSummaries(store);
       json(res, 200, { sessions });
     }),
 
@@ -86,7 +85,7 @@ export function buildChatRoutes(
       if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
-      const session = await hydrateSessionSummary(record, store, hermes);
+      const session = hydrateSessionSummary(record, store);
       json(res, 200, { session });
     }),
 
@@ -95,7 +94,7 @@ export function buildChatRoutes(
       if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
-      const messages = await hydrateSessionMessages(record, store, hermes);
+      const messages = hydrateSessionMessages(record, store);
       json(res, 200, { messages });
     }),
 
@@ -112,7 +111,7 @@ export function buildChatRoutes(
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
 
-      const session = await hydrateSessionSummary(record, store, hermes);
+      const session = hydrateSessionSummary(record, store);
       json(res, 200, { session });
     }),
 
@@ -121,7 +120,7 @@ export function buildChatRoutes(
       if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
-      const session = await hydrateSessionSummary(record, store, hermes);
+      const session = hydrateSessionSummary(record, store);
       json(res, 200, { session });
     }),
 
@@ -130,7 +129,7 @@ export function buildChatRoutes(
       if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
-      const session = await hydrateSessionSummary(record, store, hermes);
+      const session = hydrateSessionSummary(record, store);
       json(res, 200, { session });
     }),
 
@@ -173,7 +172,7 @@ export function buildChatRoutes(
         }
       }
 
-      const session = await hydrateSessionSummary(record, store, hermes);
+      const session = hydrateSessionSummary(record, store);
 
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -315,58 +314,27 @@ function formatCronContextLines(cron: HermesCronJob): string[] {
   return lines;
 }
 
-async function hydrateSessionSummaries(store: ChatStore, hermes: HermesSupervisor): Promise<ChatSessionSummary[]> {
-  const records = store.listSessionRecords();
-  const client = await maybeCreateHermesSessionsClient(records, hermes);
-  return Promise.all(records.map((record) => hydrateSessionSummaryRecord(record, store, client)));
+function hydrateSessionSummaries(store: ChatStore): ChatSessionSummary[] {
+  return store.listSessionRecords().map((record) => hydrateSessionSummaryRecord(record, store));
 }
 
-async function hydrateSessionSummary(
+function hydrateSessionSummary(record: ChatSessionRecord, store: ChatStore): ChatSessionSummary {
+  return hydrateSessionSummaryRecord(record, store);
+}
+
+function hydrateSessionMessages(record: ChatSessionRecord, store: ChatStore): ChatMessageRecord[] {
+  return store.getMessages(record.id) ?? [];
+}
+
+function hydrateSessionSummaryRecord(
   record: ChatSessionRecord,
   store: ChatStore,
-  hermes: HermesSupervisor,
-): Promise<ChatSessionSummary> {
-  const client = await maybeCreateHermesSessionsClient([record], hermes);
-  return hydrateSessionSummaryRecord(record, store, client);
-}
-
-async function hydrateSessionMessages(
-  record: ChatSessionRecord,
-  store: ChatStore,
-  hermes: HermesSupervisor,
-): Promise<ChatMessageRecord[]> {
-  const client = await maybeCreateHermesSessionsClient([record], hermes);
-  return loadSessionMessages(record, store, client);
-}
-
-async function maybeCreateHermesSessionsClient(
-  records: ChatSessionRecord[],
-  hermes: HermesSupervisor,
-): Promise<HermesSessionsClient | null> {
-  if (!records.some((record) => record.hermesSessionId)) return null;
-
-  try {
-    const config = await hermes.ensureReady();
-    return new HermesSessionsClient(config.baseUrl);
-  } catch {
-    return null;
-  }
-}
-
-async function hydrateSessionSummaryRecord(
-  record: ChatSessionRecord,
-  store: ChatStore,
-  client: HermesSessionsClient | null,
-): Promise<ChatSessionSummary> {
-  const [detail, messages] = await Promise.all([
-    loadHermesSessionDetail(record, client),
-    loadSessionMessages(record, store, client),
-  ]);
+): ChatSessionSummary {
+  const messages = store.getMessages(record.id) ?? [];
   const lastMessage = messages[messages.length - 1];
   const updatedAt = [
     record.updatedAt,
     lastMessage?.createdAt ?? null,
-    timestampToIso(detail?.last_active) ?? null,
   ]
     .filter(Boolean)
     .sort()
@@ -374,69 +342,13 @@ async function hydrateSessionSummaryRecord(
 
   return {
     id: record.id,
-    title: resolveSessionTitle(record, detail),
+    title: record.title,
     createdAt: record.createdAt,
     updatedAt,
     archivedAt: record.archivedAt,
     messageCount: messages.length,
     lastMessagePreview: lastMessage ? preview(lastMessage.content) : null,
   };
-}
-
-async function loadSessionMessages(
-  record: ChatSessionRecord,
-  store: ChatStore,
-  _client: HermesSessionsClient | null,
-): Promise<ChatMessageRecord[]> {
-  return store.getMessages(record.id) ?? [];
-}
-
-async function loadHermesVisibleMessages(
-  record: ChatSessionRecord,
-  client: HermesSessionsClient | null,
-): Promise<ChatMessageRecord[]> {
-  if (!record.hermesSessionId || !client) return [];
-
-  try {
-    const messages = await client.getSessionMessages(record.hermesSessionId);
-    if (!messages) return [];
-
-    return messages
-      .filter((message) =>
-        (message.role === 'user' || message.role === 'assistant')
-        && typeof message.content === 'string'
-        && message.content.trim().length > 0)
-      .map((message) => ({
-        id: `hermes:${record.hermesSessionId}:${message.id}`,
-        sessionId: record.id,
-        role: message.role as 'user' | 'assistant',
-        content: message.content ?? '',
-        createdAt: timestampToIso(message.timestamp) ?? new Date().toISOString(),
-      }));
-  } catch {
-    return [];
-  }
-}
-
-async function loadHermesSessionDetail(
-  record: ChatSessionRecord,
-  client: HermesSessionsClient | null,
-): Promise<{ title?: string | null; last_active?: number } | null> {
-  if (!record.hermesSessionId || !client) return null;
-
-  try {
-    return await client.getSession(record.hermesSessionId);
-  } catch {
-    return null;
-  }
-}
-
-function resolveSessionTitle(
-  record: ChatSessionRecord,
-  detail: { title?: string | null } | null,
-): string {
-  const hermesTitle = typeof detail?.title === 'string' ? detail.title.trim() : '';
-  return hermesTitle || record.title;
 }
 
 async function runHermesMessage(
@@ -464,7 +376,6 @@ async function runHermesMessage(
   }
 
   const config = await hermes.ensureReady(controller.signal);
-  const client = new HermesSessionsClient(config.baseUrl);
 
   activeRequest = {
     sessionId: opts.session.id,
@@ -579,10 +490,9 @@ async function runHermesMessage(
 
       streamedText = '';
       finalText = '';
-      const recoveryMessages = await loadHermesVisibleMessages({
-        ...opts.sessionRecord,
-        hermesSessionId: linkedHermesSessionId,
-      }, client);
+      // Hermes evicted the previous_response_id from its LRU. Rebuild
+      // context from our durable copy in `local_messages` and retry.
+      const recoveryMessages = store.getMessages(opts.session.id) ?? [];
 
       await streamHermesConversation(config, {
         conversation: opts.session.id,

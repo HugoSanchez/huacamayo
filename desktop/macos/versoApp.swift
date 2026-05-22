@@ -78,11 +78,27 @@ private struct RootView: View {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Shared reference for code that can't reach the delegate via
+    /// `NSApp.delegate` — SwiftUI's `@NSApplicationDelegateAdaptor` wraps our
+    /// instance inside an internal `SwiftUI.AppDelegate`, so the usual cast
+    /// returns nil. ChatWebView's bridge handler uses this to call into us.
+    static private(set) weak var shared: AppDelegate?
+
     /// Set by versoApp once the sidecar manager is constructed. We grab a
     /// reference here so applicationWillTerminate can stop it cleanly even
     /// when the @StateObject's deinit doesn't run (which is most of the time
     /// on macOS app shutdown).
     weak var sidecar: SidecarManager?
+
+    /// Number of chat responses that completed while the app was in the
+    /// background. Drives the dock badge; cleared whenever the user brings
+    /// the app back to the foreground.
+    private var pendingResponseCount = 0
+
+    override init() {
+        super.init()
+        AppDelegate.shared = self
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Configure already-created windows immediately.
@@ -95,6 +111,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWindow.didBecomeMainNotification,
             object: nil
         )
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        pendingResponseCount = 0
+        NSApp.dockTile.badgeLabel = nil
+    }
+
+    /// Called by ChatWebView when a chat stream finishes. Only nudges the
+    /// user when they're in another app — silent when verso is frontmost.
+    func notifyResponseReady() {
+        guard !NSApp.isActive else { return }
+        pendingResponseCount += 1
+        NSApp.dockTile.badgeLabel = String(pendingResponseCount)
+        NSSound(named: "Tink")?.play()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

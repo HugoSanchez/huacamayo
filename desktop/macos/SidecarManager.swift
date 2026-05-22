@@ -557,27 +557,22 @@ final class SidecarManager: ObservableObject {
     }
 
     /// Wire env vars that tell the orchestrator where the bundled Hermes
-    /// runtime lives. Only fires when the bundled artifacts are actually
-    /// present (Release builds; Debug builds leave the env clean and
-    /// HermesSupervisor falls back to the ~/.hermes install).
+    /// runtime lives. Release builds read these from Resources/ (populated by
+    /// copy-runtime-bundles.sh). Debug builds fall back to the repo's
+    /// desktop/runtime-bundles/ — built once via scripts/build-runtime-bundles.sh
+    /// — so Cmd+R works without an ~/.hermes install or scheme env vars.
     ///
     /// As of the venv-bundling refactor, the runtime ships pre-installed
-    /// inside Resources/site-packages/<arch>/ — no first-launch pip install
-    /// and no per-user runtime venv directory. The legacy VERSO_RUNTIME_DIR
-    /// env var is no longer set; the orchestrator reads
-    /// VERSO_BUNDLED_SITE_PACKAGES_DIR instead.
+    /// inside site-packages/<arch>/ — no first-launch pip install and no
+    /// per-user runtime venv directory. The legacy VERSO_RUNTIME_DIR env var
+    /// is no longer set; the orchestrator reads VERSO_BUNDLED_SITE_PACKAGES_DIR
+    /// instead.
     private static func applyBundledRuntimeEnv(_ env: inout [String: String]) {
-        guard let resources = Bundle.main.resourcePath else { return }
-        let pythonDir = (resources as NSString).appendingPathComponent("python")
-        let sitePackagesDir = (resources as NSString).appendingPathComponent("site-packages")
-        let defaultsDir = (resources as NSString).appendingPathComponent("hermes-defaults")
-        let versionFile = (resources as NSString).appendingPathComponent("BUNDLE_VERSION")
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: pythonDir),
-              fm.fileExists(atPath: sitePackagesDir),
-              fm.fileExists(atPath: defaultsDir) else {
-            return
-        }
+        guard let bundleRoot = resolveBundleRoot() else { return }
+        let pythonDir = (bundleRoot as NSString).appendingPathComponent("python")
+        let sitePackagesDir = (bundleRoot as NSString).appendingPathComponent("site-packages")
+        let defaultsDir = (bundleRoot as NSString).appendingPathComponent("hermes-defaults")
+        let versionFile = (bundleRoot as NSString).appendingPathComponent("BUNDLE_VERSION")
 
         let appSupport = (NSHomeDirectory() as NSString)
             .appendingPathComponent("Library/Application Support/Verso")
@@ -602,6 +597,36 @@ final class SidecarManager: ObservableObject {
         if let bundleVersion = try? String(contentsOfFile: versionFile, encoding: .utf8) {
             env["VERSO_BUNDLE_VERSION"] = bundleVersion.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+    }
+
+    /// Locate the runtime-bundles layout (python/, site-packages/,
+    /// hermes-defaults/). Release: Resources/. Debug fallback: repo's
+    /// desktop/runtime-bundles/, discovered relative to this source file.
+    private static func resolveBundleRoot() -> String? {
+        let fm = FileManager.default
+        let hasArtifacts: (String) -> Bool = { root in
+            let ns = root as NSString
+            return fm.fileExists(atPath: ns.appendingPathComponent("python"))
+                && fm.fileExists(atPath: ns.appendingPathComponent("site-packages"))
+                && fm.fileExists(atPath: ns.appendingPathComponent("hermes-defaults"))
+        }
+
+        if let resources = Bundle.main.resourcePath, hasArtifacts(resources) {
+            return resources
+        }
+
+        #if DEBUG
+        // #filePath resolves at compile time, so an Xcode build keeps a stable
+        // anchor back to the repo even though the running .app lives in
+        // DerivedData. Walk up to find the repo root, then point at the
+        // runtime-bundles populated by scripts/build-runtime-bundles.sh.
+        let macosDir = (#filePath as NSString).deletingLastPathComponent
+        let desktopDir = (macosDir as NSString).deletingLastPathComponent
+        let repoBundles = (desktopDir as NSString).appendingPathComponent("runtime-bundles")
+        if hasArtifacts(repoBundles) { return repoBundles }
+        #endif
+
+        return nil
     }
 
     /// Path to the sidecar package directory.

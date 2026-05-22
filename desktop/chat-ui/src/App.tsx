@@ -54,6 +54,11 @@ declare global {
 
 const SESSION_STORAGE_KEY = 'verso.chat.sessionId';
 
+// Bucket key for messages typed before a session exists. `adoptSession` migrates
+// this bucket onto the real session id once `createChatSession` resolves so the
+// user's first message survives the round-trip without flicker.
+const PENDING_SESSION_KEY = '__pending__';
+
 // Hermes surfaces a CLI-flavoured error when there are no Codex creds. We
 // match liberally — any of "no codex credentials", "hermes auth", or
 // "hermes model" indicates the user needs to (re-)authenticate.
@@ -65,7 +70,9 @@ export function App() {
   const isNativeShell = hasNativeShell();
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Messages live in a per-session bucket so an in-flight stream for session A
+  // can't bleed into session B's view when the user switches mid-stream.
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
   const [isStreaming, setIsStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
   // null = unknown (e.g. before the orchestrator is ready or the check is in
@@ -98,6 +105,9 @@ export function App() {
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const abortRef = useRef<(() => void) | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  // Captured at stream start so SSE writes always target the right bucket,
+  // even after the user navigates away from the streaming session.
+  const streamingSessionRef = useRef<string | null>(null);
   const idCounter = useRef(0);
   const hydrateTokenRef = useRef(0);
   const connectionPollers = useRef<Map<string, number>>(new Map());
@@ -186,37 +196,74 @@ export function App() {
     }
   }, []);
 
+  // Update a single session's bucket. Pure (no read-then-write race) so we can
+  // call it from any SSE/poll callback without worrying about stale closures.
+  const updateSessionMessages = useCallback((
+    sessionKey: string,
+    updater: (prev: ChatMessage[]) => ChatMessage[],
+  ) => {
+    setMessagesBySession((prev) => ({
+      ...prev,
+      [sessionKey]: updater(prev[sessionKey] ?? []),
+    }));
+  }, []);
+
+  // Persist the selected session id for the *next* app launch. In native
+  // mode Swift's `@AppStorage("selectedChatSessionId")` is the source of
+  // truth, so the JS write is a dead entry — skip it. Browser mode keeps
+  // its own localStorage so reloads survive.
+  const persistSelectedSessionId = useCallback((sessionId: string | null) => {
+    if (isNativeShell) return;
+    if (sessionId) {
+      window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+    } else {
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+  }, [isNativeShell]);
+
   const hydrateSession = useCallback(async (sessionId: string | null) => {
     const token = ++hydrateTokenRef.current;
 
     if (!sessionId) {
       sessionIdRef.current = null;
       setSelectedSessionId(null);
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-      setMessages([]);
+      persistSelectedSessionId(null);
       setIsHydratingSession(false);
       notifyNativeSessionState(isNativeShell, null);
       return;
     }
 
+    // Flip selection immediately so the header + sidebar highlight respond
+    // without waiting on the round-trip. If we don't have a cached bucket for
+    // this session yet, seed an empty one so the previous session's messages
+    // don't linger in the message list during the fetch.
+    sessionIdRef.current = sessionId;
+    setSelectedSessionId(sessionId);
+    persistSelectedSessionId(sessionId);
+    setMessagesBySession((prev) => (sessionId in prev ? prev : { ...prev, [sessionId]: [] }));
+
+    // Refetching while a stream is writing into this session's bucket would
+    // wipe in-flight content the user can see (the server doesn't have it yet).
+    if (streamingSessionRef.current === sessionId) {
+      setIsHydratingSession(false);
+      setSessionError(null);
+      notifyNativeSessionState(isNativeShell, sessionId);
+      return;
+    }
+
     setIsHydratingSession(true);
-    setMessages([]);
 
     try {
       const storedMessages = await getChatMessages(sessionId);
       if (token !== hydrateTokenRef.current) return;
-      sessionIdRef.current = sessionId;
-      setSelectedSessionId(sessionId);
-      window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
-      setMessages(storedMessages.map(toUiMessage));
+      setMessagesBySession((prev) => ({ ...prev, [sessionId]: storedMessages.map(toUiMessage) }));
       setSessionError(null);
       notifyNativeSessionState(isNativeShell, sessionId);
     } catch (error: unknown) {
       if (token !== hydrateTokenRef.current) return;
       sessionIdRef.current = null;
       setSelectedSessionId(null);
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-      setMessages([]);
+      persistSelectedSessionId(null);
       setSessionError(error instanceof Error ? error.message : String(error));
       notifyNativeSessionState(isNativeShell, null);
     } finally {
@@ -224,7 +271,7 @@ export function App() {
         setIsHydratingSession(false);
       }
     }
-  }, [isNativeShell]);
+  }, [isNativeShell, persistSelectedSessionId]);
 
   const bootstrapSessions = useCallback(async () => {
     const nextSessions = await refreshSessionList();
@@ -238,17 +285,33 @@ export function App() {
 
   const adoptSession = useCallback((session: ChatSessionSummary, preserveMessages: boolean): string => {
     const nextSession = normalizeSession(session);
+    const prevSessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
     sessionIdRef.current = nextSession.id;
     setSelectedSessionId(nextSession.id);
     setSessions((prev) => sortSessions(replaceSession(prev, nextSession)));
-    window.localStorage.setItem(SESSION_STORAGE_KEY, nextSession.id);
-    if (!preserveMessages) {
-      setMessages([]);
-    }
+    persistSelectedSessionId(nextSession.id);
+    setMessagesBySession((prev) => {
+      if (preserveMessages && prevSessionKey !== nextSession.id) {
+        // Carry the pending/current bucket onto the new session id so the
+        // optimistic user+assistant pair the caller just added is preserved.
+        const next = { ...prev };
+        const moved = prev[prevSessionKey] ?? [];
+        delete next[prevSessionKey];
+        next[nextSession.id] = moved;
+        return next;
+      }
+      if (!preserveMessages) {
+        const next = { ...prev };
+        delete next[PENDING_SESSION_KEY];
+        next[nextSession.id] = [];
+        return next;
+      }
+      return prev;
+    });
     setSessionError(null);
     notifyNativeSessionState(isNativeShell, nextSession.id);
     return nextSession.id;
-  }, [isNativeShell]);
+  }, [isNativeShell, persistSelectedSessionId]);
 
   useEffect(() => {
     const applyPort = (port: number) => {
@@ -309,38 +372,45 @@ export function App() {
       const detail = (event as CustomEvent<{ sessionId?: unknown }>).detail;
       const requestedSessionId = normalizeNativeSessionId(detail?.sessionId);
 
-      void (async () => {
-        const nextSessions = await refreshSessionList();
-        const resolvedSessionId = requestedSessionId && nextSessions.some((session) => session.id === requestedSessionId)
-          ? requestedSessionId
-          : null;
+      // Background-refresh the session list so titles/previews stay fresh,
+      // but don't block the click on the round-trip. Swift already validated
+      // the id before sending it; if it's somehow stale, hydrateSession's
+      // 404 path clears the selection and surfaces the error.
+      void refreshSessionList();
 
-        if (resolvedSessionId) {
-          setSelectedSkillSlug(null);
-          setSelectedCronId(null);
-          setIsSettingsOpen(false);
-        }
+      if (requestedSessionId) {
+        setSelectedSkillSlug(null);
+        setSelectedCronId(null);
+        setIsSettingsOpen(false);
+      }
 
-        if (resolvedSessionId === sessionIdRef.current) {
-          sessionIdRef.current = resolvedSessionId;
-          setSelectedSessionId(resolvedSessionId);
-          if (resolvedSessionId) {
-            window.localStorage.setItem(SESSION_STORAGE_KEY, resolvedSessionId);
-          } else {
-            window.localStorage.removeItem(SESSION_STORAGE_KEY);
-          }
-          return;
-        }
+      if (requestedSessionId === sessionIdRef.current) {
+        sessionIdRef.current = requestedSessionId;
+        setSelectedSessionId(requestedSessionId);
+        persistSelectedSessionId(requestedSessionId);
+        return;
+      }
 
-        await hydrateSession(resolvedSessionId);
-      })();
+      void hydrateSession(requestedSessionId);
     };
 
     window.addEventListener('verso:select-session', handleNativeSelection as EventListener);
     return () => {
       window.removeEventListener('verso:select-session', handleNativeSelection as EventListener);
     };
-  }, [hydrateSession, isNativeShell, refreshSessionList]);
+  }, [hydrateSession, isNativeShell, persistSelectedSessionId, refreshSessionList]);
+
+  // Swift nudges us via `verso:sessions-changed` after a Swift-side mutation
+  // (rename, archive, …) so the chat header / session list stay in sync with
+  // the leftbar without waiting for the next click or stream completion.
+  useEffect(() => {
+    if (!isNativeShell) return;
+    const onSessionsChanged = () => { void refreshSessionList(); };
+    window.addEventListener('verso:sessions-changed', onSessionsChanged);
+    return () => {
+      window.removeEventListener('verso:sessions-changed', onSessionsChanged);
+    };
+  }, [isNativeShell, refreshSessionList]);
 
   useEffect(() => {
     const handleCatalogToggle = (event: Event) => {
@@ -507,9 +577,15 @@ export function App() {
 
   const nextId = () => String(++idCounter.current);
 
-  const ensureSession = useCallback(async (seedText: string) => {
+  const ensureSession = useCallback(async () => {
     if (sessionIdRef.current) return sessionIdRef.current;
-    const session = normalizeSession(await createChatSession(seedText));
+    // Create the session with the default title ('New chat'). Passing the
+    // user's first message as a seed title would suppress the orchestrator's
+    // AI-title generation, which only fires when the title is still the
+    // default — that's the whole "name this chat after the first response"
+    // feature. The leftbar will briefly show 'New chat' during streaming and
+    // then refresh to the AI-generated title once the stream completes.
+    const session = normalizeSession(await createChatSession());
     return adoptSession(session, true);
   }, [adoptSession]);
 
@@ -554,29 +630,32 @@ export function App() {
   }, [isHydratingSession, isStreaming, selectedSessionId, sessions]);
 
   // Wires up the SSE handlers for an assistant placeholder that's already in
-  // `messages`. Shared by the normal send path and the post-connect replay so
-  // both flows produce identical streaming behaviour.
+  // the pending/current bucket. Shared by the normal send path and the
+  // post-connect replay so both flows produce identical streaming behaviour.
   const streamInto = useCallback((assistantId: string, text: string, attached: AttachedContext | null) => {
     setIsStreaming(true);
+    // Bucket the placeholder lives in *right now*. Used only by the
+    // pre-ensureSession error path; once ensureSession resolves, all SSE writes
+    // target the real session id captured below.
+    const initialSessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
+
     void (async () => {
       try {
-        const sessionId = await ensureSession(text);
+        const sessionId = await ensureSession();
+        // adoptSession migrated PENDING → sessionId if the placeholder came
+        // through there, so every SSE update from here on targets `sessionId`
+        // — even if the user navigates away mid-stream.
+        streamingSessionRef.current = sessionId;
+
         const abort = streamChatMessage(
           sessionId,
           text,
           (event: ChatSSEEvent) => {
-            const resolvedSessionId = extractSessionId(event);
-            if (resolvedSessionId) {
-              sessionIdRef.current = resolvedSessionId;
-              setSelectedSessionId(resolvedSessionId);
-              window.localStorage.setItem(SESSION_STORAGE_KEY, resolvedSessionId);
-            }
-
             // Catch the Hermes "no credentials" event mid-stream and swap the
             // assistant placeholder for a Codex connect widget instead of
             // letting applySSEEvent surface the raw CLI-flavoured error.
             if (event.type === 'error' && typeof event.message === 'string' && isCodexAuthError(event.message)) {
-              setMessages((prev) => prev.map((message) =>
+              updateSessionMessages(sessionId, (prev) => prev.map((message) =>
                 message.id === assistantId
                   ? {
                       ...message,
@@ -594,20 +673,21 @@ export function App() {
               return;
             }
 
-            setMessages((prev) => prev.map((message) => {
+            updateSessionMessages(sessionId, (prev) => prev.map((message) => {
               if (message.id !== assistantId) return message;
               return applySSEEvent(message, event);
             }));
           },
           () => {
-            setMessages((prev) => prev.map((message) =>
+            updateSessionMessages(sessionId, (prev) => prev.map((message) =>
               message.id === assistantId ? { ...message, isStreaming: false, endedAt: Date.now() } : message,
             ));
             setIsStreaming(false);
             abortRef.current = null;
-            void refreshSessionList().then(() => {
-              notifyNativeSessionState(isNativeShell, sessionIdRef.current);
-            });
+            streamingSessionRef.current = null;
+            void refreshSessionList();
+            notifyNativeSessionsChanged(isNativeShell);
+            notifyNativeResponseReady(isNativeShell);
           },
           (err: string) => {
             if (isCodexAuthError(err)) {
@@ -615,7 +695,7 @@ export function App() {
               // ran `hermes auth remove` outside the app). Convert the failed
               // assistant placeholder into a connect widget and stash the
               // payload so finishing auth replays the send.
-              setMessages((prev) => prev.map((message) =>
+              updateSessionMessages(sessionId, (prev) => prev.map((message) =>
                 message.id === assistantId
                   ? {
                       ...message,
@@ -631,7 +711,7 @@ export function App() {
               ));
               setCodexConnected(false);
             } else {
-              setMessages((prev) => prev.map((message) =>
+              updateSessionMessages(sessionId, (prev) => prev.map((message) =>
                 message.id === assistantId
                   ? { ...message, content: message.content + `\n\n**Error:** ${err}`, isStreaming: false, endedAt: Date.now() }
                   : message,
@@ -639,18 +719,21 @@ export function App() {
             }
             setIsStreaming(false);
             abortRef.current = null;
-            void refreshSessionList().then(() => {
-              notifyNativeSessionState(isNativeShell, sessionIdRef.current);
-            });
+            streamingSessionRef.current = null;
+            void refreshSessionList();
+            notifyNativeSessionsChanged(isNativeShell);
+            notifyNativeResponseReady(isNativeShell);
           },
           { attached },
         );
 
         abortRef.current = abort;
       } catch (error: unknown) {
+        // ensureSession threw, so we never got a real sessionId — the
+        // placeholder is still in the bucket we captured at the top.
         const message = error instanceof Error ? error.message : String(error);
         if (isCodexAuthError(message)) {
-          setMessages((prev) => prev.map((entry) =>
+          updateSessionMessages(initialSessionKey, (prev) => prev.map((entry) =>
             entry.id === assistantId
               ? {
                   ...entry,
@@ -666,16 +749,17 @@ export function App() {
           ));
           setCodexConnected(false);
         } else {
-          setMessages((prev) => prev.map((entry) =>
+          updateSessionMessages(initialSessionKey, (prev) => prev.map((entry) =>
             entry.id === assistantId
               ? { ...entry, content: `**Error:** ${message}`, isStreaming: false, endedAt: Date.now() }
               : entry,
           ));
         }
         setIsStreaming(false);
+        streamingSessionRef.current = null;
       }
     })();
-  }, [ensureSession, isNativeShell, refreshSessionList]);
+  }, [ensureSession, isNativeShell, refreshSessionList, updateSessionMessages]);
 
   const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
     const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
@@ -684,6 +768,8 @@ export function App() {
     const displayText = attached?.kind === 'cron' && text.trim().length === 0
       ? `[Reviewing routine: ${attached.name}]`
       : text;
+
+    const sessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
 
     // If we know the user hasn't connected Codex yet, don't bother hitting
     // Hermes — it'll just error with a CLI-flavoured "no credentials"
@@ -699,7 +785,7 @@ export function App() {
         pendingText: text,
         pendingAttached: attached,
       };
-      setMessages((prev) => [...prev, userMsg, widgetMsg]);
+      updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, widgetMsg]);
       return;
     }
 
@@ -713,20 +799,22 @@ export function App() {
       startedAt: Date.now(),
     };
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, assistantMsg]);
     streamInto(assistantMsg.id, text, attached);
-  }, [codexConnected, connected, isStreaming, streamInto]);
+  }, [codexConnected, connected, isStreaming, streamInto, updateSessionMessages]);
 
   const handleCodexConnected = useCallback((widgetId: string) => {
     setCodexConnected(true);
-    const widget = messages.find((m) => m.id === widgetId && m.kind === 'codex_connect_required');
+    const sessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
+    const currentMessages = messagesBySession[sessionKey] ?? [];
+    const widget = currentMessages.find((m) => m.id === widgetId && m.kind === 'codex_connect_required');
     const pendingText = widget?.pendingText ?? '';
     const pendingAttached = widget?.pendingAttached ?? null;
 
     if (!pendingText) {
       // Nothing to replay (shouldn't happen — handleSend always stashes text
       // before showing the widget). Just remove the widget.
-      setMessages((prev) => prev.filter((m) => m.id !== widgetId));
+      updateSessionMessages(sessionKey, (prev) => prev.filter((m) => m.id !== widgetId));
       return;
     }
 
@@ -741,9 +829,9 @@ export function App() {
       isStreaming: true,
       startedAt: Date.now(),
     };
-    setMessages((prev) => prev.map((m) => m.id === widgetId ? assistantMsg : m));
+    updateSessionMessages(sessionKey, (prev) => prev.map((m) => m.id === widgetId ? assistantMsg : m));
     streamInto(assistantMsg.id, pendingText, pendingAttached);
-  }, [messages, streamInto]);
+  }, [messagesBySession, streamInto, updateSessionMessages]);
 
   const handleOpenSkillInNewSession = useCallback((slug: string) => {
     if (!connected || isStreaming || isHydratingSession) return;
@@ -751,8 +839,13 @@ export function App() {
     sessionIdRef.current = null;
     setSelectedSessionId(null);
     setSelectedSkillSlug(null);
-    setMessages([]);
-    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    setMessagesBySession((prev) => {
+      if (!(PENDING_SESSION_KEY in prev)) return prev;
+      const next = { ...prev };
+      delete next[PENDING_SESSION_KEY];
+      return next;
+    });
+    persistSelectedSessionId(null);
     handleCloseSkillsCatalog();
     void (async () => {
       try {
@@ -763,33 +856,44 @@ export function App() {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, isStreaming]);
+  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, isStreaming, persistSelectedSessionId]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.();
     abortRef.current = null;
-    if (sessionIdRef.current) {
-      void cancelChatRequest(sessionIdRef.current).catch(() => {});
+    // Cancel the *streaming* session, not the currently-selected one — the
+    // user may have navigated to a different chat mid-stream.
+    const streamingSession = streamingSessionRef.current;
+    if (streamingSession) {
+      void cancelChatRequest(streamingSession).catch(() => {});
+      updateSessionMessages(streamingSession, (prev) => prev.map((message) =>
+        message.isStreaming ? { ...message, isStreaming: false, endedAt: Date.now() } : message,
+      ));
     }
+    streamingSessionRef.current = null;
     setIsStreaming(false);
-    setMessages((prev) => prev.map((message) =>
-      message.isStreaming ? { ...message, isStreaming: false, endedAt: Date.now() } : message,
-    ));
-  }, []);
+  }, [updateSessionMessages]);
 
   const handleConnect = useCallback((request: ConnectionRequestView) => {
     openConnectionRequest(request.id);
+    // The connection step lives in the assistant message of whichever session
+    // the user clicked from. Capture that bucket now so a later session switch
+    // doesn't redirect the status update.
+    const sessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
     pollConnectionRequest(request.id, (next) => {
-      setMessages((prev) => prev.map((message) => ({
+      updateSessionMessages(sessionKey, (prev) => prev.map((message) => ({
         ...message,
         steps: updateConnectionSteps(message.steps, next),
       })));
     });
-  }, [pollConnectionRequest]);
+  }, [pollConnectionRequest, updateSessionMessages]);
 
   const activeSessions = sessions.filter((session) => !session.archivedAt);
   const archivedSessions = sessions.filter((session) => !!session.archivedAt);
   const selectedSession = sessions.find((session) => session.id === selectedSessionId) ?? null;
+  // Render the bucket for the currently-selected session. Pre-creation drafts
+  // live under PENDING_SESSION_KEY; adoptSession migrates them on first send.
+  const messages = messagesBySession[selectedSessionId ?? PENDING_SESSION_KEY] ?? [];
 
   // Header title is computed from the active view; the detail pages report
   // their resolved name via `onTitleResolved` so we don't double-fetch.
@@ -1032,11 +1136,6 @@ function SessionSection({
       )}
     </section>
   );
-}
-
-function extractSessionId(event: ChatSSEEvent): string | undefined {
-  const sessionId = (event as { session_id?: unknown }).session_id;
-  return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined;
 }
 
 function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
@@ -1333,4 +1432,19 @@ function notifyNativeSessionState(isNativeShell: boolean, sessionId: string | nu
     type: 'sessionStateChanged',
     sessionId,
   });
+}
+
+function notifyNativeResponseReady(isNativeShell: boolean): void {
+  if (!isNativeShell) return;
+  const bridge = window.webkit?.messageHandlers?.chatBridge;
+  bridge?.postMessage({ type: 'notifyResponseReady' });
+}
+
+// Poke Swift's leftbar to refresh its cached session list. Use this after a
+// stream completes — the orchestrator may have generated an AI title for the
+// session, and Swift's sidebar wouldn't otherwise know to refetch.
+function notifyNativeSessionsChanged(isNativeShell: boolean): void {
+  if (!isNativeShell) return;
+  const bridge = window.webkit?.messageHandlers?.chatBridge;
+  bridge?.postMessage({ type: 'sessionsChanged' });
 }
