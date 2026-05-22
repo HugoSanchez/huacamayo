@@ -572,6 +572,7 @@ final class SidecarManager: ObservableObject {
         let pythonDir = (bundleRoot as NSString).appendingPathComponent("python")
         let sitePackagesDir = (bundleRoot as NSString).appendingPathComponent("site-packages")
         let defaultsDir = (bundleRoot as NSString).appendingPathComponent("hermes-defaults")
+        let bundledSkillsDir = (bundleRoot as NSString).appendingPathComponent("bundled-skills")
         let versionFile = (bundleRoot as NSString).appendingPathComponent("BUNDLE_VERSION")
 
         let appSupport = (NSHomeDirectory() as NSString)
@@ -582,6 +583,12 @@ final class SidecarManager: ObservableObject {
         env["VERSO_BUNDLED_SITE_PACKAGES_DIR"] = sitePackagesDir
         env["VERSO_BUNDLED_DEFAULTS"] = defaultsDir
         env["VERSO_HERMES_HOME"] = hermesHome
+        // Tell Hermes where to find the master skills set. Hermes'
+        // `tools/skills_sync` copies from this dir into HERMES_HOME/skills on
+        // every gateway start; without the override it falls back to
+        // `<hermes-pkg>/../skills` which doesn't exist in our pip-installed
+        // site-packages layout, so the profile's skills/ stays empty.
+        env["HERMES_BUNDLED_SKILLS"] = bundledSkillsDir
 
         // CRITICAL: prevent Python from writing __pycache__/*.pyc files into
         // the signed .app bundle on first launch. The bundle is read-only by

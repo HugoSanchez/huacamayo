@@ -41,6 +41,7 @@ required_paths=(
     "${BUNDLE_SRC}/site-packages/arm64/site-packages"
     "${BUNDLE_SRC}/site-packages/arm64/bin/hermes"
     "${BUNDLE_SRC}/hermes-defaults"
+    "${BUNDLE_SRC}/bundled-skills"
     "${BUNDLE_SRC}/BUNDLE_VERSION"
 )
 for p in "${required_paths[@]}"; do
@@ -62,7 +63,8 @@ mkdir -p \
     "${RESOURCES_DST}/orchestrator" \
     "${RESOURCES_DST}/python" \
     "${RESOURCES_DST}/site-packages" \
-    "${RESOURCES_DST}/hermes-defaults"
+    "${RESOURCES_DST}/hermes-defaults" \
+    "${RESOURCES_DST}/bundled-skills"
 
 echo "[copy-bundles] copying runtime bundles into ${CONTENTS_FOLDER_PATH}/Resources/"
 rsync -a --delete "${BUNDLE_SRC}/node/" "${RESOURCES_DST}/node/"
@@ -70,6 +72,7 @@ rsync -a --delete "${BUNDLE_SRC}/orchestrator/" "${RESOURCES_DST}/orchestrator/"
 rsync -a --delete "${BUNDLE_SRC}/python/" "${RESOURCES_DST}/python/"
 rsync -a --delete "${BUNDLE_SRC}/site-packages/" "${RESOURCES_DST}/site-packages/"
 rsync -a --delete "${BUNDLE_SRC}/hermes-defaults/" "${RESOURCES_DST}/hermes-defaults/"
+rsync -a --delete "${BUNDLE_SRC}/bundled-skills/" "${RESOURCES_DST}/bundled-skills/"
 cp "${BUNDLE_SRC}/BUNDLE_VERSION" "${RESOURCES_DST}/BUNDLE_VERSION"
 
 echo "[copy-bundles] done"

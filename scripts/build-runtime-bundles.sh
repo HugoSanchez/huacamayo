@@ -71,6 +71,7 @@ PYTHON_DIR="${BUNDLE_DIR}/python"
 HERMES_BUNDLE="${BUNDLE_DIR}/hermes-agent"
 SITE_PACKAGES_DIR="${BUNDLE_DIR}/site-packages"
 DEFAULTS_DIR="${BUNDLE_DIR}/hermes-defaults"
+BUNDLED_SKILLS_DIR="${BUNDLE_DIR}/bundled-skills"
 BUNDLE_VERSION_FILE="${BUNDLE_DIR}/BUNDLE_VERSION"
 
 mkdir -p "${BUNDLE_DIR}"
@@ -238,6 +239,25 @@ fi
 # Drop the .git dir from the snapshot so the bundle is smaller and unambiguous
 # (the .git/index we'd ship wouldn't match the user's filesystem anyway).
 rm -rf "${HERMES_BUNDLE}/.git"
+
+# ── Bundled skills ──────────────────────────────────────────────────────────
+# Hermes' `tools/skills_sync` copies the master skills set into each profile
+# on gateway startup. It looks at $HERMES_BUNDLED_SKILLS, falling back to
+# `<hermes-pkg>/../skills`. In our layout Hermes runs from a pip-installed
+# site-packages tree that does NOT include `skills/` (the wheel's
+# pyproject.toml only declares `hermes_cli/web_dist` as package-data), so
+# the fallback misses and the user's profile stays empty. Stage the master
+# set here as a standalone top-level dir; copy-runtime-bundles.sh ships it
+# into the .app and SidecarManager points $HERMES_BUNDLED_SKILLS at it.
+if [ ! -d "${HERMES_BUNDLE}/skills" ]; then
+    echo "[bundle] ERROR: hermes-agent snapshot has no skills/ dir at ${HERMES_BUNDLE}/skills" >&2
+    exit 1
+fi
+rm -rf "${BUNDLED_SKILLS_DIR}"
+mkdir -p "${BUNDLED_SKILLS_DIR}"
+rsync -a "${HERMES_BUNDLE}/skills/" "${BUNDLED_SKILLS_DIR}/"
+skill_count=$(find "${BUNDLED_SKILLS_DIR}" -name SKILL.md | wc -l | tr -d ' ')
+echo "[bundle] bundled-skills: ${skill_count} skills staged"
 
 # ── Pre-installed Hermes + deps (per-arch site-packages) ────────────────────
 # Instead of shipping raw wheels and pip-installing on first launch, we
