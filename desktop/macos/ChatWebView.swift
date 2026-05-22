@@ -52,6 +52,13 @@ enum ShellAction: Equatable {
     /// Swift's leftbar picks up the AI-generated title that lands after the
     /// first response.
     case sessionMutated(id: String)
+    /// Streaming state changed for a session. The leftbar uses this to show
+    /// a "working" indicator on rows whose agent is currently generating.
+    case sessionStreaming(id: String, streaming: Bool)
+    /// Unread response for a session — set when a stream finished while the
+    /// user wasn't looking at that chat surface. The leftbar renders a small
+    /// accent dot until the chat-ui says the session is being viewed again.
+    case sessionUnread(id: String, unread: Bool)
     case openExternalUrl(url: String)
     case signOut
     /// User dismissed the catalog via the chat-ui's close button (rather
@@ -623,6 +630,14 @@ struct ChatWebView: NSViewRepresentable {
             case "session-mutated":
                 guard let id = payload["id"] as? String else { return nil }
                 return .sessionMutated(id: id)
+            case "session-streaming":
+                guard let id = payload["id"] as? String,
+                      let streaming = payload["streaming"] as? Bool else { return nil }
+                return .sessionStreaming(id: id, streaming: streaming)
+            case "session-unread":
+                guard let id = payload["id"] as? String,
+                      let unread = payload["unread"] as? Bool else { return nil }
+                return .sessionUnread(id: id, unread: unread)
             case "open-external-url":
                 guard let url = payload["url"] as? String else { return nil }
                 return .openExternalUrl(url: url)

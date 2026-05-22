@@ -100,6 +100,17 @@ struct ContentView: View {
     @AppStorage("selectedChatSessionId") private var persistedSelectedSessionId = ""
     @State private var sessions: [SidebarChatSession] = []
     @State private var selectedSessionId: String?
+    // Sessions whose agent is currently generating a response. Driven by
+    // `sessionStreaming` shell actions from chat-ui; rendered as an
+    // equalizer-bar indicator in `SessionSidebarRow` so the user can scan
+    // which conversations are "alive" without switching to each one.
+    @State private var streamingSessionIds: Set<String> = []
+    // Sessions with an unread response — set when a stream ended while the
+    // user wasn't looking at that chat surface. Driven by `sessionUnread`
+    // shell actions from chat-ui (which owns the "actively viewed" rule
+    // since only it knows full overlay state). Rendered as a small accent
+    // dot in the row's trailing slot.
+    @State private var unreadSessionIds: Set<String> = []
     @State private var isLoadingSessions = false
     @State private var sessionError: String?
     @State private var sidebarToast: SidebarToast?
@@ -149,6 +160,8 @@ struct ContentView: View {
                         isDarkMode: isDarkMode,
                         sessions: sessions,
                         selectedSessionId: selectedSessionId,
+                        streamingSessionIds: streamingSessionIds,
+                        unreadSessionIds: unreadSessionIds,
                         isLoadingSessions: isLoadingSessions,
                         sessionError: sessionError,
                         sidecarReady: sidecarPort != nil,
@@ -616,6 +629,18 @@ struct ContentView: View {
             Task { await refreshSessions(preferredSelection: id) }
         case .sessionMutated:
             Task { await refreshSessions() }
+        case .sessionStreaming(let id, let streaming):
+            if streaming {
+                streamingSessionIds.insert(id)
+            } else {
+                streamingSessionIds.remove(id)
+            }
+        case .sessionUnread(let id, let unread):
+            if unread {
+                unreadSessionIds.insert(id)
+            } else {
+                unreadSessionIds.remove(id)
+            }
         case .createSession,
              .archiveSession,
              .unarchiveSession,
@@ -687,6 +712,8 @@ private struct SessionSidebar: View {
     let isDarkMode: Bool
     let sessions: [SidebarChatSession]
     let selectedSessionId: String?
+    let streamingSessionIds: Set<String>
+    let unreadSessionIds: Set<String>
     let isLoadingSessions: Bool
     let sessionError: String?
     let sidecarReady: Bool
@@ -809,6 +836,8 @@ private struct SessionSidebar: View {
                                 emptyText: sidecarReady ? "No sessions yet." : "Sessions will appear once the sidecar is ready.",
                                 sessions: activeSessions,
                                 selectedSessionId: selectedSessionId,
+                                streamingSessionIds: streamingSessionIds,
+                                unreadSessionIds: unreadSessionIds,
                                 isDarkMode: isDarkMode,
                                 renamingSessionId: renamingSessionId,
                                 draftTitle: draftTitle,
@@ -1030,6 +1059,8 @@ private struct SessionSidebarSection: View {
     let emptyText: String
     let sessions: [SidebarChatSession]
     let selectedSessionId: String?
+    let streamingSessionIds: Set<String>
+    let unreadSessionIds: Set<String>
     let isDarkMode: Bool
     let renamingSessionId: String?
     let draftTitle: String
@@ -1068,6 +1099,8 @@ private struct SessionSidebarSection: View {
                         SessionSidebarRow(
                             session: session,
                             isSelected: session.id == selectedSessionId,
+                            isStreaming: streamingSessionIds.contains(session.id),
+                            isUnread: unreadSessionIds.contains(session.id),
                             isDarkMode: isDarkMode,
                             isRenaming: renamingSessionId == session.id,
                             draftTitle: draftTitle,
@@ -1087,6 +1120,8 @@ private struct SessionSidebarSection: View {
 private struct SessionSidebarRow: View {
     let session: SidebarChatSession
     let isSelected: Bool
+    let isStreaming: Bool
+    let isUnread: Bool
     let isDarkMode: Bool
     let isRenaming: Bool
     let draftTitle: String
@@ -1157,6 +1192,22 @@ private struct SessionSidebarRow: View {
                         .help("Archive session")
                     }
                 }
+            } else if isStreaming, !isRenaming {
+                // "Agent is working" indicator. Takes the slot the timestamp
+                // would otherwise occupy so the row height stays stable, and
+                // yields back to the hover-actions when the user is reaching
+                // for rename/archive.
+                EqualizerBars(color: secondaryText)
+                    .help("Agent is working")
+            } else if isUnread, !isRenaming {
+                // Unread response. Same slot as the working indicator so
+                // the row width stays constant. Only one of {streaming,
+                // unread} can be true at a time (unread fires *after* a
+                // stream ends).
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 7, height: 7)
+                    .help("New response")
             } else if !isRenaming {
                 Text(sessionTimestampLabel(session))
                     .font(.system(size: 11))
@@ -1183,6 +1234,53 @@ private struct SessionSidebarRow: View {
             return isDarkMode ? Color.white.opacity(0.03) : Color.white.opacity(0.18)
         }
         return .clear
+    }
+}
+
+/// Three small vertical bars that independently bounce in height — the
+/// canonical "audio is playing / agent is generating" cue you see in iOS
+/// Music, the macOS menu-bar Now Playing indicator, etc.
+///
+/// Drives heights off a single `TimelineView(.animation)` clock with a
+/// per-bar phase offset so the bars feel alive rather than marching in
+/// lockstep. Cheap to render and doesn't depend on view-lifecycle quirks
+/// the way a `.repeatForever` animation can.
+private struct EqualizerBars: View {
+    let color: Color
+    private let barWidth: CGFloat = 2
+    private let barSpacing: CGFloat = 2
+    private let minHeight: CGFloat = 3
+    private let maxHeight: CGFloat = 11
+    /// Seconds per full bounce. Slightly faster than a heartbeat — fast
+    /// enough to read as "active", slow enough to not feel jittery.
+    private let period: Double = 0.85
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: barSpacing) {
+                bar(height: height(for: t, phase: 0.0))
+                bar(height: height(for: t, phase: 0.33))
+                bar(height: height(for: t, phase: 0.66))
+            }
+            .frame(height: maxHeight)
+        }
+    }
+
+    private func bar(height: CGFloat) -> some View {
+        Capsule(style: .continuous)
+            .fill(color)
+            .frame(width: barWidth, height: height)
+    }
+
+    /// Maps the current clock + per-bar phase offset to a height between
+    /// `minHeight` and `maxHeight` using a sine wave. `phase` is fractional
+    /// (0…1) — adding 1/3 between bars spreads them across the cycle.
+    private func height(for time: TimeInterval, phase: Double) -> CGFloat {
+        let cycle = (time / period + phase).truncatingRemainder(dividingBy: 1)
+        // 0…1 → -1…1 → 0…1 with a sine curve (smoother ease than triangular).
+        let eased = (sin(cycle * 2 * .pi) + 1) / 2
+        return minHeight + (maxHeight - minHeight) * eased
     }
 }
 

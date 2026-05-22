@@ -15,7 +15,7 @@ import {
 } from './skills.ts';
 import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts';
 
-type ChatStatus = 'idle' | 'running' | 'error';
+type ChatStatus = 'idle' | 'running';
 
 interface ActiveChatRequest {
   sessionId: string;
@@ -39,9 +39,11 @@ class HermesHttpError extends Error {
 
 type HermesEventPayload = Record<string, unknown> | null;
 
-let activeRequest: ActiveChatRequest | null = null;
-let chatStatus: ChatStatus = 'idle';
-let lastError: string | null = null;
+// Per-session streams: each session can have at most one in-flight chat
+// request, but different sessions stream independently. Hermes handles
+// concurrent /v1/responses for different `conversation` ids (verified by the
+// per-session-streams spike).
+const activeRequests = new Map<string, ActiveChatRequest>();
 
 export function buildChatRoutes(
   store: ChatStore,
@@ -50,12 +52,12 @@ export function buildChatRoutes(
   return [
     route('GET', '/chat/status', async (_req, res) => {
       const gateway = await hermes.getStatus();
+      const activeSessionIds = Array.from(activeRequests.keys());
       json(res, 200, {
-        status: chatStatus,
+        status: activeRequests.size > 0 ? 'running' : 'idle',
         provider: 'hermes',
-        hasActiveRequest: activeRequest !== null,
-        activeSessionId: activeRequest?.sessionId ?? null,
-        lastError,
+        hasActiveRequest: activeRequests.size > 0,
+        activeSessionIds,
         sessionCount: store.listSessions().length,
         gateway: {
           url: gateway.baseUrl,
@@ -146,8 +148,13 @@ export function buildChatRoutes(
         return json(res, 400, { error: 'bad_request', message: 'Missing "content"' });
       }
 
-      if (activeRequest) {
-        return json(res, 409, { error: 'conflict', message: 'A chat request is already running' });
+      // Per-session: block only a second concurrent request for the *same*
+      // session. Streams against other sessions run in parallel.
+      if (activeRequests.has(params.id)) {
+        return json(res, 409, {
+          error: 'conflict',
+          message: 'A chat request is already running for this session',
+        });
       }
 
       const priorMessageCount = store.getMessages(params.id)?.length ?? 0;
@@ -180,9 +187,6 @@ export function buildChatRoutes(
         Connection: 'keep-alive',
       });
 
-      chatStatus = 'running';
-      lastError = null;
-
       try {
         await runHermesMessage({
           session,
@@ -197,15 +201,10 @@ export function buildChatRoutes(
           sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
         } else {
           const message = error instanceof Error ? error.message : String(error);
-          lastError = message;
-          chatStatus = 'error';
           sendSSE(res, { type: 'error', message, session_id: session.id });
         }
       } finally {
-        activeRequest = null;
-        if (chatStatus === 'running') {
-          chatStatus = 'idle';
-        }
+        activeRequests.delete(session.id);
         res.end();
       }
     }),
@@ -216,13 +215,13 @@ export function buildChatRoutes(
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
 
-      if (!activeRequest || activeRequest.sessionId !== params.id) {
+      const active = activeRequests.get(params.id);
+      if (!active) {
         return json(res, 200, { status: 'no_active_request' });
       }
 
-      activeRequest.close();
-      activeRequest = null;
-      chatStatus = 'idle';
+      active.close();
+      activeRequests.delete(params.id);
       json(res, 200, { status: 'stopped' });
     }),
   ];
@@ -230,22 +229,18 @@ export function buildChatRoutes(
 
 export function buildChatDiagnostics(store: ChatStore): {
   status: ChatStatus;
-  lastError: string | null;
-  activeRequest: Omit<ActiveChatRequest, 'close'> | null;
+  activeRequests: Array<Omit<ActiveChatRequest, 'close'>>;
   sessionCount: number;
   storePath: string;
 } {
   return {
-    status: chatStatus,
-    lastError,
-    activeRequest: activeRequest
-      ? {
-        sessionId: activeRequest.sessionId,
-        responseId: activeRequest.responseId,
-        gatewayUrl: activeRequest.gatewayUrl,
-        startedAt: activeRequest.startedAt,
-      }
-      : null,
+    status: activeRequests.size > 0 ? 'running' : 'idle',
+    activeRequests: Array.from(activeRequests.values()).map((request) => ({
+      sessionId: request.sessionId,
+      responseId: request.responseId,
+      gatewayUrl: request.gatewayUrl,
+      startedAt: request.startedAt,
+    })),
     sessionCount: store.listSessions().length,
     storePath: store.path,
   };
@@ -377,13 +372,14 @@ async function runHermesMessage(
 
   const config = await hermes.ensureReady(controller.signal);
 
-  activeRequest = {
+  const activeRequest: ActiveChatRequest = {
     sessionId: opts.session.id,
     responseId: null,
     gatewayUrl: config.baseUrl,
     startedAt: Date.now(),
     close: () => controller.abort(),
   };
+  activeRequests.set(opts.session.id, activeRequest);
 
   let streamedText = '';
   let finalText = '';
@@ -392,7 +388,7 @@ async function runHermesMessage(
   const handleEvent = (eventName: string, data: HermesEventPayload) => {
     if (eventName === 'response.created') {
       const responseId = extractResponseId(data);
-      if (responseId && activeRequest) {
+      if (responseId) {
         activeRequest.responseId = responseId;
       }
       return;

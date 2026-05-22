@@ -84,7 +84,6 @@ export function App() {
   // Messages live in a per-session bucket so an in-flight stream for session A
   // can't bleed into session B's view when the user switches mid-stream.
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
-  const [isStreaming, setIsStreaming] = useState(false);
   const [connected, setConnected] = useState(false);
   // null = unknown (e.g. before the orchestrator is ready or the check is in
   // flight). We only intercept sends when we're sure the user is disconnected,
@@ -114,11 +113,12 @@ export function App() {
   const [activeCronName, setActiveCronName] = useState<string | null>(null);
   const [inputDrafts, setInputDrafts] = useState<Record<string, { text: string; attached: AttachedContext | null }>>({});
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
-  const abortRef = useRef<(() => void) | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  // Captured at stream start so SSE writes always target the right bucket,
-  // even after the user navigates away from the streaming session.
-  const streamingSessionRef = useRef<string | null>(null);
+  // Per-session streams: one stream per session, multiple sessions can stream
+  // concurrently. The ref holds the abort fn so handleStop can find it; the
+  // Set state drives re-renders for guards and the InputBar's Send/Stop swap.
+  const streamingControllersRef = useRef<Map<string, () => void>>(new Map());
+  const [streamingSessions, setStreamingSessions] = useState<Set<string>>(new Set());
   const idCounter = useRef(0);
   const hydrateTokenRef = useRef(0);
   const connectionPollers = useRef<Map<string, number>>(new Map());
@@ -127,6 +127,115 @@ export function App() {
   // dispatches `verso:shell-state` snapshots, and handles `verso:shell-action`
   // posts from `postShellAction`. No-op in native (Swift is the host).
   useBrowserShellHost({ isNativeShell, sidecarReady: connected });
+
+  const markSessionStreaming = useCallback((sessionId: string, abort: () => void) => {
+    streamingControllersRef.current.set(sessionId, abort);
+    setStreamingSessions((prev) => {
+      if (prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.add(sessionId);
+      return next;
+    });
+    // Tell the shell host so its leftbar can show a working indicator on
+    // this session's row.
+    postShellAction({ kind: 'session-streaming', id: sessionId, streaming: true });
+  }, []);
+
+  // Sessions whose response landed while the user wasn't looking at their
+  // chat surface. The leftbar renders an accent dot for each.
+  const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(new Set());
+
+  // Live mirror of "is the chat surface visible" inputs. Kept in a ref so
+  // `isActivelyViewed` can be called from stale closures (the SSE callbacks
+  // captured at stream-start) and still see fresh state. Without this, a
+  // stream that ends *after* the user navigates elsewhere reads the
+  // selectedSessionId frozen at stream-start and concludes the user is
+  // still on that session — so the unread dot never appears. Updated in a
+  // `useEffect` (so the ref lags one commit, which is fine: every consumer
+  // is invoked from event handlers / async callbacks, not during render).
+  const viewStateRef = useRef({
+    selectedSessionId,
+    isCatalogOpen,
+    isSkillsCatalogOpen,
+    selectedSkillSlug,
+    selectedCronId,
+    isSettingsOpen,
+  });
+  useEffect(() => {
+    viewStateRef.current = {
+      selectedSessionId,
+      isCatalogOpen,
+      isSkillsCatalogOpen,
+      selectedSkillSlug,
+      selectedCronId,
+      isSettingsOpen,
+    };
+  });
+
+  // Stable identity (empty deps) — reads live state via the ref above.
+  // Safe to call from any callback no matter when it was captured.
+  const isActivelyViewed = useCallback((sessionId: string): boolean => {
+    const v = viewStateRef.current;
+    if (v.selectedSessionId !== sessionId) return false;
+    if (v.isCatalogOpen || v.isSkillsCatalogOpen) return false;
+    if (v.selectedSkillSlug || v.selectedCronId) return false;
+    if (v.isSettingsOpen) return false;
+    return true;
+  }, []);
+
+  const markSessionNotStreaming = useCallback((sessionId: string) => {
+    streamingControllersRef.current.delete(sessionId);
+    setStreamingSessions((prev) => {
+      if (!prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionId);
+      return next;
+    });
+    postShellAction({ kind: 'session-streaming', id: sessionId, streaming: false });
+    // Flag unread iff the user wasn't looking at this session's chat
+    // surface when the response landed. `isActivelyViewed` reads through
+    // the ref so it sees the user's current location, not the location at
+    // stream-start.
+    if (!isActivelyViewed(sessionId)) {
+      setUnreadSessionIds((prev) => {
+        if (prev.has(sessionId)) return prev;
+        const next = new Set(prev);
+        next.add(sessionId);
+        return next;
+      });
+      postShellAction({ kind: 'session-unread', id: sessionId, unread: true });
+    }
+  }, [isActivelyViewed]);
+
+  // Clear the unread flag for whatever session is currently actively viewed.
+  // Fires on selection change AND when an overlay closes — exactly the two
+  // moments a session can transition into "actively viewed". The deps list
+  // is the literal definition of "actively viewed" so the effect re-runs
+  // whenever any input changes.
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    const activelyViewed =
+      !isCatalogOpen &&
+      !isSkillsCatalogOpen &&
+      !selectedSkillSlug &&
+      !selectedCronId &&
+      !isSettingsOpen;
+    if (!activelyViewed) return;
+    setUnreadSessionIds((prev) => {
+      if (!prev.has(selectedSessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(selectedSessionId);
+      return next;
+    });
+    postShellAction({ kind: 'session-unread', id: selectedSessionId, unread: false });
+  }, [
+    selectedSessionId,
+    isCatalogOpen,
+    isSkillsCatalogOpen,
+    selectedSkillSlug,
+    selectedCronId,
+    isSettingsOpen,
+  ]);
 
   // Clear the cached detail-page names when their id clears, so the next
   // time you open a routine/skill the header doesn't briefly show the
@@ -259,7 +368,7 @@ export function App() {
 
     // Refetching while a stream is writing into this session's bucket would
     // wipe in-flight content the user can see (the server doesn't have it yet).
-    if (streamingSessionRef.current === sessionId) {
+    if (streamingControllersRef.current.has(sessionId)) {
       setIsHydratingSession(false);
       setSessionError(null);
       return;
@@ -609,7 +718,11 @@ export function App() {
   }, [adoptSession]);
 
   const handleNewChat = useCallback(() => {
-    if (!connected || isStreaming || isHydratingSession) return;
+    // Per-session streams: a new chat creates a fresh session, so it can't
+    // conflict with anything that's already streaming. Only block on the
+    // sidecar connection and on the in-flight hydrate (which would mid-air
+    // the bucket migration in adoptSession).
+    if (!connected || isHydratingSession) return;
 
     void (async () => {
       try {
@@ -619,20 +732,24 @@ export function App() {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, connected, isHydratingSession, isStreaming]);
+  }, [adoptSession, connected, isHydratingSession]);
 
   const handleSelectSession = useCallback((sessionId: string) => {
-    if (isStreaming || isHydratingSession || sessionId === selectedSessionId) return;
+    // Switching sessions while another is streaming is now first-class
+    // behavior — the stream keeps running, the new session loads alongside.
+    if (isHydratingSession || sessionId === selectedSessionId) return;
     // Route through the shell host so its sessions/selection state stays
-    // authoritative — `BrowserShellHost` in browser, Swift in native (the
-    // browser-mode chat sidebar is the only caller, but the channel works
-    // in both). The host dispatches a fresh shellState that the mirror
-    // effect picks up; overlay clears live there too.
+    // authoritative — `BrowserShellHost` in browser, Swift in native. The
+    // host dispatches a fresh shellState that the mirror effect picks up;
+    // overlay clears happen there too.
     postShellAction({ kind: 'select-session', id: sessionId });
-  }, [isHydratingSession, isStreaming, selectedSessionId]);
+  }, [isHydratingSession, selectedSessionId]);
 
   const handleArchiveToggle = useCallback(() => {
-    if (!selectedSessionId || isStreaming || isHydratingSession) return;
+    if (!selectedSessionId || isHydratingSession) return;
+    // Archiving a session that's actively streaming would orphan the stream.
+    // Block only when *this* session is the one streaming.
+    if (streamingSessions.has(selectedSessionId)) return;
 
     const session = sessions.find((candidate) => candidate.id === selectedSessionId);
     if (!session) return;
@@ -648,13 +765,12 @@ export function App() {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [isHydratingSession, isStreaming, selectedSessionId, sessions]);
+  }, [isHydratingSession, selectedSessionId, sessions, streamingSessions]);
 
   // Wires up the SSE handlers for an assistant placeholder that's already in
   // the pending/current bucket. Shared by the normal send path and the
   // post-connect replay so both flows produce identical streaming behaviour.
   const streamInto = useCallback((assistantId: string, text: string, attached: AttachedContext | null) => {
-    setIsStreaming(true);
     // Bucket the placeholder lives in *right now*. Used only by the
     // pre-ensureSession error path; once ensureSession resolves, all SSE writes
     // target the real session id captured below.
@@ -666,7 +782,6 @@ export function App() {
         // adoptSession migrated PENDING → sessionId if the placeholder came
         // through there, so every SSE update from here on targets `sessionId`
         // — even if the user navigates away mid-stream.
-        streamingSessionRef.current = sessionId;
 
         const abort = streamChatMessage(
           sessionId,
@@ -703,9 +818,7 @@ export function App() {
             updateSessionMessages(sessionId, (prev) => prev.map((message) =>
               message.id === assistantId ? { ...message, isStreaming: false, endedAt: Date.now() } : message,
             ));
-            setIsStreaming(false);
-            abortRef.current = null;
-            streamingSessionRef.current = null;
+            markSessionNotStreaming(sessionId);
             // Tell the shell host (Swift or BrowserShellHost) that this
             // session's persisted state changed so its sessions list +
             // any AI-generated title refresh into the next snapshot.
@@ -740,9 +853,7 @@ export function App() {
                   : message,
               ));
             }
-            setIsStreaming(false);
-            abortRef.current = null;
-            streamingSessionRef.current = null;
+            markSessionNotStreaming(sessionId);
             // Tell the shell host (Swift or BrowserShellHost) that this
             // session's persisted state changed so its sessions list +
             // any AI-generated title refresh into the next snapshot.
@@ -752,10 +863,14 @@ export function App() {
           { attached },
         );
 
-        abortRef.current = abort;
+        // Register the stream now that we have both the sessionId and the
+        // abort fn. Drives the InputBar's Send/Stop swap and the leftbar
+        // working indicator (via `markSessionStreaming`'s postShellAction).
+        markSessionStreaming(sessionId, abort);
       } catch (error: unknown) {
         // ensureSession threw, so we never got a real sessionId — the
-        // placeholder is still in the bucket we captured at the top.
+        // placeholder is still in the bucket we captured at the top, and we
+        // never registered a stream, so there's nothing to unregister.
         const message = error instanceof Error ? error.message : String(error);
         if (isCodexAuthError(message)) {
           updateSessionMessages(initialSessionKey, (prev) => prev.map((entry) =>
@@ -780,21 +895,23 @@ export function App() {
               : entry,
           ));
         }
-        setIsStreaming(false);
-        streamingSessionRef.current = null;
       }
     })();
-  }, [ensureSession, isNativeShell, refreshSessionList, updateSessionMessages]);
+  }, [ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, updateSessionMessages]);
 
   const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
     const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
-    if (!hasContent || isStreaming || !connected) return;
+    if (!hasContent || !connected) return;
+
+    const sessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
+    // Per-session: block only if *this* session is already streaming. Other
+    // sessions stream independently. Pending sessions (no id yet) are
+    // pre-stream; let them through so the optimistic placeholder lands.
+    if (sessionIdRef.current && streamingSessions.has(sessionIdRef.current)) return;
 
     const displayText = attached?.kind === 'cron' && text.trim().length === 0
       ? `[Reviewing routine: ${attached.name}]`
       : text;
-
-    const sessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
 
     // If we know the user hasn't connected Codex yet, don't bother hitting
     // Hermes — it'll just error with a CLI-flavoured "no credentials"
@@ -826,7 +943,7 @@ export function App() {
 
     updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, assistantMsg]);
     streamInto(assistantMsg.id, text, attached);
-  }, [codexConnected, connected, isStreaming, streamInto, updateSessionMessages]);
+  }, [codexConnected, connected, streamInto, streamingSessions, updateSessionMessages]);
 
   const handleCodexConnected = useCallback((widgetId: string) => {
     setCodexConnected(true);
@@ -859,7 +976,9 @@ export function App() {
   }, [messagesBySession, streamInto, updateSessionMessages]);
 
   const handleOpenSkillInNewSession = useCallback((slug: string) => {
-    if (!connected || isStreaming || isHydratingSession) return;
+    // Per-session streams: opens a brand new session, no conflict with
+    // anything already streaming.
+    if (!connected || isHydratingSession) return;
 
     sessionIdRef.current = null;
     setSelectedSessionId(null);
@@ -881,23 +1000,22 @@ export function App() {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, isStreaming, persistSelectedSessionId]);
+  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, persistSelectedSessionId]);
 
   const handleStop = useCallback(() => {
-    abortRef.current?.();
-    abortRef.current = null;
-    // Cancel the *streaming* session, not the currently-selected one — the
-    // user may have navigated to a different chat mid-stream.
-    const streamingSession = streamingSessionRef.current;
-    if (streamingSession) {
-      void cancelChatRequest(streamingSession).catch(() => {});
-      updateSessionMessages(streamingSession, (prev) => prev.map((message) =>
-        message.isStreaming ? { ...message, isStreaming: false, endedAt: Date.now() } : message,
-      ));
-    }
-    streamingSessionRef.current = null;
-    setIsStreaming(false);
-  }, [updateSessionMessages]);
+    // Per-session streams: the Stop button is in the InputBar of the
+    // currently-viewed session, so it stops *that* session's stream. Other
+    // sessions' streams keep running.
+    if (!selectedSessionId) return;
+    const abort = streamingControllersRef.current.get(selectedSessionId);
+    if (!abort) return;
+    abort();
+    void cancelChatRequest(selectedSessionId).catch(() => {});
+    updateSessionMessages(selectedSessionId, (prev) => prev.map((message) =>
+      message.isStreaming ? { ...message, isStreaming: false, endedAt: Date.now() } : message,
+    ));
+    markSessionNotStreaming(selectedSessionId);
+  }, [markSessionNotStreaming, selectedSessionId, updateSessionMessages]);
 
   const handleConnect = useCallback((request: ConnectionRequestView) => {
     openConnectionRequest(request.id);
@@ -972,7 +1090,7 @@ export function App() {
               className="chat-toolbar-button"
               type="button"
               onClick={handleArchiveToggle}
-              disabled={isStreaming || isHydratingSession}
+              disabled={isHydratingSession || (selectedSessionId !== null && streamingSessions.has(selectedSessionId))}
             >
               {selectedSession.archivedAt ? 'Restore' : 'Archive'}
             </button>
@@ -1013,7 +1131,7 @@ export function App() {
             onAttachedChange={handleDraftAttachedChange}
             onSend={handleSend}
             onStop={handleStop}
-            isStreaming={isStreaming}
+            isStreaming={selectedSessionId !== null && streamingSessions.has(selectedSessionId)}
             disabled={!connected || isHydratingSession || !!selectedSession?.archivedAt}
           />
         </>
@@ -1062,7 +1180,7 @@ export function App() {
             className="sidebar-primary-button"
             type="button"
             onClick={handleNewChat}
-            disabled={!connected || isStreaming || isHydratingSession}
+            disabled={!connected || isHydratingSession}
           >
             New Chat
           </button>
@@ -1076,7 +1194,7 @@ export function App() {
           title="Recent"
           sessions={activeSessions}
           selectedSessionId={selectedSessionId}
-          disabled={isStreaming || isHydratingSession}
+          disabled={isHydratingSession}
           onSelect={handleSelectSession}
           emptyText={connected ? 'No active sessions yet.' : 'Sessions will appear once the sidecar is ready.'}
         />
@@ -1086,7 +1204,7 @@ export function App() {
             title="Archived"
             sessions={archivedSessions}
             selectedSessionId={selectedSessionId}
-            disabled={isStreaming || isHydratingSession}
+            disabled={isHydratingSession}
             onSelect={handleSelectSession}
             emptyText="No archived sessions."
           />

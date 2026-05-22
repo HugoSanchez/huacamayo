@@ -45,6 +45,17 @@ export type ShellAction =
   // Swift's leftbar picks up the AI-generated title that lands after the
   // first response.
   | { kind: 'session-mutated'; id: string }
+  // Streaming state changed for a session. Swift's leftbar uses this to
+  // show a "working" indicator on rows whose agent is currently generating,
+  // so the user can tell which conversations are alive when they're not
+  // looking at the chat surface.
+  | { kind: 'session-streaming'; id: string; streaming: boolean }
+  // Unread response for a session — set when a stream finishes while the
+  // user wasn't looking at that chat surface (different session selected,
+  // or an overlay covered chat). Cleared when the chat-ui sees the session
+  // become actively-viewed again. Chat-ui owns the rule because only it
+  // knows full overlay state.
+  | { kind: 'session-unread'; id: string; unread: boolean }
   | { kind: 'open-external-url'; url: string }
   | { kind: 'sign-out' }
   // User dismissed the catalog via the chat-ui's close button (rather
