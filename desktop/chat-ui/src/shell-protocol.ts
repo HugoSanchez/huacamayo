@@ -1,0 +1,53 @@
+// Wire format between the Swift shell and the chat-ui WebView.
+//
+// Today the IPC is a tangle of ~14 named CustomEvents (Swift → JS) and
+// per-type `chatBridge.postMessage` discriminators (JS → Swift). This file
+// is the first step toward consolidating that into three channels:
+//
+//   • Swift → JS: `verso:shell-state` carrying a full `ShellState` snapshot.
+//   • Swift → JS: `verso:shell-command` for transient commands.
+//   • JS → Swift: `chatBridge.postMessage({type: 'action', action})` with a
+//     single discriminated `ShellAction` payload.
+//
+// Step 1 just defines the shapes — no behavior change. See
+// `.context/plans/session-state-consolidation.md` for the full plan and
+// `desktop/macos/ChatWebView.swift` for the matching Swift side.
+
+import type { ChatSessionSummary } from './types';
+
+/// Snapshot of everything the chat-ui's UI derives from. Pushed from Swift
+/// after every mutation that affects what the chat-ui should render.
+/// Last write wins.
+export interface ShellState {
+  sessions: ChatSessionSummary[];
+  selectedSessionId: string | null;
+}
+
+/// Transient command pushed from Swift to JS. Not snapshot-able (overlay
+/// open/close state lives in the chat-ui).
+export type ShellCommand =
+  | { kind: 'open-catalog' }
+  | { kind: 'close-catalog' }
+  | { kind: 'open-skills-catalog' }
+  | { kind: 'close-skills-catalog' }
+  | { kind: 'open-cron'; id: string }
+  | { kind: 'open-settings' };
+
+/// Action sent from JS → Swift via the chatBridge. One discriminated union
+/// will eventually replace the per-type `*Changed` messages we have today.
+export type ShellAction =
+  | { kind: 'select-session'; id: string | null }
+  | { kind: 'create-session' }
+  | { kind: 'archive-session'; id: string }
+  | { kind: 'unarchive-session'; id: string }
+  | { kind: 'rename-session'; id: string; title: string }
+  // "I just streamed a message into session X; please refresh." Used so
+  // Swift's leftbar picks up the AI-generated title that lands after the
+  // first response.
+  | { kind: 'session-mutated'; id: string }
+  | { kind: 'open-external-url'; url: string }
+  | { kind: 'sign-out' }
+  // User dismissed the catalog via the chat-ui's close button (rather
+  // than via a Swift-side leftbar toggle).
+  | { kind: 'catalog-closed' }
+  | { kind: 'skills-catalog-closed' };

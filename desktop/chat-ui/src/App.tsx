@@ -35,6 +35,7 @@ import type {
   StoredChatMessage,
   ToolkitView,
 } from './types';
+import type { ShellAction, ShellState } from './shell-protocol';
 
 declare global {
   interface Window {
@@ -46,9 +47,9 @@ declare global {
     setSidecarPort?: (port: number) => void;
     __versoSidecarPort?: number;
     __versoShellMode?: 'native' | 'browser';
-    __versoPendingSelectedSessionId?: string | null;
     __versoPendingCatalogOpen?: boolean;
     __versoPendingSkillsCatalogOpen?: boolean;
+    __versoPendingShellState?: ShellState | null;
   }
 }
 
@@ -70,6 +71,15 @@ export function App() {
   const isNativeShell = hasNativeShell();
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // Session-state consolidation step 2: receive the full Swift shell-state
+  // snapshot. Nothing consumes this yet — step 3 will cut over `sessions` and
+  // `selectedSessionId` to be derived from here, deleting the dual stores.
+  // Initialized from `__versoPendingShellState` so a snapshot pushed before
+  // mount (or via the user script's atDocumentStart hook) is already present
+  // on first render.
+  const [shellState, setShellState] = useState<ShellState | null>(
+    () => (typeof window !== 'undefined' ? window.__versoPendingShellState ?? null : null),
+  );
   // Messages live in a per-session bucket so an in-flight stream for session A
   // can't bleed into session B's view when the user switches mid-stream.
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
@@ -229,7 +239,6 @@ export function App() {
       setSelectedSessionId(null);
       persistSelectedSessionId(null);
       setIsHydratingSession(false);
-      notifyNativeSessionState(isNativeShell, null);
       return;
     }
 
@@ -247,7 +256,6 @@ export function App() {
     if (streamingSessionRef.current === sessionId) {
       setIsHydratingSession(false);
       setSessionError(null);
-      notifyNativeSessionState(isNativeShell, sessionId);
       return;
     }
 
@@ -258,28 +266,31 @@ export function App() {
       if (token !== hydrateTokenRef.current) return;
       setMessagesBySession((prev) => ({ ...prev, [sessionId]: storedMessages.map(toUiMessage) }));
       setSessionError(null);
-      notifyNativeSessionState(isNativeShell, sessionId);
     } catch (error: unknown) {
       if (token !== hydrateTokenRef.current) return;
       sessionIdRef.current = null;
       setSelectedSessionId(null);
       persistSelectedSessionId(null);
       setSessionError(error instanceof Error ? error.message : String(error));
-      notifyNativeSessionState(isNativeShell, null);
     } finally {
       if (token === hydrateTokenRef.current) {
         setIsHydratingSession(false);
       }
     }
-  }, [isNativeShell, persistSelectedSessionId]);
+  }, [persistSelectedSessionId]);
 
   const bootstrapSessions = useCallback(async () => {
+    if (isNativeShell) {
+      // Native mode: Swift drives the session list and selection via the
+      // shellState snapshot (already in `__versoPendingShellState` at this
+      // point, applied by the mirror effects above). Nothing to bootstrap
+      // from JS — the mirror effect will hydrate messages for the initial
+      // selection.
+      return;
+    }
     const nextSessions = await refreshSessionList();
     const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    const pendingNativeSessionId = normalizeNativeSessionId(window.__versoPendingSelectedSessionId);
-    const initialSessionId = isNativeShell
-      ? resolveNativeBootstrapSessionId(nextSessions, pendingNativeSessionId, storedSessionId)
-      : pickInitialSessionId(nextSessions, storedSessionId);
+    const initialSessionId = pickInitialSessionId(nextSessions, storedSessionId);
     await hydrateSession(initialSessionId);
   }, [hydrateSession, isNativeShell, refreshSessionList]);
 
@@ -309,7 +320,10 @@ export function App() {
       return prev;
     });
     setSessionError(null);
-    notifyNativeSessionState(isNativeShell, nextSession.id);
+    // Tell Swift to take the new session as its current selection so its
+    // leftbar highlight and @AppStorage stay in sync. Replaces the legacy
+    // `sessionStateChanged` chatBridge message.
+    postShellAction(isNativeShell, { kind: 'select-session', id: nextSession.id });
     return nextSession.id;
   }, [isNativeShell, persistSelectedSessionId]);
 
@@ -365,52 +379,73 @@ export function App() {
     };
   }, [bootstrapSessions, refreshConnections, refreshToolkitCatalog, refreshCodexStatus]);
 
+  // Intra-app `verso:select-session` event (currently fired by
+  // `CronDetailPage`'s "Edit in Chat" after creating a fresh session). In
+  // native mode we forward to Swift so its leftbar selection follows; in
+  // browser mode we hydrate directly. Distinct from the now-removed
+  // Swift-driven `verso:select-session` channel, which is replaced by
+  // `verso:shell-state`.
   useEffect(() => {
-    if (!isNativeShell) return;
-
-    const handleNativeSelection = (event: Event) => {
+    const onSelectSession = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId?: unknown }>).detail;
-      const requestedSessionId = normalizeNativeSessionId(detail?.sessionId);
-
-      // Background-refresh the session list so titles/previews stay fresh,
-      // but don't block the click on the round-trip. Swift already validated
-      // the id before sending it; if it's somehow stale, hydrateSession's
-      // 404 path clears the selection and surfaces the error.
-      void refreshSessionList();
-
-      if (requestedSessionId) {
-        setSelectedSkillSlug(null);
-        setSelectedCronId(null);
-        setIsSettingsOpen(false);
+      const sessionId = typeof detail?.sessionId === 'string' && detail.sessionId.length > 0
+        ? detail.sessionId
+        : null;
+      if (isNativeShell) {
+        postShellAction(isNativeShell, { kind: 'select-session', id: sessionId });
+      } else {
+        void hydrateSession(sessionId);
       }
-
-      if (requestedSessionId === sessionIdRef.current) {
-        sessionIdRef.current = requestedSessionId;
-        setSelectedSessionId(requestedSessionId);
-        persistSelectedSessionId(requestedSessionId);
-        return;
-      }
-
-      void hydrateSession(requestedSessionId);
     };
-
-    window.addEventListener('verso:select-session', handleNativeSelection as EventListener);
+    window.addEventListener('verso:select-session', onSelectSession as EventListener);
     return () => {
-      window.removeEventListener('verso:select-session', handleNativeSelection as EventListener);
+      window.removeEventListener('verso:select-session', onSelectSession as EventListener);
     };
-  }, [hydrateSession, isNativeShell, persistSelectedSessionId, refreshSessionList]);
+  }, [hydrateSession, isNativeShell]);
 
-  // Swift nudges us via `verso:sessions-changed` after a Swift-side mutation
-  // (rename, archive, …) so the chat header / session list stay in sync with
-  // the leftbar without waiting for the next click or stream completion.
+  // Session-state consolidation step 2: subscribe to the full Swift snapshot.
   useEffect(() => {
     if (!isNativeShell) return;
-    const onSessionsChanged = () => { void refreshSessionList(); };
-    window.addEventListener('verso:sessions-changed', onSessionsChanged);
-    return () => {
-      window.removeEventListener('verso:sessions-changed', onSessionsChanged);
+    const onShellState = (event: Event) => {
+      const detail = (event as CustomEvent<ShellState | null>).detail;
+      setShellState(detail ?? null);
     };
-  }, [isNativeShell, refreshSessionList]);
+    window.addEventListener('verso:shell-state', onShellState as EventListener);
+    return () => {
+      window.removeEventListener('verso:shell-state', onShellState as EventListener);
+    };
+  }, [isNativeShell]);
+
+  // Session-state consolidation step 3: in native mode, Swift's snapshot
+  // becomes the source of truth for the sessions list and current selection.
+  // We mirror it into the existing local state so the rest of the code keeps
+  // working unchanged; step 4 deletes the redundant channels that were
+  // driving these directly. Browser mode is untouched (shellState stays null).
+  //
+  // The selectedSessionId effect also triggers `hydrateSession`, which is
+  // what `handleNativeSelection` used to do for each leftbar click — but
+  // now any source of selection change (snapshot push, optimistic local
+  // setter, etc.) goes through the same code path.
+  useEffect(() => {
+    if (!isNativeShell || !shellState) return;
+    setSessions(shellState.sessions);
+  }, [isNativeShell, shellState]);
+
+  useEffect(() => {
+    if (!isNativeShell || !shellState) return;
+    const next = shellState.selectedSessionId;
+    if (next === sessionIdRef.current) return;
+    // Leaving overlays open while switching sessions is jarring — every
+    // session click from the leftbar should land you in the chat surface.
+    // (The old `handleNativeSelection` did this on `verso:select-session`;
+    // we now do it whenever the snapshot changes the selection.)
+    if (next) {
+      setSelectedSkillSlug(null);
+      setSelectedCronId(null);
+      setIsSettingsOpen(false);
+    }
+    void hydrateSession(next);
+  }, [isNativeShell, shellState, hydrateSession]);
 
   useEffect(() => {
     const handleCatalogToggle = (event: Event) => {
@@ -1375,16 +1410,6 @@ function pickInitialSessionId(sessions: ChatSessionSummary[], storedSessionId: s
   return sessions.find((session) => !session.archivedAt)?.id ?? sessions[0]?.id ?? null;
 }
 
-function resolveNativeBootstrapSessionId(
-  sessions: ChatSessionSummary[],
-  requestedSessionId: string | null,
-  storedSessionId: string | null,
-): string | null {
-  const preferred = requestedSessionId ?? storedSessionId;
-  if (!preferred) return null;
-  return sessions.some((session) => session.id === preferred) ? preferred : null;
-}
-
 function formatSessionSummary(session: ChatSessionSummary): string {
   if (session.messageCount === 0) return 'Empty session';
   return `${session.messageCount} messages · Updated ${formatRelativeTime(session.updatedAt)}`;
@@ -1421,17 +1446,13 @@ function hasNativeShell(): boolean {
     || typeof window.webkit?.messageHandlers?.chatBridge?.postMessage === 'function';
 }
 
-function normalizeNativeSessionId(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
-function notifyNativeSessionState(isNativeShell: boolean, sessionId: string | null): void {
+/// Single consolidated JS→Swift channel. Posts a typed `ShellAction` that
+/// Swift's `ChatWebView.Coordinator.parseShellAction` decodes. Browser-mode
+/// no-ops (there's no chatBridge to post to).
+function postShellAction(isNativeShell: boolean, action: ShellAction): void {
   if (!isNativeShell) return;
   const bridge = window.webkit?.messageHandlers?.chatBridge;
-  bridge?.postMessage({
-    type: 'sessionStateChanged',
-    sessionId,
-  });
+  bridge?.postMessage({ type: 'action', action });
 }
 
 function notifyNativeResponseReady(isNativeShell: boolean): void {

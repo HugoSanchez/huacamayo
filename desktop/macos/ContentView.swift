@@ -108,11 +108,6 @@ struct ContentView: View {
     @State private var crons: [SidebarCron] = []
     @State private var pendingCronOpen: CronOpenRequest?
     @State private var pendingSettingsOpen: SettingsOpenRequest?
-    // Bumped after a Swift-side session mutation (rename/archive/unarchive)
-    // so ChatWebView nudges the chat-ui to refresh its sessions cache. Without
-    // this, renaming a session in the leftbar didn't propagate to the chat
-    // header while it was the active chat.
-    @State private var sessionsChangedToken: UUID?
     @State private var hasCompletedInitialSelection = false
     @State private var isSystemAsleep = false
 
@@ -243,14 +238,12 @@ struct ContentView: View {
             // span the full window height like the left sidebar.
             ChatWebView(
                 sidecarPort: sidecarPort,
-                selectedSessionId: selectedSessionId,
                 isDarkMode: isDarkMode,
                 isCatalogOpen: isConnectionsCatalogExpanded,
                 isSkillsCatalogOpen: isSkillsCatalogExpanded,
                 pendingCronOpen: pendingCronOpen,
                 pendingSettingsOpen: pendingSettingsOpen,
-                sessionsChangedToken: sessionsChangedToken,
-                onSessionStateChange: handleWebSessionStateChange,
+                shellState: ShellState(sessions: sessions, selectedSessionId: selectedSessionId),
                 onCatalogStateChange: { open in
                     isConnectionsCatalogExpanded = open
                 },
@@ -271,7 +264,8 @@ struct ContentView: View {
                 },
                 onSignOutRequested: {
                     managedSessionStore.clearSession()
-                }
+                },
+                onShellAction: handleShellAction
             )
             .overlay(alignment: .topLeading) {
                 if !isLeftSidebarExpanded {
@@ -523,7 +517,6 @@ struct ContentView: View {
             let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
             sessions = sortSessions(replacing(decoded.session, in: sessions))
             setSelectedSession(decoded.session.id)
-            sessionsChangedToken = UUID()
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
@@ -552,7 +545,6 @@ struct ContentView: View {
             if selectedSessionId == decoded.session.id {
                 setSelectedSession(nil)
             }
-            sessionsChangedToken = UUID()
             sessionError = nil
             showSidebarToast("Session archived")
         } catch {
@@ -583,7 +575,6 @@ struct ContentView: View {
             if selectedSessionId == decoded.session.id {
                 setSelectedSession(decoded.session.id)
             }
-            sessionsChangedToken = UUID()
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
@@ -609,18 +600,37 @@ struct ContentView: View {
             let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
             sessions = sortSessions(replacing(decoded.session, in: sessions))
             setSelectedSession(decoded.session.id)
-            sessionsChangedToken = UUID()
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
         }
     }
 
+    /// Single entry point for every JS→Swift action over the new
+    /// `ShellAction` channel. Step 5 of session-state consolidation —
+    /// today only `selectSession` and `sessionMutated` flow through here.
+    /// Other cases will subsume the legacy per-type chatBridge handlers as
+    /// the chat-ui migrates each mutation over.
     @MainActor
-    private func handleWebSessionStateChange(_ sessionId: String?) {
-        setSelectedSession(sessionId)
-        Task {
-            await refreshSessions(preferredSelection: sessionId)
+    private func handleShellAction(_ action: ShellAction) {
+        switch action {
+        case .selectSession(let id):
+            setSelectedSession(id)
+            Task { await refreshSessions(preferredSelection: id) }
+        case .sessionMutated:
+            Task { await refreshSessions() }
+        case .createSession,
+             .archiveSession,
+             .unarchiveSession,
+             .renameSession,
+             .openExternalUrl,
+             .signOut,
+             .catalogClosed,
+             .skillsCatalogClosed:
+            // Not yet migrated — JS still uses the legacy per-type
+            // chatBridge messages for these. They'll move here in later
+            // consolidation steps.
+            break
         }
     }
 
@@ -1469,7 +1479,9 @@ private struct SidebarConnectionsResponse: Decodable {
     let connections: [SidebarConnection]
 }
 
-private struct SidebarChatSession: Decodable, Identifiable, Equatable {
+// Internal (not `private`) so the shell-protocol types in ChatWebView.swift
+// can carry `[SidebarChatSession]` inside `ShellState`.
+struct SidebarChatSession: Codable, Identifiable, Equatable {
     let id: String
     let title: String
     let createdAt: String
