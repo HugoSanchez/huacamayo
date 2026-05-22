@@ -2,20 +2,79 @@ import SwiftUI
 import WebKit
 import AppKit
 
+// MARK: - Shell protocol
+//
+// Single wire format between the Swift shell and the chat-ui WebView. Today
+// the IPC is a tangle of ~14 named injection methods and per-type
+// `chatBridge.postMessage` discriminators. This file is the first step
+// toward consolidating that into three channels:
+//
+//   • Swift → JS: `verso:shell-state` carrying a full `ShellState` snapshot
+//     of everything the chat-ui needs to render (sessions list, selection).
+//   • Swift → JS: `verso:shell-command` for transient commands (open
+//     overlays, navigate to a cron, etc.).
+//   • JS → Swift: `chatBridge.postMessage({type: "action", action})` with a
+//     single discriminated `ShellAction` payload.
+//
+// Step 1 just defines the shapes — no behavior change. See
+// `.context/plans/session-state-consolidation.md` for the full plan and
+// `desktop/chat-ui/src/shell-protocol.ts` for the matching TS side.
+
+/// Snapshot of everything the chat-ui's UI derives from. Last write wins;
+/// pushed from Swift after every mutation that affects what the chat-ui
+/// should render.
+struct ShellState: Codable, Equatable {
+    let sessions: [SidebarChatSession]
+    let selectedSessionId: String?
+}
+
+/// Transient command pushed from Swift to JS. Not snapshot-able (we don't
+/// store the open/close state of overlays on the Swift side; the chat-ui
+/// owns it).
+enum ShellCommand: Equatable {
+    case openCatalog
+    case closeCatalog
+    case openSkillsCatalog
+    case closeSkillsCatalog
+    case openCron(id: String)
+    case openSettings
+}
+
+/// Action sent from JS → Swift via the chatBridge. One discriminated union
+/// replaces the per-type `*Changed` messages we have today.
+enum ShellAction: Equatable {
+    case selectSession(id: String?)
+    case createSession
+    case archiveSession(id: String)
+    case unarchiveSession(id: String)
+    case renameSession(id: String, title: String)
+    /// "I just streamed a message into session X; please refresh." Used so
+    /// Swift's leftbar picks up the AI-generated title that lands after the
+    /// first response.
+    case sessionMutated(id: String)
+    case openExternalUrl(url: String)
+    case signOut
+    /// User dismissed the catalog via the chat-ui's close button (rather
+    /// than via a Swift-side leftbar toggle).
+    case catalogClosed
+    case skillsCatalogClosed
+}
+
 /// SwiftUI wrapper around WKWebView that hosts the React chat app.
 /// Passes the sidecar port to JS via `window.setSidecarPort(port)`.
 struct ChatWebView: NSViewRepresentable {
     let sidecarPort: Int?
-    let selectedSessionId: String?
     let isDarkMode: Bool
     let isCatalogOpen: Bool
     let isSkillsCatalogOpen: Bool
     let pendingCronOpen: CronOpenRequest?
     let pendingSettingsOpen: SettingsOpenRequest?
-    // Nonced token: bumped by ContentView after a Swift-side session mutation
-    // (rename, archive, …) so the chat-ui refreshes its own sessions cache.
-    let sessionsChangedToken: UUID?
-    let onSessionStateChange: ((String?) -> Void)?
+    // Full shell-state snapshot pushed to JS on every change. The chat-ui
+    // derives its session list + selection off this; Swift-side mutations
+    // that change either bump the snapshot automatically via SwiftUI's
+    // re-render. (Replaces the older nonced-token `sessionsChangedToken`
+    // and per-mutation injection channels.)
+    let shellState: ShellState?
     let onCatalogStateChange: ((Bool) -> Void)?
     let onSkillsCatalogStateChange: ((Bool) -> Void)?
     let onCronsChanged: (() -> Void)?
@@ -23,17 +82,22 @@ struct ChatWebView: NSViewRepresentable {
     let onSessionsChanged: (() -> Void)?
     let onSkillsChanged: (() -> Void)?
     let onSignOutRequested: (() -> Void)?
+    /// Single consolidated JS→Swift channel. Future home for every action
+    /// the chat-ui posts; today only `selectSession` and `sessionMutated`
+    /// flow through here, with the per-type callbacks above slated for
+    /// removal as more actions migrate.
+    let onShellAction: ((ShellAction) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
-            onSessionStateChange: onSessionStateChange,
             onCatalogStateChange: onCatalogStateChange,
             onSkillsCatalogStateChange: onSkillsCatalogStateChange,
             onCronsChanged: onCronsChanged,
             onConnectionsChanged: onConnectionsChanged,
             onSessionsChanged: onSessionsChanged,
             onSkillsChanged: onSkillsChanged,
-            onSignOutRequested: onSignOutRequested
+            onSignOutRequested: onSignOutRequested,
+            onShellAction: onShellAction
         )
     }
 
@@ -72,13 +136,6 @@ struct ChatWebView: NSViewRepresentable {
               };
 
               window.__versoShellMode = 'native';
-              window.__versoPendingSelectedSessionId = null;
-              window.__versoApplySelectedSession = function(sessionId) {
-                window.__versoPendingSelectedSessionId = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
-                window.dispatchEvent(new CustomEvent('verso:select-session', {
-                  detail: { sessionId: window.__versoPendingSelectedSessionId }
-                }));
-              };
 
               window.__versoPendingCatalogOpen = false;
               window.__versoApplyCatalogState = function(open) {
@@ -95,6 +152,17 @@ struct ChatWebView: NSViewRepresentable {
                 window.__versoPendingSkillsCatalogOpen = next;
                 window.dispatchEvent(new CustomEvent('verso:toggle-skills-catalog', {
                   detail: { open: next }
+                }));
+              };
+
+              // Session-state consolidation step 2: full snapshot from Swift.
+              // Swift pushes a fresh `ShellState` on every change; the chat-ui
+              // mounts with whatever was last set on `__versoPendingShellState`.
+              window.__versoPendingShellState = null;
+              window.__versoApplyShellState = function(state) {
+                window.__versoPendingShellState = state || null;
+                window.dispatchEvent(new CustomEvent('verso:shell-state', {
+                  detail: window.__versoPendingShellState
                 }));
               };
             })();
@@ -131,7 +199,6 @@ struct ChatWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.onSessionStateChange = onSessionStateChange
         context.coordinator.onCatalogStateChange = onCatalogStateChange
 
         // When sidecar port becomes available, inject it into JS
@@ -139,14 +206,6 @@ struct ChatWebView: NSViewRepresentable {
             context.coordinator.pendingPort = port
             if context.coordinator.pageLoaded {
                 context.coordinator.injectPort(port)
-            }
-        }
-
-        let selectedSessionToken = selectedSessionId ?? "__verso_nil_session__"
-        if selectedSessionToken != context.coordinator.lastInjectedSelectedSessionToken {
-            context.coordinator.pendingSelectedSessionId = selectedSessionId
-            if context.coordinator.pageLoaded {
-                context.coordinator.injectSelectedSession(selectedSessionId)
             }
         }
 
@@ -182,14 +241,15 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
-        // Sessions-changed nudges follow the same nonced-token pattern. Fires
-        // after a Swift-side mutation (rename, archive, …) so the chat-ui
-        // refreshes its own sessions cache and updates the header title.
-        if let token = sessionsChangedToken, token != context.coordinator.lastInjectedSessionsChangedToken {
+        // Shell-state snapshot. Pushed on every change so the chat-ui can
+        // drive its rendering off a single source of truth instead of N
+        // overlapping injection channels. Step 2: pushed but not yet
+        // consumed; old channels keep working in parallel.
+        if let state = shellState, state != context.coordinator.lastInjectedShellState {
+            context.coordinator.pendingShellState = state
             if context.coordinator.pageLoaded {
-                context.coordinator.injectSessionsChanged()
+                context.coordinator.injectShellState(state)
             }
-            context.coordinator.lastInjectedSessionsChangedToken = token
         }
 
         // Update color scheme
@@ -204,7 +264,6 @@ struct ChatWebView: NSViewRepresentable {
     }
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-        var onSessionStateChange: ((String?) -> Void)?
         var onCatalogStateChange: ((Bool) -> Void)?
         var onSkillsCatalogStateChange: ((Bool) -> Void)?
         var onCronsChanged: (() -> Void)?
@@ -212,11 +271,10 @@ struct ChatWebView: NSViewRepresentable {
         var onSessionsChanged: (() -> Void)?
         var onSkillsChanged: (() -> Void)?
         var onSignOutRequested: (() -> Void)?
+        var onShellAction: ((ShellAction) -> Void)?
         weak var webView: WKWebView?
         var lastInjectedPort: Int?
         var pendingPort: Int?
-        var lastInjectedSelectedSessionToken: String?
-        var pendingSelectedSessionId: String?
         var lastInjectedCatalogOpen: Bool?
         var pendingCatalogOpen: Bool = false
         var lastInjectedSkillsCatalogOpen: Bool?
@@ -225,21 +283,21 @@ struct ChatWebView: NSViewRepresentable {
         var pendingCronOpen: CronOpenRequest?
         var lastInjectedSettingsToken: UUID?
         var pendingSettingsOpen: SettingsOpenRequest?
-        var lastInjectedSessionsChangedToken: UUID?
+        var lastInjectedShellState: ShellState?
+        var pendingShellState: ShellState?
         var lastDarkMode: Bool?
         var pageLoaded = false
 
         init(
-            onSessionStateChange: ((String?) -> Void)?,
             onCatalogStateChange: ((Bool) -> Void)?,
             onSkillsCatalogStateChange: ((Bool) -> Void)?,
             onCronsChanged: (() -> Void)?,
             onConnectionsChanged: (() -> Void)?,
             onSessionsChanged: (() -> Void)?,
             onSkillsChanged: (() -> Void)?,
-            onSignOutRequested: (() -> Void)?
+            onSignOutRequested: (() -> Void)?,
+            onShellAction: ((ShellAction) -> Void)?
         ) {
-            self.onSessionStateChange = onSessionStateChange
             self.onCatalogStateChange = onCatalogStateChange
             self.onSkillsCatalogStateChange = onSkillsCatalogStateChange
             self.onCronsChanged = onCronsChanged
@@ -247,6 +305,7 @@ struct ChatWebView: NSViewRepresentable {
             self.onSessionsChanged = onSessionsChanged
             self.onSkillsChanged = onSkillsChanged
             self.onSignOutRequested = onSignOutRequested
+            self.onShellAction = onShellAction
             super.init()
             // When the system is about to sleep we tell the webview's JS to
             // stop its polling intervals. Resume on wake. NSWorkspace fires
@@ -300,7 +359,6 @@ struct ChatWebView: NSViewRepresentable {
             if let port = pendingPort ?? lastInjectedPort {
                 injectPort(port)
             }
-            injectSelectedSession(pendingSelectedSessionId)
             injectCatalogState(pendingCatalogOpen)
             injectSkillsCatalogState(pendingSkillsCatalogOpen)
             if let request = pendingCronOpen {
@@ -308,6 +366,9 @@ struct ChatWebView: NSViewRepresentable {
             }
             if let request = pendingSettingsOpen {
                 injectOpenSettings(request)
+            }
+            if let state = pendingShellState {
+                injectShellState(state)
             }
         }
 
@@ -365,28 +426,6 @@ struct ChatWebView: NSViewRepresentable {
             pendingPort = port
         }
 
-        func injectSelectedSession(_ sessionId: String?) {
-            guard let webView else { return }
-
-            let sessionLiteral = sessionId.map { "'\($0.jsEscaped)'" } ?? "null"
-            let js = """
-            (function() {
-              window.__versoPendingSelectedSessionId = \(sessionLiteral);
-              if (typeof window.__versoApplySelectedSession === 'function') {
-                window.__versoApplySelectedSession(\(sessionLiteral));
-              }
-            })();
-            """
-            webView.evaluateJavaScript(js) { _, error in
-                if let error {
-                    print("[ChatWebView] Failed to inject selected session: \(error.localizedDescription)")
-                }
-            }
-
-            pendingSelectedSessionId = sessionId
-            lastInjectedSelectedSessionToken = sessionId ?? "__verso_nil_session__"
-        }
-
         func injectCatalogState(_ open: Bool) {
             guard let webView else { return }
             let js = """
@@ -426,12 +465,35 @@ struct ChatWebView: NSViewRepresentable {
             lastInjectedCronToken = request.token
         }
 
-        func injectSessionsChanged() {
+        func injectShellState(_ state: ShellState) {
             guard let webView else { return }
-            webView.evaluateJavaScript(
-                "window.dispatchEvent(new CustomEvent('verso:sessions-changed'));",
-                completionHandler: nil
-            )
+            // ShellState is `Codable`; the resulting JSON is a valid JS
+            // expression so we can splice it directly into the call.
+            let encoder = JSONEncoder()
+            // Stable key ordering keeps the equality check upstream cheap
+            // (string compare of last-injected JSON, if we ever want it).
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(state),
+                  let json = String(data: data, encoding: .utf8) else {
+                print("[ChatWebView] Failed to encode ShellState")
+                return
+            }
+            let js = """
+            (function() {
+              if (typeof window.__versoApplyShellState === 'function') {
+                window.__versoApplyShellState(\(json));
+              } else {
+                window.__versoPendingShellState = \(json);
+              }
+            })();
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    print("[ChatWebView] Failed to inject shell state: \(error.localizedDescription)")
+                }
+            }
+            pendingShellState = state
+            lastInjectedShellState = state
         }
 
         func injectOpenSettings(_ request: SettingsOpenRequest) {
@@ -479,14 +541,6 @@ struct ChatWebView: NSViewRepresentable {
                let rawURL = body["url"] as? String,
                let url = URL(string: rawURL) {
                 NSWorkspace.shared.open(url)
-                return
-            }
-
-            if type == "sessionStateChanged" {
-                let sessionId = body["sessionId"] as? String
-                DispatchQueue.main.async { [onSessionStateChange] in
-                    onSessionStateChange?(sessionId)
-                }
                 return
             }
 
@@ -546,6 +600,52 @@ struct ChatWebView: NSViewRepresentable {
                     AppDelegate.shared?.notifyResponseReady()
                 }
                 return
+            }
+
+            // Consolidated JS→Swift action channel. As more legacy
+            // `*Changed` message types migrate over, this becomes the only
+            // branch we need.
+            if type == "action",
+               let payload = body["action"] as? [String: Any],
+               let action = Coordinator.parseShellAction(payload) {
+                DispatchQueue.main.async { [onShellAction] in
+                    onShellAction?(action)
+                }
+                return
+            }
+        }
+
+        static func parseShellAction(_ payload: [String: Any]) -> ShellAction? {
+            guard let kind = payload["kind"] as? String else { return nil }
+            switch kind {
+            case "select-session":
+                return .selectSession(id: payload["id"] as? String)
+            case "create-session":
+                return .createSession
+            case "archive-session":
+                guard let id = payload["id"] as? String else { return nil }
+                return .archiveSession(id: id)
+            case "unarchive-session":
+                guard let id = payload["id"] as? String else { return nil }
+                return .unarchiveSession(id: id)
+            case "rename-session":
+                guard let id = payload["id"] as? String,
+                      let title = payload["title"] as? String else { return nil }
+                return .renameSession(id: id, title: title)
+            case "session-mutated":
+                guard let id = payload["id"] as? String else { return nil }
+                return .sessionMutated(id: id)
+            case "open-external-url":
+                guard let url = payload["url"] as? String else { return nil }
+                return .openExternalUrl(url: url)
+            case "sign-out":
+                return .signOut
+            case "catalog-closed":
+                return .catalogClosed
+            case "skills-catalog-closed":
+                return .skillsCatalogClosed
+            default:
+                return nil
             }
         }
     }
