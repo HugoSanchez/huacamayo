@@ -32,6 +32,7 @@ class StubVerifier implements PrivyAuthVerifier {
  */
 class StubComposioService extends ComposioService {
   capturedUserId: string | null = null;
+  capturedDeletedConnectionId: string | null = null;
   constructor() { super('test-key'); }
 
   override get configured(): boolean { return true; }
@@ -65,6 +66,11 @@ class StubComposioService extends ComposioService {
         noAuth: false,
       },
     ];
+  }
+
+  override async deleteConnection(userId: string, connectedAccountId: string): Promise<void> {
+    this.capturedUserId = userId;
+    this.capturedDeletedConnectionId = connectedAccountId;
   }
 
   override async searchTools(userId: string, query: string, _toolkits?: string[]): Promise<BridgeSearchToolResult[]> {
@@ -159,6 +165,18 @@ describe('Composio routes', () => {
     expect(body.connections).toHaveLength(1);
     expect(body.connections[0].toolkitSlug).toBe('gmail');
     expect(s.composio.capturedUserId).toBe(s.userId);
+  });
+
+  test('DELETE /v1/composio/connections/:id uses authenticated user', async () => {
+    s = await setup();
+    const res = await s.app.inject({
+      method: 'DELETE',
+      url: '/v1/composio/connections/ca_1',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(s.composio.capturedUserId).toBe(s.userId);
+    expect(s.composio.capturedDeletedConnectionId).toBe('ca_1');
   });
 
   test('GET /v1/composio/toolkits passes query+limit params through', async () => {

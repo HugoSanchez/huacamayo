@@ -43,11 +43,21 @@ export function defaultComposioToolsRefreshMarkerPath(): string {
   return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'composio-tools-refresh.marker');
 }
 
+// Composio's DELETE /connected_accounts/:id is a soft-delete that's
+// eventually consistent. For a short window after a successful delete the
+// list endpoint can still return the account as ACTIVE, which would make
+// the disconnected toolkit reappear in the sidebar a moment later. We keep
+// a brief in-memory tombstone per id and filter any remote list against
+// it. 60s comfortably covers observed propagation; entries expire on read.
+const DELETED_CONNECTION_TOMBSTONE_TTL_MS = 60_000;
+
 export class ConnectionsStore {
   private readonly storePath: string;
   private readonly toolsRefreshMarkerPath: string;
 
   private state: ConnectionsStoreShape;
+
+  private readonly tombstones = new Map<string, number>();
 
   constructor(
     storePath = process.env.VERSO_CONNECTIONS_STORE_PATH?.trim() || defaultStorePath(),
@@ -95,6 +105,49 @@ export class ConnectionsStore {
       this.touchToolsRefreshMarker();
     }
     return record;
+  }
+
+  replaceConnections(records: ConnectionRecord[]): void {
+    const previous = this.state.connections;
+    const deduped = new Map<string, ConnectionRecord>();
+    for (const record of records) {
+      deduped.set(record.connectedAccountId, record);
+    }
+    const next = Array.from(deduped.values());
+    const availabilityChanged = connectionAvailabilitySignature(previous) !== connectionAvailabilitySignature(next);
+    const persistedChanged = connectionPersistenceSignature(previous) !== connectionPersistenceSignature(next);
+
+    if (!persistedChanged) return;
+
+    this.state.connections = next;
+    this.save();
+    if (availabilityChanged) {
+      this.touchToolsRefreshMarker();
+    }
+  }
+
+  deleteConnection(connectedAccountId: string): boolean {
+    const before = this.state.connections.length;
+    this.state.connections = this.state.connections.filter(
+      (item) => item.connectedAccountId !== connectedAccountId,
+    );
+    const removed = this.state.connections.length !== before;
+    this.tombstones.set(connectedAccountId, Date.now() + DELETED_CONNECTION_TOMBSTONE_TTL_MS);
+    if (removed) {
+      this.save();
+    }
+    this.touchToolsRefreshMarker();
+    return removed;
+  }
+
+  isTombstoned(connectedAccountId: string): boolean {
+    const expiresAt = this.tombstones.get(connectedAccountId);
+    if (expiresAt === undefined) return false;
+    if (expiresAt <= Date.now()) {
+      this.tombstones.delete(connectedAccountId);
+      return false;
+    }
+    return true;
   }
 
   getRequest(requestId: string): ConnectionRequestRecord | null {
@@ -209,4 +262,32 @@ function didToolAvailabilityChange(
     || previous.toolkitName !== next.toolkitName
     || previous.logoUrl !== next.logoUrl
     || previous.status !== next.status;
+}
+
+function connectionAvailabilitySignature(records: ConnectionRecord[]): string {
+  return records
+    .map((record) => [
+      record.connectedAccountId,
+      record.toolkitSlug,
+      record.toolkitName,
+      record.logoUrl ?? '',
+      record.status,
+    ].join('\t'))
+    .sort()
+    .join('\n');
+}
+
+function connectionPersistenceSignature(records: ConnectionRecord[]): string {
+  return records
+    .map((record) => [
+      record.connectedAccountId,
+      record.toolkitSlug,
+      record.toolkitName,
+      record.logoUrl ?? '',
+      record.status,
+      record.createdAt,
+      record.updatedAt,
+    ].join('\t'))
+    .sort()
+    .join('\n');
 }

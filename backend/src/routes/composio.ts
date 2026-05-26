@@ -23,6 +23,17 @@ export async function registerComposioRoutes(app: FastifyInstance, deps: Composi
     }
   });
 
+  app.delete('/v1/composio/connections/:id', async (request, reply) => {
+    try {
+      const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
+      const { id } = request.params as { id: string };
+      await deps.composioService.deleteConnection(auth.user.id, id);
+      return reply.code(204).send();
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
   app.get('/v1/composio/toolkits', async (request, reply) => {
     try {
       const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));

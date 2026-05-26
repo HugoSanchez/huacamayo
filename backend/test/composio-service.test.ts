@@ -36,6 +36,19 @@ function buildService(rawTool = slackSearchTool) {
   return { service, fakeClient, execute };
 }
 
+function buildConnectionService(items: Array<{ id: string }> = [{ id: 'ca_123' }]) {
+  const fakeClient = {
+    connectedAccounts: {
+      list: vi.fn(async () => ({ items })),
+      disable: vi.fn(async () => ({ isDisabled: true })),
+      delete: vi.fn(async () => ({})),
+    },
+  };
+  const service = new ComposioService('test-key');
+  Object.assign(service as unknown as Record<string, unknown>, { client: fakeClient });
+  return { service, fakeClient };
+}
+
 describe('ComposioService tool execution', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -80,5 +93,34 @@ describe('ComposioService tool execution', () => {
       });
 
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('ComposioService connection deletion', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('verifies ownership, disables, and deletes the connected account', async () => {
+    const { service, fakeClient } = buildConnectionService();
+
+    await expect(service.deleteConnection(' user_1 ', ' ca_123 ')).resolves.toBeUndefined();
+
+    expect(fakeClient.connectedAccounts.list).toHaveBeenCalledWith({
+      userIds: ['user_1'],
+      statuses: ['ACTIVE', 'INACTIVE'],
+    });
+    expect(fakeClient.connectedAccounts.disable).toHaveBeenCalledWith('ca_123');
+    expect(fakeClient.connectedAccounts.delete).toHaveBeenCalledWith('ca_123');
+  });
+
+  test('does not delete an account that is not owned by the user', async () => {
+    const { service, fakeClient } = buildConnectionService([{ id: 'ca_other' }]);
+
+    await expect(service.deleteConnection('user_1', 'ca_123'))
+      .rejects.toMatchObject({ status: 404 });
+
+    expect(fakeClient.connectedAccounts.disable).not.toHaveBeenCalled();
+    expect(fakeClient.connectedAccounts.delete).not.toHaveBeenCalled();
   });
 });

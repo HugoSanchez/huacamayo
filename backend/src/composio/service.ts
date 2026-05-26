@@ -129,18 +129,72 @@ export class ComposioService {
       statuses: ['ACTIVE', 'INACTIVE'],
     });
 
-    const items = await Promise.all(response.items.map(async (item) => {
-      const toolkitMeta = await this.getToolkitMetadata(item.toolkit.slug);
-      return {
-        connectedAccountId: item.id,
-        toolkitSlug: item.toolkit.slug,
-        toolkitName: toolkitMeta.toolkitName,
-        logoUrl: toolkitMeta.logoUrl,
-        status: item.isDisabled || item.status === 'INACTIVE' ? 'inactive' : 'active',
-      } satisfies BridgeConnectionView;
-    }));
+    // Composio's DELETE /connected_accounts/:id is a soft-delete that's
+    // eventually consistent — a just-deleted account can still appear here
+    // as ACTIVE for several seconds. We pair the delete with an immediate
+    // `disable()` call that flips `isDisabled` synchronously, then filter
+    // disabled rows out here so the sidebar reflects the change on the
+    // very next refresh instead of waiting for Composio to catch up.
+    const items = await Promise.all(response.items
+      .filter((item) => !item.isDisabled)
+      .map(async (item) => {
+        const toolkitMeta = await this.getToolkitMetadata(item.toolkit.slug);
+        return {
+          connectedAccountId: item.id,
+          toolkitSlug: item.toolkit.slug,
+          toolkitName: toolkitMeta.toolkitName,
+          logoUrl: toolkitMeta.logoUrl,
+          status: item.status === 'INACTIVE' ? 'inactive' : 'active',
+        } satisfies BridgeConnectionView;
+      }));
 
     return items.sort((a, b) => a.toolkitName.localeCompare(b.toolkitName));
+  }
+
+  async deleteConnection(userId: string, connectedAccountId: string): Promise<void> {
+    this.assertConfigured();
+    const normalizedUserId = normalizeUserId(userId);
+    const trimmedId = connectedAccountId.trim();
+    if (!trimmedId) {
+      throw new ComposioServiceError(400, 'Missing "connectedAccountId"');
+    }
+
+    // The SDK's `connectedAccounts.delete` takes an id alone and does not
+    // verify that the account belongs to the caller. Without an ownership
+    // check, an authenticated user who guessed an id could revoke someone
+    // else's account. Listing by the authed user's id and checking
+    // membership keeps the API key-scoped check entirely server-side and
+    // returns 404 (rather than 403) on a miss so we don't leak whether the
+    // id exists under a different user.
+    const owned = await this.client!.connectedAccounts.list({
+      userIds: [normalizedUserId],
+      statuses: ['ACTIVE', 'INACTIVE'],
+    });
+    const isOwned = owned.items.some((item) => item.id === trimmedId);
+    if (!isOwned) {
+      throw new ComposioServiceError(404, `Connected account "${trimmedId}" not found.`);
+    }
+
+    // Disable first so `isDisabled` flips synchronously — Composio's API
+    // confirms the change before returning, so the very next list() will
+    // exclude this account (we filter `isDisabled` out in listConnections).
+    // Without this, the soft-delete that follows is eventually consistent
+    // and the sidebar would show the just-disconnected toolkit again for a
+    // few seconds. We swallow disable errors (e.g. already-disabled) and
+    // proceed to the delete: the delete is the security-critical step
+    // that revokes the OAuth tokens.
+    try {
+      await this.client!.connectedAccounts.disable(trimmedId);
+    } catch {
+      // Continue to delete — disable is best-effort UX prep.
+    }
+
+    await this.client!.connectedAccounts.delete(trimmedId);
+
+    // The tool router session is cached per-user with a 10-minute TTL. Drop
+    // the entry so the next tool call rebuilds the session and Composio
+    // stops listing the (now-revoked) toolkit as connected.
+    this.toolRouterSessionCache.delete(normalizedUserId);
   }
 
   async listToolkits(

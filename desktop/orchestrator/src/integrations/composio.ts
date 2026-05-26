@@ -76,9 +76,15 @@ export class ConnectionsService {
 
   async listConnections(): Promise<ConnectionView[]> {
     try {
-      const items = await this.bridgeClient.listConnections();
-      syncRemoteConnectionsIntoStore(this.store, items);
-      return mergeConnectionViews(items, this.store.listConnections().map(toConnectionView));
+      const remote = await this.bridgeClient.listConnections();
+      // Composio's delete is soft + eventually consistent: an account we
+      // just disconnected can still come back in the list for a few
+      // seconds. The tombstone filter keeps disconnected accounts out of
+      // the sidebar until Composio's view catches up, so the row doesn't
+      // pop back with an "Active" tag right after the user removes it.
+      const filtered = remote.filter((item) => !this.store.isTombstoned(item.connectedAccountId));
+      syncRemoteConnectionsIntoStore(this.store, filtered);
+      return mergeConnectionViews(filtered, this.store.listConnections().map(toConnectionView));
     } catch {
       return this.store.listConnections().map(toConnectionView);
     }
@@ -103,6 +109,27 @@ export class ConnectionsService {
         nextCursor: null,
       };
     }
+  }
+
+  async deleteConnection(connectedAccountId: string): Promise<void> {
+    this.assertConfigured();
+    const trimmedId = connectedAccountId.trim();
+    if (!trimmedId) {
+      throw new HttpError(400, 'Missing "connectedAccountId"');
+    }
+
+    try {
+      await this.bridgeClient.deleteConnection(trimmedId);
+    } catch (error) {
+      if (!(error instanceof RemoteBridgeHttpError && error.status === 404)) {
+        throw mapRemoteBridgeError(error);
+      }
+      // DELETE is idempotent from the sidebar's point of view. If the
+      // backend no longer finds the account for this user, remove any stale
+      // local cache row so an old persisted connection cannot keep showing.
+    }
+
+    this.store.deleteConnection(trimmedId);
   }
 
   async requestConnection(toolkitSlug: string, baseUrl: string): Promise<ConnectionRequestView> {
@@ -173,9 +200,10 @@ function syncRemoteConnectionsIntoStore(
   connections: ConnectionView[],
 ): void {
   const now = new Date().toISOString();
-  for (const connection of connections) {
-    const existing = store.listConnections().find((item) => item.connectedAccountId === connection.connectedAccountId);
-    store.upsertConnection({
+  const existingById = new Map(store.listConnections().map((item) => [item.connectedAccountId, item]));
+  const records = connections.map((connection) => {
+    const existing = existingById.get(connection.connectedAccountId);
+    return {
       connectedAccountId: connection.connectedAccountId,
       toolkitSlug: connection.toolkitSlug,
       toolkitName: connection.toolkitName,
@@ -183,8 +211,9 @@ function syncRemoteConnectionsIntoStore(
       status: connection.status,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-    });
-  }
+    } satisfies ConnectionRecord;
+  });
+  store.replaceConnections(records);
 }
 
 function syncRemoteRequestIntoStore(

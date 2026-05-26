@@ -46,4 +46,17 @@ describe('ConnectionsStore tool refresh marker', () => {
 
     expect(readFileSync(markerPath, 'utf8')).toBe(initialMarker);
   });
+
+  it('replaces stale cached connections when the remote list is canonical', () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'verso-connections-store-'));
+    const storePath = path.join(tempDir, 'connections.json');
+    const markerPath = path.join(tempDir, 'composio-tools-refresh.marker');
+    const store = new ConnectionsStore(storePath, markerPath);
+
+    store.upsertConnection(fixtureConnection());
+    store.replaceConnections([]);
+
+    expect(store.listConnections()).toEqual([]);
+    expect(readFileSync(markerPath, 'utf8').trim()).toMatch(/^\d+$/);
+  });
 });

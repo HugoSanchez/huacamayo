@@ -13,6 +13,16 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
       });
     }),
 
+    route('DELETE', '/connections/:id', async (_req, res, params) => {
+      try {
+        await connections.deleteConnection(params.id);
+        res.writeHead(204);
+        res.end();
+      } catch (error: unknown) {
+        handleHttpError(res, error);
+      }
+    }),
+
     route('GET', '/connections/toolkits', async (_req, res, params) => {
       try {
         const query = typeof params.query === 'string' ? params.query : undefined;
