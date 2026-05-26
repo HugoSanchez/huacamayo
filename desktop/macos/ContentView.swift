@@ -197,6 +197,9 @@ struct ContentView: View {
                         },
                         onDeleteCron: { cronId in
                             Task { await deleteCron(cronId) }
+                        },
+                        onDisconnectConnection: { connectedAccountId in
+                            Task { await disconnectConnection(connectedAccountId) }
                         }
                     )
                 }
@@ -428,6 +431,29 @@ struct ContentView: View {
         } catch {
             // Keep the last known list when refresh fails.
         }
+    }
+
+    @MainActor
+    private func disconnectConnection(_ connectedAccountId: String) async {
+        guard let baseURL = sidecar.baseURL else { return }
+        let original = connections
+        // Optimistic removal mirrors `deleteCron`: the row vanishes
+        // immediately so the click feels instant; we roll back if the
+        // sidecar rejects the call and let the periodic refresh re-sync
+        // the canonical state on success.
+        connections.removeAll { $0.connectedAccountId == connectedAccountId }
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("connections/\(connectedAccountId)"))
+            request.httpMethod = "DELETE"
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+        } catch {
+            connections = original
+        }
+        await refreshConnections()
     }
 
     @MainActor
@@ -734,6 +760,7 @@ private struct SessionSidebar: View {
     let onToggleSkillsCatalog: () -> Void
     let onOpenCron: (String) -> Void
     let onDeleteCron: (String) -> Void
+    let onDisconnectConnection: (String) -> Void
 
     @State private var renamingSessionId: String?
     @State private var draftTitle = ""
@@ -891,25 +918,13 @@ private struct SessionSidebar: View {
                                     .padding(.horizontal, 10)
                             } else {
                                 ForEach(connections) { connection in
-                                    HStack(spacing: 10) {
-                                        ConnectionLogo(
-                                            logoUrl: connection.logoUrl,
-                                            toolkitName: connection.toolkitName,
-                                            isDarkMode: isDarkMode
-                                        )
-
-                                        Text(connection.toolkitName)
-                                            .font(.system(size: 13, weight: .regular))
-                                            .foregroundStyle(primaryText)
-
-                                        Spacer(minLength: 0)
-
-                                        Text(connection.status.capitalized)
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(secondaryText)
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
+                                    SidebarConnectionRow(
+                                        connection: connection,
+                                        primaryText: primaryText,
+                                        secondaryText: secondaryText,
+                                        isDarkMode: isDarkMode,
+                                        onDisconnect: { onDisconnectConnection(connection.connectedAccountId) }
+                                    )
                                 }
                             }
                         }
@@ -1497,6 +1512,75 @@ private struct SidebarConnection: Decodable, Identifiable {
     var id: String { connectedAccountId }
 }
 
+private struct SidebarConnectionRow: View {
+    let connection: SidebarConnection
+    let primaryText: Color
+    let secondaryText: Color
+    let isDarkMode: Bool
+    let onDisconnect: () -> Void
+
+    @State private var isHovered = false
+
+    private var disconnectFill: Color {
+        Color.red.opacity(isDarkMode ? 0.18 : 0.10)
+    }
+
+    private var disconnectBorder: Color {
+        Color.red.opacity(isDarkMode ? 0.45 : 0.30)
+    }
+
+    private var disconnectText: Color {
+        Color.red.opacity(isDarkMode ? 0.92 : 0.78)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ConnectionLogo(
+                logoUrl: connection.logoUrl,
+                toolkitName: connection.toolkitName,
+                isDarkMode: isDarkMode
+            )
+
+            Text(connection.toolkitName)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(primaryText)
+
+            Spacer(minLength: 0)
+
+            if isHovered {
+                Button(action: onDisconnect) {
+                    Text("Disconnect")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(disconnectText)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(disconnectFill)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(disconnectBorder, lineWidth: 0.5)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Revoke access and remove this connection")
+            } else {
+                Text(connection.status.capitalized)
+                    .font(.system(size: 11))
+                    .foregroundStyle(secondaryText)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
 private struct ConnectionLogo: View {
     let logoUrl: String?
     let toolkitName: String
@@ -1518,7 +1602,7 @@ private struct ConnectionLogo: View {
             }
         }
         .frame(width: Self.size, height: Self.size)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .task(id: logoUrl) {
             await loadImage()
         }
@@ -1526,7 +1610,7 @@ private struct ConnectionLogo: View {
 
     private var fallback: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
             Text(String(toolkitName.prefix(1)).uppercased())
                 .font(.system(size: 10, weight: .semibold))

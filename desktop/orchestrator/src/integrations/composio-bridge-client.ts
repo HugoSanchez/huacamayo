@@ -90,6 +90,13 @@ export class RemoteComposioBridgeClient {
     return body.connections;
   }
 
+  async deleteConnection(connectedAccountId: string): Promise<void> {
+    await this.request<void>(
+      'DELETE',
+      `/v1/composio/connections/${encodeURIComponent(connectedAccountId)}`,
+    );
+  }
+
   async listToolkits(query?: string, limit?: number): Promise<RemoteBridgeToolkitView[]> {
     const params = new URLSearchParams();
     if (query && query.trim().length > 0) params.set('query', query.trim());
@@ -192,6 +199,7 @@ export class RemoteComposioBridgeClient {
       throw new RemoteBridgeHttpError(response.status, message);
     }
 
+    if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   }
 }
