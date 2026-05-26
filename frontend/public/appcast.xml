@@ -3,6 +3,19 @@
     <channel>
         <title>verso</title>
         <item>
+            <title>1.0.2</title>
+            <pubDate>Tue, 26 May 2026 21:30:36 +0200</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.2/verso-1.0.2.dmg" length="164711799" type="application/octet-stream" sparkle:edSignature="Ovjde2Vn3X1aXbOBf4R1dJVKoKKhZLQdfnZ/Hly4QV4Gui46vmqihHgG3T5sKiJacA3c7KtTz6ZoPiKkQFoVBg=="/>
+            <sparkle:deltas>
+                <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.2/verso3-2.delta" sparkle:deltaFrom="2" length="3144890" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977808" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="loHEtSepFmjw9WMBG90cfXVwCxNebIXdIYFwZcgn6AqU/mCed2X1V8/Yufh+MPf4NF5kGmSIQ0BRg2X52yOgBw=="/>
+                <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.2/verso3-1.delta" sparkle:deltaFrom="1" length="3139502" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="977808" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="LVSNq0s7ezO486iUdarTcqB9e6axAfsJahb1Za6pfRTBPlOWIqxkaSBK73wTh6XktdE7oPnj9VniTKPuDqrKDA=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.0.1</title>
             <pubDate>Sun, 17 May 2026 23:40:10 +0200</pubDate>
             <sparkle:version>2</sparkle:version>

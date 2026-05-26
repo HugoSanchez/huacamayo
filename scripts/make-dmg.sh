@@ -74,19 +74,35 @@ trap 'rm -rf "${STAGE_DIR}"' EXIT
 echo "[make-dmg] staging .app (this copies ~200MB)"
 /bin/cp -R "${APP_PATH}" "${STAGE_DIR}/verso.app"
 
-# Window geometry: 600x380 is the canonical drag-to-Applications size most
-# users have muscle memory for. Two icons: the app on the left, the
-# Applications symlink on the right with an arrow between (create-dmg
-# draws this for us when both --icon and --app-drop-link are set).
+# create-dmg normally uses AppleScript to ask Finder to position icons and
+# hide extensions. That is fragile in CI/sandboxed terminals because macOS
+# TCC may block Apple Events to Finder (-1743). Default to the Finder-free
+# path; set VERSO_DMG_USE_FINDER_STYLING=1 locally if you explicitly want the
+# pretty Finder layout and have granted Automation permission.
+CREATE_DMG_ARGS=(
+    --volname "Verso ${VERSION}"
+    --app-drop-link 425 190
+    --no-internet-enable
+)
+
+if [ "${VERSO_DMG_USE_FINDER_STYLING:-0}" = "1" ]; then
+    CREATE_DMG_ARGS+=(
+        --window-pos 200 120
+        --window-size 600 380
+        --icon-size 100
+        --icon "verso.app" 175 190
+        --hide-extension "verso.app"
+    )
+else
+    CREATE_DMG_ARGS+=(--skip-jenkins)
+fi
+
+# Clean up temporary read-write images left behind by interrupted or failed
+# create-dmg runs, e.g. Finder AppleScript authorization failures.
+rm -f "${DIST_DIR}/rw."*"$(basename "${DMG_PATH}")"
+
 create-dmg \
-    --volname "Verso ${VERSION}" \
-    --window-pos 200 120 \
-    --window-size 600 380 \
-    --icon-size 100 \
-    --icon "verso.app" 175 190 \
-    --app-drop-link 425 190 \
-    --hide-extension "verso.app" \
-    --no-internet-enable \
+    "${CREATE_DMG_ARGS[@]}" \
     "${DMG_PATH}" \
     "${STAGE_DIR}" >/dev/null
 
