@@ -116,8 +116,25 @@ import re, sys
 path, prefix = sys.argv[1], sys.argv[2]
 src = open(path).read()
 # Match: <prefix>verso-<version>.dmg  →  <prefix>v<version>/verso-<version>.dmg
-pattern = re.compile(rf'({re.escape(prefix)})verso-([\d.]+)\.dmg')
-fixed = pattern.sub(r'\1v\2/verso-\2.dmg', src)
+dmg_pattern = re.compile(rf'({re.escape(prefix)})verso-([\d.]+)\.dmg')
+fixed = dmg_pattern.sub(r'\1v\2/verso-\2.dmg', src)
+
+# Delta filenames use Sparkle build numbers (e.g. verso3-2.delta), not
+# marketing versions, so infer the GitHub release tag from the enclosing
+# item's sparkle:shortVersionString.
+item_pattern = re.compile(r'(<item>.*?</item>)', re.S)
+short_version_pattern = re.compile(r'<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>')
+delta_pattern = re.compile(rf'({re.escape(prefix)})(verso\d+-\d+\.delta)')
+
+def fix_item(match):
+    item = match.group(1)
+    short = short_version_pattern.search(item)
+    if not short:
+        return item
+    tag = f'v{short.group(1)}'
+    return delta_pattern.sub(rf'\1{tag}/\2', item)
+
+fixed = item_pattern.sub(fix_item, fixed)
 open(path, 'w').write(fixed)
 PY
 
