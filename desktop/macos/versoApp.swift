@@ -7,6 +7,7 @@ struct versoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var sidecar = SidecarManager()
     @StateObject private var managedSessionStore = ManagedSessionStore()
+    @State private var didScheduleLaunchUpdateCheck = false
 
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
@@ -19,6 +20,10 @@ struct versoApp: App {
             RootView(sidecar: sidecar, managedSessionStore: managedSessionStore)
                 .onAppear {
                     appDelegate.sidecar = sidecar
+                    if !didScheduleLaunchUpdateCheck {
+                        didScheduleLaunchUpdateCheck = true
+                        scheduleLaunchUpdateCheck()
+                    }
                     sidecar.updateManagedSession(managedSessionStore.currentSession)
                     sidecar.start()
                 }
@@ -29,12 +34,46 @@ struct versoApp: App {
                     NSApp.activate(ignoringOtherApps: true)
                     managedSessionStore.handleCallbackURL(url)
                 }
+                .background(MainWindowAccessor { window in
+                    appDelegate.registerMainWindow(window)
+                })
         }
         .defaultSize(width: 1200, height: 750)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updaterController.updater)
+            }
+        }
+    }
+
+    private func scheduleLaunchUpdateCheck() {
+        let updater = updaterController.updater
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            guard updater.automaticallyChecksForUpdates,
+                  !updater.sessionInProgress else { return }
+            updater.checkForUpdatesInBackground()
+        }
+    }
+}
+
+private struct MainWindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window {
+                onResolve(window)
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let window = nsView.window {
+                onResolve(window)
             }
         }
     }
@@ -94,6 +133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// background. Drives the dock badge; cleared whenever the user brings
     /// the app back to the foreground.
     private var pendingResponseCount = 0
+    private weak var mainWindow: NSWindow?
 
     override init() {
         super.init()
@@ -101,16 +141,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Configure already-created windows immediately.
-        configureExistingWindows()
-
-        // Configure any window that becomes active afterwards.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(windowDidBecomeMain(_:)),
             name: NSWindow.didBecomeMainNotification,
             object: nil
         )
+    }
+
+    func registerMainWindow(_ window: NSWindow) {
+        mainWindow = window
+        configureWindow(window)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -141,22 +182,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func windowDidBecomeMain(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              Self.isAppWindow(window) else { return }
+              window === mainWindow else { return }
         configureWindow(window)
-    }
-
-    private func configureExistingWindows() {
-        // WindowGroup windows may appear on the next run-loop turn.
-        DispatchQueue.main.async {
-            NSApplication.shared.windows
-                .filter { Self.isAppWindow($0) }
-                .forEach { self.configureWindow($0) }
-        }
-    }
-
-    /// Only configure our own content windows, not system panels (NSOpenPanel, NSSavePanel, alerts).
-    private static func isAppWindow(_ window: NSWindow) -> Bool {
-        !(window is NSPanel)
     }
 
     private func configureWindow(_ window: NSWindow) {
