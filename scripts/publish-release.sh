@@ -32,6 +32,8 @@
 #   VERSO_RELEASE_URL_PREFIX default: https://github.com/HugoSanchez/huacamayo/releases/download/
 #                            Each DMG ends up at <prefix>v<version>/<dmg-filename>
 #                            so you must create the matching GitHub Release tag.
+#   VERSO_APPCAST_INCLUDE_DELTAS default: 0
+#                            Set to 1 to advertise Sparkle delta updates.
 
 set -euo pipefail
 
@@ -41,6 +43,7 @@ DIST_DIR="${REPO_ROOT}/dist"
 
 KEY_FILE="${VERSO_SPARKLE_KEY_FILE:-/tmp/verso-edkey.txt}"
 URL_PREFIX="${VERSO_RELEASE_URL_PREFIX:-https://github.com/HugoSanchez/huacamayo/releases/download/}"
+INCLUDE_DELTAS="${VERSO_APPCAST_INCLUDE_DELTAS:-0}"
 
 if [ ! -d "${DIST_DIR}" ] || ! ls "${DIST_DIR}"/verso-*.dmg >/dev/null 2>&1; then
     echo "error: no DMGs found in ${DIST_DIR}" >&2
@@ -73,6 +76,7 @@ trap 'if [ -f "${KEY_FILE}" ]; then rm -P "${KEY_FILE}" 2>/dev/null || rm -f "${
 echo "[publish] using generate_appcast at ${GENERATE_APPCAST}"
 echo "[publish] signing DMGs in ${DIST_DIR}"
 echo "[publish] release URL prefix: ${URL_PREFIX}"
+echo "[publish] include delta updates: ${INCLUDE_DELTAS}"
 
 # generate_appcast scans the directory, emits appcast.xml. --download-url-prefix
 # is appended to each DMG's filename to produce the <enclosure url> entry.
@@ -111,7 +115,7 @@ fi
 #
 # Use a Python one-liner — sed's regex flavor varies across BSD/GNU and
 # we'd rather not chase that.
-python3 - "${APPCAST}" "${URL_PREFIX}" <<'PY'
+python3 - "${APPCAST}" "${URL_PREFIX}" "${INCLUDE_DELTAS}" <<'PY'
 import re, sys
 path, prefix = sys.argv[1], sys.argv[2]
 src = open(path).read()
@@ -135,6 +139,8 @@ def fix_item(match):
     return delta_pattern.sub(rf'\1{tag}/\2', item)
 
 fixed = item_pattern.sub(fix_item, fixed)
+if sys.argv[3] != "1":
+    fixed = re.sub(r'\n[ \t]*<sparkle:deltas>.*?</sparkle:deltas>', '', fixed, flags=re.S)
 open(path, 'w').write(fixed)
 PY
 

@@ -620,61 +620,54 @@ async function streamHermesResponse(
   onSessionId: (sessionId: string) => void,
   onEvent: (eventName: string, data: HermesEventPayload) => void,
 ): Promise<void> {
-  const timeoutController = new AbortController();
-  const timeout = setTimeout(() => timeoutController.abort(), config.timeoutMs);
+  const res = await fetch(`${config.baseUrl}/v1/responses`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
 
-  try {
-    const res = await fetch(`${config.baseUrl}/v1/responses`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify(body),
-      signal: anySignal([signal, timeoutController.signal]),
-    });
+  if (!res.ok || !res.body) {
+    const responseBody = await safeReadBody(res);
+    throw new HermesHttpError(
+      res.status,
+      responseBody,
+      `Hermes response stream failed (HTTP ${res.status})${responseBody ? `: ${responseBody}` : ''}`,
+    );
+  }
 
-    if (!res.ok || !res.body) {
-      const responseBody = await safeReadBody(res);
-      throw new HermesHttpError(
-        res.status,
-        responseBody,
-        `Hermes response stream failed (HTTP ${res.status})${responseBody ? `: ${responseBody}` : ''}`,
-      );
+  const hermesSessionId = res.headers.get('x-hermes-session-id');
+  if (hermesSessionId) {
+    onSessionId(hermesSessionId);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop() ?? '';
+
+    for (const frame of frames) {
+      const parsed = parseSseFrame(frame);
+      if (!parsed) continue;
+      onEvent(parsed.event, parsed.data);
     }
+  }
 
-    const hermesSessionId = res.headers.get('x-hermes-session-id');
-    if (hermesSessionId) {
-      onSessionId(hermesSessionId);
+  if (buffer.trim().length > 0) {
+    const parsed = parseSseFrame(buffer);
+    if (parsed) {
+      onEvent(parsed.event, parsed.data);
     }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split('\n\n');
-      buffer = frames.pop() ?? '';
-
-      for (const frame of frames) {
-        const parsed = parseSseFrame(frame);
-        if (!parsed) continue;
-        onEvent(parsed.event, parsed.data);
-      }
-    }
-
-    if (buffer.trim().length > 0) {
-      const parsed = parseSseFrame(buffer);
-      if (parsed) {
-        onEvent(parsed.event, parsed.data);
-      }
-    }
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -805,28 +798,6 @@ function isAbortError(error: unknown): boolean {
   return false;
 }
 
-function anySignal(signals: AbortSignal[]): AbortSignal {
-  const controller = new AbortController();
-  const activeSignals = signals.filter(Boolean);
-
-  if (activeSignals.some((activeSignal) => activeSignal.aborted)) {
-    controller.abort();
-    return controller.signal;
-  }
-
-  const onAbort = () => {
-    controller.abort();
-    for (const activeSignal of activeSignals) {
-      activeSignal.removeEventListener('abort', onAbort);
-    }
-  };
-
-  for (const activeSignal of activeSignals) {
-    activeSignal.addEventListener('abort', onAbort, { once: true });
-  }
-
-  return controller.signal;
-}
 
 function preview(content: string): string {
   const compact = content.replace(/\s+/g, ' ').trim();
