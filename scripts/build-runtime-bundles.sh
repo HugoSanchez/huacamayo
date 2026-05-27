@@ -72,6 +72,7 @@ HERMES_BUNDLE="${BUNDLE_DIR}/hermes-agent"
 SITE_PACKAGES_DIR="${BUNDLE_DIR}/site-packages"
 DEFAULTS_DIR="${BUNDLE_DIR}/hermes-defaults"
 BUNDLE_VERSION_FILE="${BUNDLE_DIR}/BUNDLE_VERSION"
+HERMES_RUNTIME_PATCHES_DIR="${DESKTOP_ROOT}/runtime-patches/hermes-agent"
 
 mkdir -p "${BUNDLE_DIR}"
 
@@ -279,8 +280,19 @@ fi
     "${HERMES_BUNDLE}"
 
 # Stamp keyed on inputs that would force a rebuild. Includes the extra pins
-# so adding/removing/changing them re-triggers an install.
-expected_stamp="${HERMES_REF}|${HERMES_EXTRAS}|${HERMES_EXTRA_PINS[*]}|${PYTHON_VERSION}"
+# and local Hermes runtime patches so adding/removing/changing them re-triggers
+# an install.
+hermes_runtime_patch_stamp="none"
+if [ -d "${HERMES_RUNTIME_PATCHES_DIR}" ]; then
+    hermes_runtime_patch_stamp="$(
+        find "${HERMES_RUNTIME_PATCHES_DIR}" -type f -name '*.patch' -print \
+            | LC_ALL=C sort \
+            | while IFS= read -r patch_file; do shasum -a 256 "${patch_file}"; done \
+            | shasum -a 256 \
+            | awk '{print $1}'
+    )"
+fi
+expected_stamp="${HERMES_REF}|${HERMES_EXTRAS}|${HERMES_EXTRA_PINS[*]}|${PYTHON_VERSION}|patches:${hermes_runtime_patch_stamp}"
 
 # Step 2: per-arch venv install + copy out. We pip-install hermes-agent into
 # a throwaway venv per arch using that arch's Python, then rsync site-packages/
@@ -331,6 +343,14 @@ for arch in "${SUPPORTED_ARCHES[@]}"; do
         exit 1
     fi
     rsync -a --delete "${venv_site}/" "${target}/site-packages/"
+
+    if [ -d "${HERMES_RUNTIME_PATCHES_DIR}" ]; then
+        while IFS= read -r patch_file; do
+            [ -n "${patch_file}" ] || continue
+            echo "[bundle] applying Hermes runtime patch: $(basename "${patch_file}")"
+            patch -d "${target}/site-packages" -p1 --batch < "${patch_file}" >/dev/null
+        done < <(find "${HERMES_RUNTIME_PATCHES_DIR}" -type f -name '*.patch' -print | LC_ALL=C sort)
+    fi
 
     # Drop __pycache__ — Python regenerates these at runtime and Apple gets
     # noisy about per-build path differences inside .pyc magic numbers.
