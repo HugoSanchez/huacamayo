@@ -1,0 +1,96 @@
+--- a/agent/codex_responses_adapter.py
++++ b/agent/codex_responses_adapter.py
+@@ -15,6 +15,7 @@
+ import logging
+ import re
+ import uuid
++from copy import deepcopy
+ from types import SimpleNamespace
+ from typing import Any, Dict, List, Optional
+ 
+@@ -192,11 +193,71 @@
+             "name": name,
+             "description": fn.get("description", ""),
+             "strict": False,
+-            "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
++            "parameters": _normalize_responses_tool_parameters(
++                fn.get("parameters", {"type": "object", "properties": {}})
++            ),
+         })
+     return converted or None
+ 
+ 
++def _normalize_responses_tool_parameters(parameters: Any) -> Dict[str, Any]:
++    """Return a Responses-compatible JSON schema for a function tool.
++
++    The ChatGPT Codex backend currently assumes every object schema has a
++    ``required`` array, even when the OpenAI SDK/public schema treats it as
++    optional. Missing arrays can surface as ``'NoneType' object is not
++    iterable`` after the backend starts streaming. Preserve the original schema
++    shape, but fill that omission recursively.
++    """
++    if not isinstance(parameters, dict):
++        parameters = {"type": "object", "properties": {}}
++
++    normalized = deepcopy(parameters)
++
++    def visit(schema: Any) -> None:
++        if not isinstance(schema, dict):
++            return
++
++        schema_type = schema.get("type")
++        is_object = schema_type == "object" or (
++            isinstance(schema_type, list) and "object" in schema_type
++        ) or "properties" in schema
++        if is_object:
++            properties = schema.get("properties")
++            if not isinstance(properties, dict):
++                properties = {}
++                schema["properties"] = properties
++
++            required = schema.get("required")
++            if not isinstance(required, list):
++                schema["required"] = []
++            else:
++                schema["required"] = [item for item in required if isinstance(item, str)]
++
++            additional = schema.get("additionalProperties")
++            if isinstance(additional, dict):
++                visit(additional)
++
++            for child in properties.values():
++                visit(child)
++
++        items = schema.get("items")
++        if isinstance(items, dict):
++            visit(items)
++        elif isinstance(items, list):
++            for child in items:
++                visit(child)
++
++        for key in ("anyOf", "allOf", "oneOf"):
++            variants = schema.get(key)
++            if isinstance(variants, list):
++                for child in variants:
++                    visit(child)
++
++    visit(normalized)
++    return normalized
++
++
+ # ---------------------------------------------------------------------------
+ # Message format conversion
+ # ---------------------------------------------------------------------------
+@@ -503,11 +564,9 @@
+                 raise ValueError(f"Codex Responses tools[{idx}] has unsupported type {tool.get('type')!r}.")
+ 
+             name = tool.get("name")
+-            parameters = tool.get("parameters")
++            parameters = _normalize_responses_tool_parameters(tool.get("parameters"))
+             if not isinstance(name, str) or not name.strip():
+                 raise ValueError(f"Codex Responses tools[{idx}] is missing a valid name.")
+-            if not isinstance(parameters, dict):
+-                raise ValueError(f"Codex Responses tools[{idx}] is missing valid parameters.")
+ 
+             description = tool.get("description", "")
+             if description is None:

@@ -1521,16 +1521,8 @@ private struct SidebarConnectionRow: View {
 
     @State private var isHovered = false
 
-    private var disconnectFill: Color {
-        Color.red.opacity(isDarkMode ? 0.18 : 0.10)
-    }
-
-    private var disconnectBorder: Color {
-        Color.red.opacity(isDarkMode ? 0.45 : 0.30)
-    }
-
     private var disconnectText: Color {
-        Color.red.opacity(isDarkMode ? 0.92 : 0.78)
+        Color.red.opacity(isDarkMode ? 0.72 : 0.58)
     }
 
     var body: some View {
@@ -1550,18 +1542,8 @@ private struct SidebarConnectionRow: View {
             if isHovered {
                 Button(action: onDisconnect) {
                     Text("Disconnect")
-                        .font(.system(size: 11, weight: .regular))
+                        .font(.system(size: 11))
                         .foregroundStyle(disconnectText)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(disconnectFill)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(disconnectBorder, lineWidth: 0.5)
-                        )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
