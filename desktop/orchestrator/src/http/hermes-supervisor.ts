@@ -15,7 +15,6 @@ import {
 
 export interface HermesGatewayConfig {
   baseUrl: string;
-  timeoutMs: number;
   startupTimeoutMs: number;
 }
 
@@ -44,14 +43,11 @@ export interface HermesRuntimeSnapshot {
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8642;
-const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
 export function getHermesGatewayConfig(): HermesGatewayConfig {
   const baseUrl = normalizeBaseUrl(
     process.env.VERSO_HERMES_GATEWAY_URL?.trim() || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
   );
-  const rawTimeout = parseInt(process.env.VERSO_HERMES_TIMEOUT_MS || String(DEFAULT_TIMEOUT_MS), 10);
-  const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : DEFAULT_TIMEOUT_MS;
   const rawStartupTimeout = parseInt(
     process.env.VERSO_HERMES_STARTUP_TIMEOUT_MS || String(DEFAULT_STARTUP_TIMEOUT_MS),
     10,
@@ -60,7 +56,7 @@ export function getHermesGatewayConfig(): HermesGatewayConfig {
     ? rawStartupTimeout
     : DEFAULT_STARTUP_TIMEOUT_MS;
 
-  return { baseUrl, timeoutMs, startupTimeoutMs };
+  return { baseUrl, startupTimeoutMs };
 }
 
 function normalizeBaseUrl(rawBaseUrl: string): string {
@@ -257,6 +253,7 @@ export class HermesSupervisor {
         command: bundled.python,
         args: [bundled.hermesScript, ...args],
         env: {
+          ...getBundledPythonBytecodeEnv(),
           PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':'),
         },
       };
@@ -520,8 +517,10 @@ export class HermesSupervisor {
     const pythonPathExtras = bundled
       ? { PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':') }
       : {};
+    const pythonBytecodeEnv = bundled ? getBundledPythonBytecodeEnv() : {};
     const env = {
       ...process.env,
+      ...pythonBytecodeEnv,
       ...pythonPathExtras,
       PORT: port,
       HOST: host,
@@ -996,6 +995,21 @@ function resolveVersoSkillSourceDir(): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
+function getBundledPythonBytecodeEnv(): Record<string, string> {
+  const cachePrefix = process.env.VERSO_PYTHON_CACHE_DIR?.trim()
+    || join(os.homedir(), 'Library', 'Caches', 'Verso', 'python-bytecode');
+  try {
+    mkdirSync(cachePrefix, { recursive: true });
+  } catch {
+    // Python can still run without bytecode caches; preserving app-bundle
+    // integrity matters more than surfacing a cache-directory warning here.
+  }
+  return {
+    PYTHONDONTWRITEBYTECODE: '1',
+    PYTHONPYCACHEPREFIX: cachePrefix,
+  };
+}
+
 function seedHermesHomeFile(sourceHome: string, targetHome: string, fileName: string): void {
   const sourcePath = join(sourceHome, fileName);
   const targetPath = join(targetHome, fileName);
@@ -1053,4 +1067,3 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown>
     : null;
 }
-

@@ -3,9 +3,9 @@
 # make-dmg.sh
 # ───────────
 # Wrap the notarized verso.app in a drag-to-Applications DMG using
-# `create-dmg`. Run this AFTER notarize-app.sh has stapled the .app —
-# DMGs themselves don't get notarized, the .app inside them does, and
-# Gatekeeper validates by reading the stapled ticket inside.
+# `create-dmg`. Run this AFTER notarize-app.sh has stapled the .app.
+# The DMG is signed, submitted to Apple's notary service, and stapled too
+# so the downloaded disk image itself passes Gatekeeper assessment.
 #
 # One-time setup:
 #   brew install create-dmg
@@ -13,6 +13,10 @@
 # Usage:
 #   ./scripts/make-dmg.sh                       # uses default Release path
 #   ./scripts/make-dmg.sh /path/to/verso.app    # custom path
+#
+# Optional env:
+#   VERSO_NOTARY_PROFILE default: Verso
+#   VERSO_NOTARIZE_DMG   default: 1; set to 0 for local-only unsigned testing
 #
 # Output:
 #   ./dist/verso-<MARKETING_VERSION>.dmg
@@ -106,13 +110,40 @@ create-dmg \
     "${DMG_PATH}" \
     "${STAGE_DIR}" >/dev/null
 
-# Sign the DMG itself with Developer ID. Optional for Gatekeeper (the
-# .app inside is the one being checked) but it's a freebie and means the
-# DMG opens without any "downloaded from internet" prompts beyond the
-# standard quarantine flag.
+# Sign the DMG itself with Developer ID before submitting it for notarization.
 echo "[make-dmg] signing DMG"
 IDENTITY="Developer ID Application: Hugo Sanchez (2T2JL5F698)"
 /usr/bin/codesign --force --sign "${IDENTITY}" --timestamp "${DMG_PATH}"
+
+if [ "${VERSO_NOTARIZE_DMG:-1}" = "1" ]; then
+    PROFILE="${VERSO_NOTARY_PROFILE:-Verso}"
+    if ! xcrun notarytool history --keychain-profile "${PROFILE}" --output-format json >/dev/null 2>&1; then
+        echo "error: notarytool profile '${PROFILE}' not found in keychain" >&2
+        echo "       run the one-time setup from scripts/notarize-app.sh" >&2
+        exit 1
+    fi
+
+    echo "[make-dmg] submitting DMG for notarization"
+    submission_output="$(xcrun notarytool submit "${DMG_PATH}" \
+        --keychain-profile "${PROFILE}" \
+        --wait \
+        --output-format json)"
+    echo "${submission_output}" | python3 -m json.tool
+
+    status="$(echo "${submission_output}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")"
+    submission_id="$(echo "${submission_output}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")"
+    if [ "${status}" != "Accepted" ]; then
+        echo ""
+        echo "[make-dmg] submission ${submission_id} ended with status=${status}; fetching log"
+        xcrun notarytool log "${submission_id}" --keychain-profile "${PROFILE}" || true
+        exit 1
+    fi
+
+    echo "[make-dmg] stapling ticket into DMG"
+    xcrun stapler staple "${DMG_PATH}"
+    xcrun stapler validate "${DMG_PATH}"
+    spctl --assess --type open --context context:primary-signature --verbose=2 "${DMG_PATH}"
+fi
 
 dmg_size=$(du -h "${DMG_PATH}" | cut -f1)
 echo "[make-dmg] done — ${DMG_PATH} (${dmg_size})"

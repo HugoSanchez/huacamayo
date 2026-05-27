@@ -577,11 +577,18 @@ final class SidecarManager: ObservableObject {
         let appSupport = (NSHomeDirectory() as NSString)
             .appendingPathComponent("Library/Application Support/Verso")
         let hermesHome = (appSupport as NSString).appendingPathComponent("hermes-home")
+        let pythonCacheDir = (NSHomeDirectory() as NSString)
+            .appendingPathComponent("Library/Caches/Verso/python-bytecode")
+        try? FileManager.default.createDirectory(
+            atPath: pythonCacheDir,
+            withIntermediateDirectories: true
+        )
 
         env["VERSO_BUNDLED_PYTHON_DIR"] = pythonDir
         env["VERSO_BUNDLED_SITE_PACKAGES_DIR"] = sitePackagesDir
         env["VERSO_BUNDLED_DEFAULTS"] = defaultsDir
         env["VERSO_HERMES_HOME"] = hermesHome
+        env["VERSO_PYTHON_CACHE_DIR"] = pythonCacheDir
 
         // CRITICAL: prevent Python from writing __pycache__/*.pyc files into
         // the signed .app bundle on first launch. The bundle is read-only by
@@ -589,10 +596,11 @@ final class SidecarManager: ObservableObject {
         // signature and the next codesign --verify --deep fails with "file
         // added". This propagates to every Python child the orchestrator
         // spawns (Hermes gateway, verso MCP server, Codex auth helper, ...)
-        // because they all inherit the orchestrator's environment. Cost: a
-        // small one-time-per-process import slowdown the first time each
-        // module is loaded; negligible for a desktop app.
+        // because they all inherit the orchestrator's environment. The cache
+        // prefix is a second guard for any child that decides to write bytecode
+        // anyway: it redirects those writes outside the bundle.
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONPYCACHEPREFIX"] = pythonCacheDir
 
         if let bundleVersion = try? String(contentsOfFile: versionFile, encoding: .utf8) {
             env["VERSO_BUNDLE_VERSION"] = bundleVersion.trimmingCharacters(in: .whitespacesAndNewlines)
