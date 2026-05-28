@@ -110,6 +110,29 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.credential_pool).toEqual({ 'openai-codex': [{ id: 'codex-test' }] });
   });
 
+  it('refreshes the old default SOUL.md but preserves customized identity files', () => {
+    const newSoul = '# Verso\n\nUpdated identity for Verso users.\n';
+    writeFileSync(path.join(tempRoot, 'SOUL.md'), newSoul, 'utf8');
+    mkdirSync(managedHome, { recursive: true });
+    writeFileSync(
+      path.join(managedHome, 'SOUL.md'),
+      '# Verso\n\nYou are a helpful research assistant running inside the Verso macOS app.\n',
+      'utf8',
+    );
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    expect(readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8')).toBe(newSoul);
+
+    writeFileSync(path.join(tempRoot, 'SOUL.md'), '# Verso\n\nAnother new identity.\n', 'utf8');
+    writeFileSync(path.join(managedHome, 'SOUL.md'), '# Custom\n\nKeep my local identity.\n', 'utf8');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    expect(readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8')).toBe('# Custom\n\nKeep my local identity.\n');
+  });
+
   it('leaves the model section untouched when runtimeMode is not managed', () => {
     const supervisor = new HermesSupervisor({ runtimeMode: 'local' });
     supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');

@@ -11,6 +11,7 @@ interface Props {
   onStop: () => void;
   isStreaming: boolean;
   disabled: boolean;
+  focusRecoveryEnabled: boolean;
 }
 
 const SLASH_PATTERN = /^\/([a-z0-9-]*)/i;
@@ -25,6 +26,7 @@ export function InputBar({
   onStop,
   isStreaming,
   disabled,
+  focusRecoveryEnabled,
 }: Props) {
   const isAttached = attached !== null;
   const [skills, setSkills] = useState<SkillSummaryView[]>([]);
@@ -87,6 +89,37 @@ export function InputBar({
   useEffect(() => {
     setHighlightIndex(0);
   }, [slashMatch?.query]);
+
+  useEffect(() => {
+    if (!focusRecoveryEnabled) return;
+
+    const recoverFocus = () => {
+      window.setTimeout(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+
+        const active = document.activeElement;
+        const activeIsOtherEditable = active instanceof HTMLElement
+          && active !== document.body
+          && active !== el
+          && (
+            active instanceof HTMLInputElement
+            || active instanceof HTMLTextAreaElement
+            || active.isContentEditable
+          );
+        if (activeIsOtherEditable) return;
+
+        el.focus({ preventScroll: true });
+      }, 0);
+    };
+
+    window.addEventListener('verso:system-wake', recoverFocus);
+    window.addEventListener('verso:restore-chat-focus', recoverFocus);
+    return () => {
+      window.removeEventListener('verso:system-wake', recoverFocus);
+      window.removeEventListener('verso:restore-chat-focus', recoverFocus);
+    };
+  }, [focusRecoveryEnabled]);
 
   const showSuggestions = slashMatch !== null && suggestions.length > 0 && !isStreaming;
 
@@ -230,6 +263,11 @@ export function InputBar({
   return (
     <div style={{ padding: '10px 12px', background: 'var(--bg)' }}>
       <div
+        onMouseDown={(event) => {
+          const target = event.target;
+          if (target instanceof HTMLElement && target.closest('button')) return;
+          window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+        }}
         style={{
           position: 'relative',
           background: 'var(--bg-input)',

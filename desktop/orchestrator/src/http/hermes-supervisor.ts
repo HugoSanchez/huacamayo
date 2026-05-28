@@ -21,6 +21,8 @@ export interface HermesGatewayConfig {
 type HermesRuntimeState = 'idle' | 'starting' | 'ready' | 'error' | 'unavailable';
 type HermesRuntimeSource = 'none' | 'managed' | 'manual';
 
+const LEGACY_DEFAULT_SOUL_MD = '# Verso\n\nYou are a helpful research assistant running inside the Verso macOS app.\n';
+
 interface HermesLaunchConfig {
   command: string | null;
   args: string[];
@@ -169,8 +171,8 @@ export const ALWAYS_DISABLED_HERMES_SKILLS: readonly string[] = [
 
 // First-party Hermes skills that teach use of shell CLIs or direct provider
 // SDKs (gh, notion, etc.). We disable them so all third-party access flows
-// through the verso/Composio bridge. Unlike ALWAYS_DISABLED, these are only
-// seeded on first profile creation — users can re-enable them via the UI.
+// through the verso/Composio bridge. Unlike ALWAYS_DISABLED, these are seeded
+// once per profile migration — users can re-enable them via the UI.
 // Self-authored skills that already use the verso bridge (e.g.
 // granola-meeting-notes) are intentionally NOT in this list — they encode
 // learned tool slugs and let the model skip the discovery ritual.
@@ -184,6 +186,7 @@ const DEFAULT_DISABLED_HERMES_SKILLS = [
   'github-code-review',
   'github-issues',
 ];
+const DEFAULT_DISABLED_SKILLS_MARKER = '.verso-default-disabled-skills-v1';
 
 export class HermesSupervisor {
   private readonly launch: HermesLaunchConfig;
@@ -570,9 +573,7 @@ export class HermesSupervisor {
     this.syncVersoSkill();
     this.configureManagedMcpServers();
     this.restoreManagedModelConfigIfProxyOwned();
-    if (!configExistedBeforeSeed) {
-      this.seedDefaultDisabledSkills();
-    }
+    this.seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed);
     this.enforceAlwaysDisabledSkills();
   }
 
@@ -664,11 +665,20 @@ export class HermesSupervisor {
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
+  private seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed: boolean): void {
+    const markerPath = join(this.managedHermesHome, DEFAULT_DISABLED_SKILLS_MARKER);
+    if (configExistedBeforeSeed && existsSync(markerPath)) {
+      return;
+    }
+
+    this.seedDefaultDisabledSkills();
+    writeFileSync(markerPath, new Date().toISOString() + '\n', 'utf8');
+  }
+
   /**
-   * Run once, the first time we materialize the managed profile's
-   * config.yaml: union our default-disabled list with whatever the
-   * template carried over. After that, the UI is the only writer —
-   * we never overwrite a user's choices on subsequent launches.
+   * Run once per profile migration: union our default-disabled list with
+   * whatever the template carried over. After the marker is written, the UI
+   * is the only writer — we never overwrite a user's choices on later launches.
    */
   private seedDefaultDisabledSkills(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
@@ -1020,10 +1030,24 @@ function seedHermesHomeFile(sourceHome: string, targetHome: string, fileName: st
 }
 
 function shouldRefreshManagedFile(sourcePath: string, targetPath: string, fileName: string): boolean {
+  if (fileName === 'SOUL.md') {
+    return shouldRefreshDefaultSoul(sourcePath, targetPath);
+  }
+
   if (fileName !== 'auth.json') return false;
 
   try {
     return statSync(sourcePath).mtimeMs > statSync(targetPath).mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
+function shouldRefreshDefaultSoul(sourcePath: string, targetPath: string): boolean {
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    const target = readFileSync(targetPath, 'utf8');
+    return target.trim() === LEGACY_DEFAULT_SOUL_MD.trim() && source.trim() !== target.trim();
   } catch {
     return false;
   }
