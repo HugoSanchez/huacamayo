@@ -326,10 +326,17 @@ struct ChatWebView: NSViewRepresentable {
                 name: NSWorkspace.didWakeNotification,
                 object: nil
             )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleAppDidBecomeActive),
+                name: NSApplication.didBecomeActiveNotification,
+                object: nil
+            )
         }
 
         deinit {
             NSWorkspace.shared.notificationCenter.removeObserver(self)
+            NotificationCenter.default.removeObserver(self)
         }
 
         @objc private func handleSystemSleep() {
@@ -338,6 +345,11 @@ struct ChatWebView: NSViewRepresentable {
 
         @objc private func handleSystemWake() {
             injectSystemWake()
+            recoverKeyboardFocus()
+        }
+
+        @objc private func handleAppDidBecomeActive() {
+            recoverKeyboardFocus()
         }
 
         func injectSystemSleep() {
@@ -354,6 +366,25 @@ struct ChatWebView: NSViewRepresentable {
                 "window.dispatchEvent(new CustomEvent('verso:system-wake'));",
                 completionHandler: nil
             )
+        }
+
+        private func recoverKeyboardFocus() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self,
+                      let webView = self.webView,
+                      self.pageLoaded,
+                      let window = webView.window,
+                      window.isVisible else { return }
+
+                if NSApp.isActive || window.isKeyWindow {
+                    window.makeFirstResponder(webView)
+                }
+
+                webView.evaluateJavaScript(
+                    "window.dispatchEvent(new CustomEvent('verso:restore-chat-focus'));",
+                    completionHandler: nil
+                )
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

@@ -1133,6 +1133,7 @@ export function App() {
             onStop={handleStop}
             isStreaming={selectedSessionId !== null && streamingSessions.has(selectedSessionId)}
             disabled={!connected || isHydratingSession || !!selectedSession?.archivedAt}
+            focusRecoveryEnabled={!isCatalogOpen && !isSkillsCatalogOpen}
           />
         </>
       )}

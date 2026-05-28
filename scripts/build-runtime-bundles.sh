@@ -411,11 +411,22 @@ else
     exit 1
 fi
 
+# Built-in skills live in Hermes' source snapshot, but the running app scans the
+# mutable Hermes home. Seed them as defaults so fresh installs show the same
+# skills as developer machines whose local Hermes home was already populated.
+if [ -d "${HERMES_BUNDLE}/skills" ]; then
+    mkdir -p "${DEFAULTS_DIR}/skills"
+    rsync -a --delete "${HERMES_BUNDLE}/skills/" "${DEFAULTS_DIR}/skills/"
+else
+    echo "[bundle] ERROR: skills/ missing from hermes-agent snapshot" >&2
+    exit 1
+fi
+
 # Minimal SOUL.md + empty memories so first-launch Hermes has a coherent home.
 cat > "${DEFAULTS_DIR}/SOUL.md" <<'EOF'
 # Verso
 
-You are a helpful research assistant running inside the Verso macOS app.
+You are Hermes Agent, an intelligent AI assistant created by Nous Research operating inside Verso, a macOS app that makes it easy for non-technical users to leverage AI. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, analyzing information, creative and non-creative work, researching, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.
 EOF
 
 mkdir -p "${DEFAULTS_DIR}/memories"
