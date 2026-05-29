@@ -3,6 +3,15 @@
     <channel>
         <title>verso</title>
         <item>
+            <title>1.0.7</title>
+            <pubDate>Fri, 29 May 2026 14:08:41 +0200</pubDate>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.7/verso-1.0.7.dmg" length="171536073" type="application/octet-stream" sparkle:edSignature="AsZMq6X6eLD2o0unkIIwbhsYnBvERKH+ndOtAzyeJ0nt+NM5sSN8UJxHBcPJnJEmHy3TiCQe/AaC1RVosbXpAQ=="/>
+        </item>
+        <item>
             <title>1.0.6</title>
             <pubDate>Fri, 29 May 2026 11:41:06 +0200</pubDate>
             <sparkle:version>7</sparkle:version>
@@ -19,24 +28,6 @@
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.5/verso-1.0.5.dmg" length="168956795" type="application/octet-stream" sparkle:edSignature="EA3gTGg3JWmgHFKAmnSE05NR7luKtLoBqH0k3l7I0m//WtH4dKVhcUJSRFZZkrODSa45aAm04SnQW3BJKAOGDQ=="/>
-        </item>
-        <item>
-            <title>1.0.4</title>
-            <pubDate>Wed, 27 May 2026 12:39:32 +0200</pubDate>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.4/verso-1.0.4.dmg" length="166454383" type="application/octet-stream" sparkle:edSignature="GurRKyfHzBUvrROvyYjTSQ2sA4SslBSRY1FJHNWSrW7KLm78EWVzgce7I1AXBFeSkuCLSlw8aA4v3hxpIRXHCQ=="/>
-        </item>
-        <item>
-            <title>1.0.3</title>
-            <pubDate>Wed, 27 May 2026 11:19:33 +0200</pubDate>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.3/verso-1.0.3.dmg" length="164715051" type="application/octet-stream" sparkle:edSignature="ZZOTf2+UWnntyaiM1mrFhLVkkxXKfZpIZBFOfgi5ODoWR9vpdaQWcz/A+3S8cS3dGxBfUDWWNX4COUhl3U3zCw=="/>
         </item>
     </channel>
 </rss>
