@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
   ComposioToolUsageStore,
+  PROPOSE_MESSAGE_DRAFT_SLUG,
   nativeNameForComposioToolSlug,
   type ComposioNativeToolManifest,
 } from '../src/http/composio-tool-usage-store.ts';
@@ -35,12 +36,13 @@ describe('ComposioToolUsageStore', () => {
     const manifest = store.writeManifest(manifestPath, ['gmail', 'slack']);
 
     expect(manifest.tools.map((item) => item.toolSlug)).toEqual([
+      PROPOSE_MESSAGE_DRAFT_SLUG,
       'GMAIL_SEND_EMAIL',
       'GMAIL_CREATE_DRAFT',
       'SLACK_SEARCH_MESSAGES',
     ]);
     const persisted = JSON.parse(readFileSync(manifestPath, 'utf8')) as ComposioNativeToolManifest;
-    expect(persisted.tools).toHaveLength(3);
+    expect(persisted.tools).toHaveLength(4);
   });
 
   test('excludes disconnected toolkit tools', () => {
@@ -50,11 +52,12 @@ describe('ComposioToolUsageStore', () => {
 
     const manifest = store.writeManifest(manifestPath, ['gmail']);
 
-    expect(manifest.tools.map((item) => item.toolkitSlug)).toEqual(['gmail']);
-    expect(manifest.tools.map((item) => item.toolSlug)).toEqual(['GMAIL_SEND_EMAIL']);
+    const composioTools = manifest.tools.filter((item) => item.toolSlug !== PROPOSE_MESSAGE_DRAFT_SLUG);
+    expect(composioTools.map((item) => item.toolkitSlug)).toEqual(['gmail']);
+    expect(composioTools.map((item) => item.toolSlug)).toEqual(['GMAIL_SEND_EMAIL']);
   });
 
-  test('removes manifest when no connected toolkit tools remain', () => {
+  test('keeps the synthetic verso tool present when no toolkit tools remain', () => {
     const { store, manifestPath } = setup();
     store.recordSuccessfulUse(tool('GMAIL_SEND_EMAIL', 'gmail'));
     store.writeManifest(manifestPath, ['gmail']);
@@ -62,11 +65,11 @@ describe('ComposioToolUsageStore', () => {
 
     const manifest = store.writeManifest(manifestPath, ['slack']);
 
-    expect(manifest.tools).toEqual([]);
-    expect(existsSync(manifestPath)).toBe(false);
+    expect(manifest.tools.map((item) => item.toolSlug)).toEqual([PROPOSE_MESSAGE_DRAFT_SLUG]);
+    expect(existsSync(manifestPath)).toBe(true);
   });
 
-  test('caps the manifest', () => {
+  test('caps the composio portion of the manifest', () => {
     const { store, manifestPath } = setup();
     for (let index = 0; index < 30; index += 1) {
       store.recordSuccessfulUse(tool(`GMAIL_TOOL_${index}`, 'gmail'), `2026-05-28T10:${String(index).padStart(2, '0')}:00.000Z`);
@@ -74,7 +77,8 @@ describe('ComposioToolUsageStore', () => {
 
     const manifest = store.writeManifest(manifestPath, ['gmail']);
 
-    expect(manifest.tools).toHaveLength(25);
+    // 25 composio tools + 1 synthetic verso tool
+    expect(manifest.tools).toHaveLength(26);
   });
 
   test('generates safe native names', () => {

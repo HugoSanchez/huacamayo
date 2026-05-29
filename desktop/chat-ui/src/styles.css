@@ -842,6 +842,41 @@ textarea {
   background: rgba(0, 0, 0, 0.05);
 }
 
+.catalog-overlay-tabs {
+  margin: 0 18px 12px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.04);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.catalog-overlay-tab {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.catalog-overlay-tab.is-active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.catalog-overlay-tab:hover {
+  color: var(--text);
+}
+
 .catalog-overlay-search {
   padding: 0 18px 12px;
   flex-shrink: 0;
@@ -985,6 +1020,8 @@ textarea {
   .catalog-overlay {
     box-shadow: 2px 0 6px rgba(0, 0, 0, 0.18);
   }
+  .catalog-overlay-tabs { background: rgba(255, 255, 255, 0.05); }
+  .catalog-overlay-tab.is-active { background: rgba(255, 255, 255, 0.08); }
   .catalog-overlay-close:hover { background: rgba(255, 255, 255, 0.08); }
   .catalog-row:hover { background: rgba(255, 255, 255, 0.04); }
   .catalog-row-logo-fallback { background: rgba(255, 255, 255, 0.06); }
@@ -1209,6 +1246,32 @@ textarea {
   overflow: hidden;
 }
 
+.hub-skill-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.hub-skill-badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-skill-badge.is-builtin,
+.hub-skill-badge.is-trusted,
+.hub-skill-badge.is-installed {
+  color: var(--text);
+}
+
 .skill-row-toggle {
   flex-shrink: 0;
   width: 28px;
@@ -1280,6 +1343,11 @@ textarea {
   display: flex;
   align-items: flex-start;
   gap: 12px;
+}
+
+.skill-detail-header-main {
+  min-width: 0;
+  flex: 1;
 }
 
 .skill-detail-header-controls {
@@ -1394,6 +1462,8 @@ textarea {
   font-size: 12px;
   color: var(--text-dim);
   line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .skill-detail-meta {
@@ -1426,7 +1496,7 @@ textarea {
   font: inherit;
   font-size: 12px;
   font-weight: 500;
-  padding: 8px 12px;
+  padding: 8px 18px;
   border-radius: 4px;
   cursor: pointer;
   transition: background 0.1s ease, border-color 0.1s ease, transform 0.1s ease;
@@ -1448,6 +1518,52 @@ textarea {
 
 .skill-detail-action.is-primary:active {
   transform: translateY(1px);
+}
+
+.skill-detail-action.is-ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.skill-detail-action.is-loading {
+  cursor: wait;
+}
+
+.skill-detail-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+  transform: none;
+}
+
+.skill-detail-action.is-ghost:disabled {
+  opacity: 1;
+}
+
+.skill-install-spinner {
+  width: 11px;
+  height: 11px;
+  display: inline-block;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.72;
+  animation: skill-install-spin 800ms linear infinite;
+}
+
+@keyframes skill-install-spin {
+  to { transform: rotate(360deg); }
+}
+
+.skill-install-warning {
+  border: 1px solid rgba(193, 98, 49, 0.22);
+  border-radius: 8px;
+  background: rgba(193, 98, 49, 0.06);
+  color: #b2572c;
+  padding: 10px 12px;
+  max-width: 720px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .skill-detail-hint {
@@ -2152,6 +2268,355 @@ textarea {
   .cron-tool-card-view:hover {
     background: rgba(255, 255, 255, 0.12);
     border-color: rgba(255, 255, 255, 0.18);
+  }
+}
+
+/* ============================================================== */
+/* Message draft overlay (floating review & send widget)          */
+/* ============================================================== */
+
+/* Pinned bottom-right of the viewport, above the input bar. Multiple
+   drafts (uncommon but possible) stack vertically. `pointer-events: none`
+   on the container leaves clicks pass-through on empty space; children
+   opt back in. */
+.message-draft-overlay {
+  position: fixed;
+  bottom: 110px;
+  right: 24px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  width: min(380px, calc(100vw - 48px));
+  pointer-events: none;
+}
+
+.message-draft-overlay > * {
+  pointer-events: auto;
+}
+
+.message-draft-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.2);
+  animation: message-draft-rise 160ms ease-out;
+}
+
+@keyframes message-draft-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.message-draft-card.is-terminal {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  width: auto;
+  max-width: 100%;
+}
+
+.message-draft-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.message-draft-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.message-draft-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.005em;
+  line-height: 1.2;
+}
+
+.message-draft-card-subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
+.message-draft-card-icon-button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.message-draft-card-icon-button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.message-draft-card-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.message-draft-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding: 4px 0;
+}
+
+.message-draft-card-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  width: 56px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+/* Scope the toolkit logo down inside the draft surfaces so the channel chip
+   feels like a subtle marker, not a hero image. The same <ToolkitLogo>
+   component renders at 34px inside the connection card. */
+.message-draft-card .connection-card-logo,
+.message-draft-card .connection-card-logo-fallback,
+.message-draft-card-minimized .connection-card-logo,
+.message-draft-card-minimized .connection-card-logo-fallback {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+.message-draft-card .connection-card-logo-fallback,
+.message-draft-card-minimized .connection-card-logo-fallback {
+  font-size: 10px;
+}
+
+.message-draft-card-input {
+  flex: 1;
+  appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.message-draft-card-input::placeholder {
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+/* Small circular avatar for Slack DM recipients. Sits between the label
+   column and the input so the friendly name lines up cleanly. Hidden when
+   the agent didn't supply a URL or when the channel is Gmail. */
+.message-draft-card-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-color-scheme: light) {
+  .message-draft-card-avatar {
+    background: rgba(0, 0, 0, 0.06);
+  }
+}
+
+/* Tiny "Cc" affordance that lives on the right side of the To row — same
+   trick Gmail uses. Disappears once the Cc field is open. */
+.message-draft-card-row-toggle {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+  transition: color 0.1s ease, background 0.1s ease;
+}
+
+.message-draft-card-row-toggle:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+@media (prefers-color-scheme: light) {
+  .message-draft-card-row-toggle:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+}
+
+.message-draft-card-input:disabled {
+  opacity: 0.6;
+}
+
+.message-draft-card-body {
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  resize: none;
+  min-height: 72px;
+  max-height: 200px;
+  padding: 6px 0 0;
+}
+
+.message-draft-card-body:disabled {
+  opacity: 0.6;
+}
+
+.message-draft-card-error {
+  font-size: 12px;
+  color: #ff8585;
+  padding: 2px 0;
+}
+
+.message-draft-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.message-draft-card-button {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, opacity 0.1s ease;
+}
+
+.message-draft-card-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.message-draft-card-button.is-secondary {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+}
+
+.message-draft-card-button.is-secondary:not(:disabled):hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.message-draft-card-button.is-primary {
+  background: var(--text);
+  color: var(--bg);
+  border: 1px solid var(--text);
+}
+
+.message-draft-card-button.is-primary:not(:disabled):hover {
+  opacity: 0.88;
+}
+
+.message-draft-card-minimized {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.3),
+    0 1px 4px rgba(0, 0, 0, 0.18);
+  transition: border-color 0.1s ease, transform 0.1s ease, box-shadow 0.1s ease;
+  animation: message-draft-rise 160ms ease-out;
+}
+
+/* Hover keeps the solid --bg-input fill so the pill never goes translucent
+   over the chat thread. The lift comes from a tighter border + a slightly
+   stronger shadow. */
+.message-draft-card-minimized:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.36),
+    0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.message-draft-card-minimized-text {
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+@media (prefers-color-scheme: light) {
+  .message-draft-card {
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.12),
+      0 2px 6px rgba(0, 0, 0, 0.08);
+  }
+  .message-draft-card-icon-button:hover {
+    background: rgba(0, 0, 0, 0.06);
+  }
+  .message-draft-card-button.is-secondary:not(:disabled):hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  .message-draft-card-minimized {
+    box-shadow:
+      0 8px 22px rgba(0, 0, 0, 0.1),
+      0 1px 4px rgba(0, 0, 0, 0.06);
+  }
+  .message-draft-card-minimized:hover {
+    border-color: rgba(0, 0, 0, 0.18);
+    box-shadow:
+      0 10px 26px rgba(0, 0, 0, 0.14),
+      0 1px 4px rgba(0, 0, 0, 0.08);
+  }
+  .message-draft-card-error {
+    color: #c43d3d;
   }
 }
 

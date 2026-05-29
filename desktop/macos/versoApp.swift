@@ -149,6 +149,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// the app back to the foreground.
     private var pendingResponseCount = 0
     private weak var mainWindow: NSWindow?
+    var registeredMainWindow: NSWindow? { mainWindow }
 
     override init() {
         super.init()

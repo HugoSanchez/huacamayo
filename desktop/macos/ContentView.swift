@@ -90,7 +90,8 @@ struct ContentView: View {
     @ObservedObject var managedSessionStore: ManagedSessionStore
     @AppStorage("isDarkMode") private var isDarkMode = true
     @AppStorage("isLeftSidebarExpanded") private var isLeftSidebarExpanded = true
-    @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = true
+    @AppStorage("isRightSidebarExpanded") private var isRightSidebarExpanded = false
+    @AppStorage("didApplyRightSidebarClosedDefault") private var didApplyRightSidebarClosedDefault = false
     @AppStorage("isConnectionsCatalogExpanded") private var isConnectionsCatalogExpanded = false
     @AppStorage("isConnectionsListExpanded") private var isConnectionsListExpanded = true
     @AppStorage("isSessionsListExpanded") private var isSessionsListExpanded = true
@@ -344,6 +345,12 @@ struct ContentView: View {
         .overlay {
             RoundedRectangle(cornerRadius: ConductorThemePalette.windowCornerRadius, style: .continuous)
                 .strokeBorder(theme.windowBorder, lineWidth: 1)
+        }
+        .onAppear {
+            if !didApplyRightSidebarClosedDefault {
+                isRightSidebarExpanded = false
+                didApplyRightSidebarClosedDefault = true
+            }
         }
         .task(id: sidecarPort) {
             await refreshSessions()
@@ -778,13 +785,9 @@ private struct SessionSidebar: View {
     }
 
     private func cronSubtitle(_ cron: SidebarCron) -> String? {
-        if cron.state == "paused" { return "paused" }
-        if cron.lastStatus == "error" { return "last run failed" }
+        if cron.state == "paused" { return "Disabled" }
         if let next = cron.nextRunAt, let date = parseISODate(next) {
-            // After "Run now" (or any overdue tick) `next_run_at` lives in the
-            // past until Hermes' scheduler ticks again — render that window
-            // as "starting…" instead of nonsensical "next 15 sec ago".
-            if date.timeIntervalSinceNow < 0 { return "starting…" }
+            if date.timeIntervalSinceNow < 0 { return cron.scheduleDisplay }
             return "next " + relativeTime(date)
         }
         return cron.scheduleDisplay
@@ -1321,21 +1324,23 @@ private struct SidebarCronRow: View {
     @State private var confirmingDelete = false
     @State private var confirmResetTask: Task<Void, Never>?
 
+    private var isDisabled: Bool {
+        cron.state == "paused"
+    }
+
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: 10) {
-                CronStatusDot(state: cron.state, lastStatus: cron.lastStatus, nextRunAt: cron.nextRunAt, isDarkMode: isDarkMode)
-                    .frame(width: 18, height: 18)
-
                 VStack(alignment: .leading, spacing: 2) {
                     Text(cron.name)
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(primaryText)
+                        .foregroundStyle(isDisabled ? secondaryText : primaryText)
                         .lineLimit(1)
                     if let subtitle {
                         Text(subtitle)
                             .font(.system(size: 11))
                             .foregroundStyle(secondaryText)
+                            .opacity(isDisabled ? 0.86 : 1)
                             .lineLimit(1)
                     }
                 }
@@ -1401,57 +1406,6 @@ private struct SidebarCronRow: View {
         confirmResetTask = nil
         confirmingDelete = false
     }
-}
-
-private struct CronStatusDot: View {
-    let state: String
-    let lastStatus: String?
-    let nextRunAt: String?
-    let isDarkMode: Bool
-
-    private var isRunning: Bool {
-        // Hermes pushes `next_run_at` to "now" when the run is queued, then
-        // advances it once the scheduler tick fires the run. That window is
-        // when the routine is effectively running — show a spinner.
-        guard state != "paused", let raw = nextRunAt, let date = parseCronISODate(raw) else {
-            return false
-        }
-        return date.timeIntervalSinceNow < 0
-    }
-
-    private var color: Color {
-        if state == "paused" {
-            return Color.orange.opacity(isDarkMode ? 0.85 : 0.78)
-        }
-        if lastStatus == "error" {
-            return Color.red.opacity(isDarkMode ? 0.85 : 0.78)
-        }
-        return Color.green.opacity(isDarkMode ? 0.78 : 0.7)
-    }
-
-    var body: some View {
-        if isRunning {
-            ProgressView()
-                .scaleEffect(0.45)
-                .frame(width: 7, height: 7)
-        } else {
-            Circle()
-                .fill(color)
-                .frame(width: 7, height: 7)
-        }
-    }
-}
-
-// Top-level helper used by CronStatusDot. SessionSidebar has its own copy
-// because it's a member function — keeping them separate avoids exposing
-// formatter internals beyond what each call site needs.
-private func parseCronISODate(_ raw: String) -> Date? {
-    let withFractional = ISO8601DateFormatter()
-    withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = withFractional.date(from: raw) { return date }
-    let plain = ISO8601DateFormatter()
-    plain.formatOptions = [.withInternetDateTime]
-    return plain.date(from: raw)
 }
 
 struct SidebarCron: Decodable, Identifiable, Equatable {

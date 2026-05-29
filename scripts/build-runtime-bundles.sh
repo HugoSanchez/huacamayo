@@ -422,6 +422,18 @@ else
     exit 1
 fi
 
+# Official optional skills are discoverable through Hermes' Skills Hub, but
+# they are not active until installed. Keep them outside defaults/skills so
+# they don't appear as installed skills, while still giving OptionalSkillSource
+# its native HERMES_HOME/optional-skills location in packaged builds.
+if [ -d "${HERMES_BUNDLE}/optional-skills" ]; then
+    mkdir -p "${DEFAULTS_DIR}/optional-skills"
+    rsync -a --delete "${HERMES_BUNDLE}/optional-skills/" "${DEFAULTS_DIR}/optional-skills/"
+else
+    echo "[bundle] ERROR: optional-skills/ missing from hermes-agent snapshot" >&2
+    exit 1
+fi
+
 # Minimal SOUL.md + empty memories so first-launch Hermes has a coherent home.
 cat > "${DEFAULTS_DIR}/SOUL.md" <<'EOF'
 # Verso

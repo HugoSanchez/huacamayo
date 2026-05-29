@@ -3,6 +3,9 @@ import type {
   ChatSSEEvent,
   ConnectionRequestView,
   ConnectionView,
+  HubSkillDetailView,
+  HubSkillInstallView,
+  HubSkillSummaryView,
   SkillDetailView,
   SkillSummaryView,
   StoredChatMessage,
@@ -18,9 +21,9 @@ let sidecarPort: number | null = null;
 //
 // Session mutations no longer use this — they post `ShellAction.sessionMutated`
 // via `postShellAction` instead, which Swift's `handleShellAction` routes
-// through the consolidated channel. Only `skillsChanged` remains until the
-// skills/pins mutators migrate too.
-function notifyHost(type: 'skillsChanged'): void {
+// through the consolidated channel. Cron/skill mutations still use the
+// lightweight refresh bridge because Swift owns those sidebar collections.
+function notifyHost(type: 'cronsChanged' | 'skillsChanged'): void {
   window.webkit?.messageHandlers?.chatBridge?.postMessage({ type });
 }
 
@@ -228,6 +231,57 @@ export async function getSkill(slug: string): Promise<SkillDetailView> {
   return body.skill;
 }
 
+export async function getHubSkills(opts: {
+  query?: string;
+  source?: string;
+  limit?: number;
+} = {}): Promise<{
+  skills: HubSkillSummaryView[];
+  sourceCounts: Record<string, number>;
+  timedOutSources: string[];
+}> {
+  const params = new URLSearchParams();
+  if (opts.query) params.set('query', opts.query);
+  if (opts.source) params.set('source', opts.source);
+  if (typeof opts.limit === 'number') params.set('limit', String(opts.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${baseURL()}/skills/hub${suffix}`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load Skills Hub'));
+  }
+  const body = await res.json() as {
+    skills?: HubSkillSummaryView[];
+    sourceCounts?: Record<string, number>;
+    timedOutSources?: string[];
+  };
+  return {
+    skills: Array.isArray(body.skills) ? body.skills : [],
+    sourceCounts: body.sourceCounts ?? {},
+    timedOutSources: Array.isArray(body.timedOutSources) ? body.timedOutSources : [],
+  };
+}
+
+export async function getHubSkill(identifier: string): Promise<HubSkillDetailView> {
+  const res = await fetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load hub skill'));
+  }
+  const body = await res.json() as { skill: HubSkillDetailView };
+  return body.skill;
+}
+
+export async function installHubSkill(identifier: string): Promise<HubSkillInstallView> {
+  const res = await fetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}/install`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to install hub skill'));
+  }
+  const body = await res.json() as HubSkillInstallView;
+  notifyHost('skillsChanged');
+  return body;
+}
+
 export async function toggleSkill(slug: string, enabled: boolean): Promise<SkillSummaryView> {
   const res = await fetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/toggle`, {
     method: 'POST',
@@ -310,6 +364,7 @@ export async function patchCron(id: string, payload: Partial<{
     throw new Error(await readError(res, 'Failed to update cron job'));
   }
   const body = await res.json() as { cron: import('./types').CronJobView };
+  notifyHost('cronsChanged');
   return body.cron;
 }
 
@@ -318,6 +373,7 @@ export async function deleteCron(id: string): Promise<void> {
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to delete cron job'));
   }
+  notifyHost('cronsChanged');
 }
 
 export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Promise<import('./types').CronJobView> {
@@ -326,6 +382,7 @@ export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Pr
     throw new Error(await readError(res, `Failed to ${op} cron job`));
   }
   const body = await res.json() as { cron: import('./types').CronJobView };
+  notifyHost('cronsChanged');
   return body.cron;
 }
 
@@ -404,10 +461,81 @@ export function codexConnectUrl(): string {
   return `${baseURL()}/model-auth/codex/start`;
 }
 
+// Generic draft channel — the agent picks whatever toolkit slug it wants
+// (`slack`, `gmail`, `whatsapp`, etc.); the UI uses it for the widget header
+// and the orchestrator forwards it back to the agent in the resolution so the
+// agent can dispatch the matching Composio send tool.
+export type DraftChannel = string;
+
+export interface DraftApproveInput {
+  channel: string;
+  to: string;
+  cc?: string;
+  subject?: string;
+  body: string;
+  threadId?: string;
+  wasEdited: boolean;
+}
+
+export async function approveDraft(draftId: string, payload: DraftApproveInput): Promise<void> {
+  const res = await fetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, `Failed to approve draft (HTTP ${res.status})`));
+  }
+}
+
+export async function rejectDraft(draftId: string): Promise<void> {
+  const res = await fetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, `Failed to reject draft (HTTP ${res.status})`));
+  }
+}
+
+/**
+ * Deterministic draft id derived from the agent's tool args. Must match the
+ * orchestrator's `draftIdForArgs` in composio-bridge.ts byte-for-byte.
+ */
+export function draftIdForArgs(args: unknown): string {
+  return `draft_${fnv1a32(stableStringify(args))}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
+function fnv1a32(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
 async function readError(res: Response, fallback: string): Promise<string> {
   try {
     const body = await res.text();
-    return body || fallback;
+    if (!body) return fallback;
+    try {
+      const parsed = JSON.parse(body) as { message?: unknown; output?: unknown };
+      if (typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message;
+      if (typeof parsed.output === 'string' && parsed.output.trim()) return parsed.output;
+    } catch {
+      // fall through to raw body
+    }
+    return body;
   } catch {
     return fallback;
   }

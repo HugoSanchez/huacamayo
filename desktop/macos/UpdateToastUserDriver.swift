@@ -11,6 +11,8 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
     private var expectedContentLength: UInt64 = 0
     private var receivedContentLength: UInt64 = 0
     private var downloadCancellation: (() -> Void)?
+    private weak var attachedParentWindow: NSWindow?
+    private var parentWindowObservationTokens: [NSObjectProtocol] = []
 
     func show(_ request: SPUUpdatePermissionRequest, reply: @escaping (SUUpdatePermissionResponse) -> Void) {
         reply(SUUpdatePermissionResponse(automaticUpdateChecks: true, automaticUpdateDownloading: NSNumber(value: false), sendSystemProfile: false))
@@ -227,28 +229,10 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
         downloadCancellation = nil
         let replyOnce = makeSingleReply(reply)
-        showToast(
-            VersoUpdateToastState(
-                title: "Ready to restart",
-                message: "Quit and relaunch Verso to finish installing the update.",
-                progress: nil,
-                showsActivity: false,
-                primaryTitle: "Restart to Update",
-                primaryAction: { [weak self] in
-                    replyOnce(.install)
-                    self?.showInstallingToast(applicationTerminated: false, retryTerminatingApplication: nil)
-                },
-                secondaryTitle: "Later",
-                secondaryAction: { [weak self] in
-                    replyOnce(.dismiss)
-                    self?.dismissToast()
-                },
-                closeAction: { [weak self] in
-                    replyOnce(.dismiss)
-                    self?.dismissToast()
-                }
-            )
-        )
+        showInstallingToast(applicationTerminated: false, retryTerminatingApplication: nil)
+        DispatchQueue.main.async {
+            replyOnce(.install)
+        }
     }
 
     func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) {
@@ -354,8 +338,8 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
             panel.backgroundColor = .clear
             panel.hasShadow = false
             panel.hidesOnDeactivate = false
-            panel.level = .floating
-            panel.collectionBehavior = [.moveToActiveSpace, .transient, .fullScreenAuxiliary]
+            panel.level = .normal
+            panel.collectionBehavior = [.transient, .fullScreenAuxiliary]
             self.panel = panel
             self.hostingController = hostingController
         } else {
@@ -365,7 +349,11 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
 
         if let panel {
             position(panel)
-            panel.orderFrontRegardless()
+            if attachedParentWindow == nil {
+                panel.orderFrontRegardless()
+            } else {
+                panel.orderFront(nil)
+            }
         }
 
         if let delay {
@@ -381,16 +369,113 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
     private func dismissToast() {
         dismissTimer?.invalidate()
         dismissTimer = nil
+        detachFromParentWindow()
         panel?.orderOut(nil)
     }
 
     private func position(_ panel: NSPanel) {
+        guard let parentWindow = mainAppWindow() else {
+            detachFromParentWindow()
+            positionOnScreen(panel)
+            return
+        }
+
+        attach(panel, to: parentWindow)
+
+        let contentFrame = contentScreenFrame(for: parentWindow)
+        let margin: CGFloat = 20
+        let x: CGFloat
+        let y: CGFloat
+
+        if contentFrame.width >= VersoUpdateToastView.width + (margin * 2) {
+            x = contentFrame.maxX - VersoUpdateToastView.width - margin
+        } else {
+            x = contentFrame.midX - (VersoUpdateToastView.width / 2)
+        }
+
+        if contentFrame.height >= panelHeight + (margin * 2) {
+            y = contentFrame.minY + margin
+        } else {
+            y = contentFrame.midY - (panelHeight / 2)
+        }
+
+        panel.setFrame(NSRect(x: x, y: y, width: VersoUpdateToastView.width, height: panelHeight), display: true)
+    }
+
+    private func positionOnScreen(_ panel: NSPanel) {
         let screen = NSApp.keyWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let visibleFrame = screen?.visibleFrame else { return }
         let margin: CGFloat = 24
         let x = visibleFrame.maxX - VersoUpdateToastView.width - margin
         let y = visibleFrame.minY + margin
         panel.setFrame(NSRect(x: x, y: y, width: VersoUpdateToastView.width, height: panelHeight), display: true)
+    }
+
+    private func attach(_ panel: NSPanel, to parentWindow: NSWindow) {
+        guard attachedParentWindow !== parentWindow else { return }
+
+        detachFromParentWindow()
+        parentWindow.addChildWindow(panel, ordered: .above)
+        attachedParentWindow = parentWindow
+        observeParentWindow(parentWindow)
+    }
+
+    private func detachFromParentWindow() {
+        if let panel, let attachedParentWindow {
+            attachedParentWindow.removeChildWindow(panel)
+        }
+        attachedParentWindow = nil
+        stopObservingParentWindow()
+    }
+
+    private func observeParentWindow(_ window: NSWindow) {
+        stopObservingParentWindow()
+
+        let center = NotificationCenter.default
+        let names: [NSNotification.Name] = [
+            NSWindow.didMoveNotification,
+            NSWindow.didResizeNotification,
+            NSWindow.didEnterFullScreenNotification,
+            NSWindow.didExitFullScreenNotification
+        ]
+
+        parentWindowObservationTokens = names.map { name in
+            center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, let panel = self.panel, panel.isVisible else { return }
+                    self.position(panel)
+                }
+            }
+        }
+    }
+
+    private func stopObservingParentWindow() {
+        for token in parentWindowObservationTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        parentWindowObservationTokens = []
+    }
+
+    private func mainAppWindow() -> NSWindow? {
+        if let window = AppDelegate.shared?.registeredMainWindow,
+           window.isVisible,
+           !window.isMiniaturized {
+            return window
+        }
+
+        return NSApp.windows.first { window in
+            if let panel, window === panel { return false }
+            return window.isVisible && !window.isMiniaturized && !(window is NSPanel)
+        }
+    }
+
+    private func contentScreenFrame(for window: NSWindow) -> NSRect {
+        guard let contentView = window.contentView else {
+            return window.frame
+        }
+
+        let contentRectInWindow = contentView.convert(contentView.bounds, to: nil)
+        return window.convertToScreen(contentRectInWindow)
     }
 
     private func makeSingleReply(_ reply: @escaping (SPUUserUpdateChoice) -> Void) -> (SPUUserUpdateChoice) -> Void {
@@ -434,15 +519,17 @@ private struct VersoUpdateToastState {
 
 private struct VersoUpdateToastView: View {
     static let cardWidth: CGFloat = 360
-    static let closeReserve: CGFloat = 14
-    static let width: CGFloat = cardWidth + closeReserve
+    static let width: CGFloat = cardWidth
 
     static func height(for state: VersoUpdateToastState) -> CGFloat {
-        cardHeight(for: state) + closeReserve(for: state)
+        cardHeight(for: state)
     }
 
     private static func cardHeight(for state: VersoUpdateToastState) -> CGFloat {
         if state.progress != nil {
+            if hasActions(state) {
+                return state.message.isEmpty ? 138 : 154
+            }
             return state.message.isEmpty ? 110 : 126
         }
 
@@ -457,52 +544,25 @@ private struct VersoUpdateToastView: View {
         return state.message.isEmpty ? 72 : 90
     }
 
-    private static func closeReserve(for state: VersoUpdateToastState) -> CGFloat {
-        state.closeAction == nil ? 0 : closeReserve
-    }
-
     @Environment(\.colorScheme) private var colorScheme
     let state: VersoUpdateToastState
 
     var body: some View {
-        let closeOffset = Self.closeReserve(for: state)
-
-        ZStack(alignment: .topLeading) {
-            cardView
-                .frame(
-                    width: Self.cardWidth,
-                    height: Self.cardHeight(for: state),
-                    alignment: isCenteredActivity ? .center : .topLeading
-                )
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(surfaceColor)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(borderColor, lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.10), radius: 12, y: 5)
-                .offset(x: closeOffset, y: closeOffset)
-
-            if let closeAction = state.closeAction {
-                Button(action: closeAction) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(titleColor)
-                        .frame(width: 24, height: 24)
-                        .background(
-                            Circle()
-                                .fill(surfaceColor)
-                        )
-                        .overlay(
-                            Circle()
-                                .stroke(borderColor, lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        cardView
+            .frame(
+                width: Self.cardWidth,
+                height: Self.cardHeight(for: state),
+                alignment: isCenteredActivity ? .center : .topLeading
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(surfaceColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(borderColor, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.10), radius: 12, y: 5)
         .frame(width: Self.width, height: Self.height(for: state), alignment: .topLeading)
     }
 
