@@ -76,6 +76,44 @@ export interface SkillSummaryView {
   pinned: boolean;
 }
 
+export interface HubSkillSummaryView {
+  identifier: string;
+  name: string;
+  slug: string;
+  description: string;
+  source: string;
+  trustLevel: string;
+  repo: string | null;
+  path: string | null;
+  tags: string[];
+  installed: boolean;
+}
+
+export interface HubSkillDetailView extends HubSkillSummaryView {
+  content: string;
+  rawContent: string;
+  files: string[];
+}
+
+export interface HubSkillInstallView {
+  installed: boolean;
+  changed: boolean;
+  skill: {
+    name: string;
+    source: string;
+    identifier: string;
+    trustLevel: string;
+    scanVerdict: string;
+    contentHash: string;
+    installPath: string;
+    files: string[];
+    installedAt: string | null;
+    updatedAt: string | null;
+  } | null;
+  message: string;
+  output: string;
+}
+
 export interface SkillDetailView extends SkillSummaryView {
   content: string;
 }

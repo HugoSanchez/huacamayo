@@ -6,7 +6,10 @@ import {
   type RemoteBridgeToolSchemaView,
 } from './composio-bridge-client.ts';
 import { ManagedBackendClient } from './managed-backend-client.ts';
-import type { ComposioToolUsageStore } from '../http/composio-tool-usage-store.ts';
+import {
+  PROPOSE_MESSAGE_DRAFT_SLUG,
+  type ComposioToolUsageStore,
+} from '../http/composio-tool-usage-store.ts';
 
 export interface ComposioBridgeSearchToolView extends RemoteBridgeSearchToolResult {}
 export interface ComposioBridgeToolSchemaView extends RemoteBridgeToolSchemaView {}
@@ -42,6 +45,94 @@ export interface ToolUsageMetadata {
  * directly; it forwards search/schema/execute calls to the authenticated
  * backend bridge so the Composio project API key stays server-side.
  */
+
+// Maximum time we'll hold a propose_message_draft tool call open while waiting
+// for the user to approve or reject. After this, the call resolves with a
+// timeout rejection so Hermes doesn't sit forever and so we don't pin
+// resources on a forgotten widget.
+const DRAFT_HOLD_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Outcome of the held draft call, fed back to Hermes as the tool result.
+// - "sent": Verso already dispatched the message (Gmail, Slack). Agent does nothing further.
+// - "approved": user confirmed but agent must dispatch the send itself using the final_* values.
+// - "rejected": user discarded the draft.
+export type DraftResolution =
+  | {
+      status: 'sent';
+      channel: string;
+      sent_via: string;
+      was_edited: boolean;
+      result: unknown;
+    }
+  | {
+      status: 'approved';
+      was_edited: boolean;
+      channel: string;
+      final_to: string;
+      final_cc: string;
+      final_subject: string;
+      final_body: string;
+      final_thread_id: string;
+    }
+  | { status: 'rejected'; reason: 'discarded_by_user' | 'timeout' | 'session_ended' };
+
+interface PendingDraftEntry {
+  resolve: (resolution: DraftResolution) => void;
+  timer: NodeJS.Timeout;
+  args: Record<string, unknown>;
+}
+
+// Process-lifetime registry of in-flight draft holds, keyed by a deterministic
+// hash of the agent's call arguments. Both the orchestrator (here) and the
+// chat UI compute the same hash from the same args, so they agree on the key
+// without any explicit coordination.
+const pendingDrafts = new Map<string, PendingDraftEntry>();
+
+/**
+ * Deterministic id for a draft, derived from the agent's tool args. The chat
+ * UI computes the same id from the same args (via stableStringify + FNV-1a)
+ * so neither side needs to coordinate with the other. The hash space is
+ * 32-bit, which is fine for the handful of concurrent drafts we'll ever see.
+ */
+export function draftIdForArgs(args: Record<string, unknown>): string {
+  const canonical = stableStringify(args);
+  return `draft_${fnv1a32(canonical)}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
+function fnv1a32(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+export function resolvePendingDraft(draftId: string, resolution: DraftResolution): boolean {
+  const entry = pendingDrafts.get(draftId);
+  if (!entry) return false;
+  clearTimeout(entry.timer);
+  pendingDrafts.delete(draftId);
+  entry.resolve(resolution);
+  return true;
+}
+
+export function rejectAllPendingDrafts(reason: 'session_ended'): void {
+  for (const [draftId, entry] of pendingDrafts) {
+    clearTimeout(entry.timer);
+    pendingDrafts.delete(draftId);
+    entry.resolve({ status: 'rejected', reason });
+  }
+}
+
 export class ComposioBridgeService {
   private readonly bridgeClient: RemoteComposioBridgeClient;
   private readonly usage: ComposioBridgeUsageOptions | null;
@@ -88,7 +179,6 @@ export class ComposioBridgeService {
     toolSlug: string,
     arguments_: Record<string, unknown>,
   ): Promise<ComposioBridgeToolExecutionView> {
-    this.assertConfigured();
     const slug = toolSlug.trim();
     if (!slug) throw new ComposioBridgeHttpError(400, 'Missing "toolSlug"');
     const argumentRecord = asRecord(arguments_);
@@ -96,6 +186,20 @@ export class ComposioBridgeService {
       throw new ComposioBridgeHttpError(400, 'Missing required object "arguments".');
     }
 
+    // propose_message_draft is held until the user approves or rejects via
+    // the inline widget. We don't call the remote bridge — we just wait. The
+    // resolution carries the (possibly edited) final values that the agent
+    // should use for the actual send tool call it makes next.
+    if (slug.toUpperCase() === PROPOSE_MESSAGE_DRAFT_SLUG) {
+      const resolution = await holdDraftForReview(argumentRecord);
+      return {
+        data: resolution,
+        error: null,
+        logId: null,
+      };
+    }
+
+    this.assertConfigured();
     try {
       const result = await this.bridgeClient.executeTool(slug, argumentRecord);
       if (!result.error) {
@@ -147,6 +251,30 @@ export class ComposioBridgeService {
       toolkitName: cleanString(tool.toolkitName) ?? existing?.toolkitName ?? null,
     });
   }
+}
+
+function holdDraftForReview(args: Record<string, unknown>): Promise<DraftResolution> {
+  const draftId = draftIdForArgs(args);
+
+  // If the same draft is already pending (agent retried with the exact same
+  // args), reject the older hold so this new one supersedes it — otherwise
+  // the old timer would fire later and leak a stale resolution.
+  const existing = pendingDrafts.get(draftId);
+  if (existing) {
+    clearTimeout(existing.timer);
+    existing.resolve({ status: 'rejected', reason: 'session_ended' });
+    pendingDrafts.delete(draftId);
+  }
+
+  return new Promise<DraftResolution>((resolve) => {
+    const timer = setTimeout(() => {
+      if (pendingDrafts.get(draftId)) {
+        pendingDrafts.delete(draftId);
+        resolve({ status: 'rejected', reason: 'timeout' });
+      }
+    }, DRAFT_HOLD_TIMEOUT_MS);
+    pendingDrafts.set(draftId, { resolve, timer, args });
+  });
 }
 
 function mapRemoteBridgeError(error: unknown): Error {

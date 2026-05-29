@@ -42,6 +42,7 @@ required_paths=(
     "${BUNDLE_SRC}/site-packages/arm64/bin/hermes"
     "${BUNDLE_SRC}/hermes-defaults"
     "${BUNDLE_SRC}/hermes-defaults/skills"
+    "${BUNDLE_SRC}/hermes-defaults/optional-skills"
     "${BUNDLE_SRC}/BUNDLE_VERSION"
 )
 for p in "${required_paths[@]}"; do
@@ -55,6 +56,13 @@ done
 
 if [ -z "$(find "${BUNDLE_SRC}/hermes-defaults/skills" -path '*/SKILL.md' -print -quit)" ]; then
     echo "error: desktop/runtime-bundles/hermes-defaults/skills does not contain any SKILL.md files." >&2
+    echo "       Run: ./scripts/build-runtime-bundles.sh" >&2
+    echo "       Then rebuild the Release archive." >&2
+    exit 1
+fi
+
+if [ -z "$(find "${BUNDLE_SRC}/hermes-defaults/optional-skills" -path '*/SKILL.md' -print -quit)" ]; then
+    echo "error: desktop/runtime-bundles/hermes-defaults/optional-skills does not contain any SKILL.md files." >&2
     echo "       Run: ./scripts/build-runtime-bundles.sh" >&2
     echo "       Then rebuild the Release archive." >&2
     exit 1

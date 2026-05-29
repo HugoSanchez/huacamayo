@@ -4,12 +4,14 @@ import path from 'node:path';
 import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
 import { ChatStore } from './chat-store.ts';
 import { buildComposioBridgeRoutes } from './composio-bridge.ts';
+import { buildDraftsRoutes } from './drafts.ts';
 import { ComposioToolUsageStore } from './composio-tool-usage-store.ts';
 import { buildConnectionsRoutes } from './connections.ts';
 import { ConnectionsStore } from './connections-store.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
 import { dispatch, json, route, type Route } from './router.ts';
 import { buildSkillsRoutes, setSkillsDir } from './skills.ts';
+import { buildSkillsHubRoutes } from './skills-hub.ts';
 import { HermesSkillsConfig } from './skills-store.ts';
 import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
@@ -84,8 +86,10 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const routes = [
     ...buildRoutes(store, hermes, managedBackend),
     ...buildComposioBridgeRoutes(composioBridge),
+    ...buildDraftsRoutes(composioBridge),
     ...buildManagedAccountRoutes(managedBackend),
     ...buildConnectionsRoutes(connections),
+    ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
     ...buildModelAuthRoutes(codexAuth),

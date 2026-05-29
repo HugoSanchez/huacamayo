@@ -3,7 +3,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { ChatMessage, ActivityStep, ConnectionRequestView, ConnectionView, ToolkitView } from './types';
-import { generateCronDescription, openExternalUrl } from './chat';
+import {
+  approveDraft,
+  draftIdForArgs,
+  generateCronDescription,
+  openExternalUrl,
+  rejectDraft,
+} from './chat';
 import { useIsSystemAsleep } from './useSystemSleep';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
 
@@ -100,27 +106,45 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
     );
   }
 
+  // Collect every propose_message_draft tool step across the session so the
+  // floating overlay can stack them in one place. Pulling them out at the
+  // list level (not per-message) lets the overlay survive scrolling and lets
+  // drafts from different assistant turns share one anchored container.
+  const draftSteps: Extract<ActivityStep, { type: 'tool' }>[] = [];
+  for (const msg of messages) {
+    for (const step of msg.steps ?? []) {
+      if (step.type === 'tool' && isProposeMessageDraftStep(step)) {
+        draftSteps.push(step);
+      }
+    }
+  }
+
   return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: '16px 32px',
-      }}
-    >
-      {messages.map(msg => (
-        <MessageBubble
-          key={msg.id}
-          message={msg}
-          onConnect={onConnect}
-          toolkits={toolkits}
-          onCodexConnected={onCodexConnected}
-        />
-      ))}
-      <div ref={endRef} />
-    </div>
+    <>
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px 32px',
+        }}
+      >
+        {messages.map(msg => (
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            onConnect={onConnect}
+            toolkits={toolkits}
+            onCodexConnected={onCodexConnected}
+          />
+        ))}
+        <div ref={endRef} />
+      </div>
+      {draftSteps.length > 0 && (
+        <DraftOverlay drafts={draftSteps} toolkits={toolkits} />
+      )}
+    </>
   );
 }
 
@@ -145,19 +169,22 @@ function MessageBubble({
     );
   }
 
-  // Connection cards live alongside the assistant's response text, not inside
-  // the "N tool calls" collapsible. Pull them out of the activity stream and
-  // render them as siblings of the message body so the user always sees the
-  // call-to-action without expanding the activity log.
+  // Connection cards render alongside the message body; draft cards live in
+  // a floating overlay (rendered by MessageList itself). Both get pulled out
+  // of the activity stream so they never show up in the "N tool calls"
+  // collapsible — but the draft steps themselves aren't rendered here.
   const allSteps = message.steps ?? [];
   const connectionRequests: ConnectionRequestView[] = [];
   const stepsForActivity: ActivityStep[] = [];
   for (const step of allSteps) {
     if (step.type === 'tool' && step.connection) {
       connectionRequests.push(step.connection);
-    } else {
-      stepsForActivity.push(step);
+      continue;
     }
+    if (step.type === 'tool' && isProposeMessageDraftStep(step)) {
+      continue;
+    }
+    stepsForActivity.push(step);
   }
 
   const assistantMessage = !isUser ? { ...message, steps: stepsForActivity } : message;
@@ -222,6 +249,26 @@ function MessageBubble({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function DraftOverlay({
+  drafts,
+  toolkits,
+}: {
+  drafts: Extract<ActivityStep, { type: 'tool' }>[];
+  toolkits: Map<string, ToolkitInfo>;
+}) {
+  return (
+    <div className="message-draft-overlay" role="region" aria-label="Pending message drafts">
+      {drafts.map((step, idx) => (
+        <MessageDraftCard
+          key={step.id ?? `draft-${idx}`}
+          step={step}
+          toolkits={toolkits}
+        />
+      ))}
     </div>
   );
 }
@@ -499,6 +546,368 @@ function CronToolCard({ action, jobId, name, scheduleDisplay }: CronToolCardProp
       )}
     </div>
   );
+}
+
+interface DraftFields {
+  // Channel is whatever the agent provided — typically a toolkit slug like
+  // `slack`/`gmail`/`whatsapp`. We use it to look up the toolkit logo from
+  // the connected catalog and feed it back to the agent on approval so it
+  // knows which send tool to dispatch.
+  channel: string;
+  channelLabel: string;
+  channelLogoUrl: string;
+  // `to` is what gets sent (possibly an opaque id like a Slack DM channel id
+  // `D0..`). `toLabel` is what we show the user. They stay in sync once the
+  // user edits, so manual changes always win over the agent's hint.
+  to: string;
+  toLabel: string;
+  toAvatarUrl: string;
+  cc: string;
+  subject: string;
+  body: string;
+  threadId: string;
+}
+
+type DraftStatus = 'draft' | 'sending' | 'sent' | 'error';
+
+// Hermes may register native composio-style tools under a namespace prefix
+// (e.g. `mcp_composio_propose_message_draft`). Match on the stripped form so
+// we catch the call regardless of how Hermes wired the registration.
+function isProposeMessageDraftStep(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
+  return stripNamespace(step.name).toLowerCase() === 'propose_message_draft';
+}
+
+function parseDraftInput(input: unknown): DraftFields {
+  const obj = (input && typeof input === 'object' && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {}) ;
+  const channel = typeof obj.channel === 'string' ? obj.channel.trim().toLowerCase() : '';
+  const to = typeof obj.to === 'string' ? obj.to : '';
+  const toDisplay = typeof obj.to_display === 'string' ? obj.to_display.trim() : '';
+  return {
+    channel,
+    channelLabel: typeof obj.channel_label === 'string' ? obj.channel_label.trim() : '',
+    channelLogoUrl: typeof obj.channel_logo_url === 'string' ? obj.channel_logo_url.trim() : '',
+    to,
+    toLabel: toDisplay.length > 0 ? toDisplay : to,
+    toAvatarUrl: typeof obj.to_avatar_url === 'string' ? obj.to_avatar_url : '',
+    cc: typeof obj.cc === 'string' ? obj.cc : '',
+    subject: typeof obj.subject === 'string' ? obj.subject : '',
+    body: typeof obj.body === 'string' ? obj.body : '',
+    threadId: typeof obj.threadId === 'string' ? obj.threadId : '',
+  };
+}
+
+// True once the held tool call has resolved (either via our own approve/reject
+// or via timeout). We don't render the editor for finalized drafts.
+function isDraftFinalized(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
+  return typeof step.result === 'string' && step.result.length > 0;
+}
+
+function prettyChannelLabel(channel: string): string {
+  if (!channel) return 'message';
+  if (channel === 'gmail') return 'Gmail';
+  if (channel === 'slack') return 'Slack';
+  return channel.charAt(0).toUpperCase() + channel.slice(1);
+}
+
+function MessageDraftCard({
+  step,
+  toolkits,
+}: {
+  step: Extract<ActivityStep, { type: 'tool' }>;
+  toolkits: Map<string, ToolkitInfo>;
+}) {
+  const initial = parseDraftInput(step.input);
+  const [fields, setFields] = useState<DraftFields>(initial);
+  const [status, setStatus] = useState<DraftStatus>('draft');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDiscarded, setIsDiscarded] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [isHidden, setIsHidden] = useState(false);
+  const [showCc, setShowCc] = useState(initial.cc.trim().length > 0);
+
+  const finalized = isDraftFinalized(step);
+
+  // If the held tool call resolved through some other path (timeout,
+  // session-end cleanup, a different tab approving the same draft), the
+  // tool result lands on the step. Hide the editor so the user isn't acting
+  // on a stale draft.
+  useEffect(() => {
+    if (finalized && status === 'draft') setIsHidden(true);
+  }, [finalized, status]);
+
+  useEffect(() => {
+    if (status !== 'sent') return;
+    const id = setTimeout(() => setIsHidden(true), 1800);
+    return () => clearTimeout(id);
+  }, [status]);
+
+  // Deterministic draft id derived from the agent's args — both this client
+  // and the orchestrator compute the same value, so the approve/reject
+  // endpoints find the matching held tool call.
+  const draftId = draftIdForArgs(step.input);
+
+  // Channel header: prefer the agent's explicit hints (channel_label,
+  // channel_logo_url) so unknown channels still feel native, fall back to the
+  // toolkit catalog (works for any connected toolkit), and finally just title-
+  // case the channel slug. Avoid passing an empty channel to toolkits.get.
+  const toolkitInfo = fields.channel ? toolkits.get(fields.channel) : undefined;
+  const channelLogoUrl = fields.channelLogoUrl || toolkitInfo?.logoUrl || null;
+  const channelLabel = fields.channelLabel
+    || toolkitInfo?.name
+    || prettyChannelLabel(fields.channel);
+
+  const sendDisabled = status === 'sending' || status === 'sent'
+    || fields.to.trim().length === 0
+    || fields.body.trim().length === 0;
+
+  const update = <K extends keyof DraftFields>(key: K, value: DraftFields[K]) => {
+    setFields((prev) => ({ ...prev, [key]: value }));
+    if (status === 'error') setStatus('draft');
+  };
+
+  const wasEdited = (): boolean => (
+    fields.to !== initial.to
+    || fields.body !== initial.body
+    || fields.subject !== initial.subject
+    || fields.cc !== initial.cc
+    || fields.threadId !== initial.threadId
+  );
+
+  const handleSend = async () => {
+    if (sendDisabled) return;
+    setStatus('sending');
+    setErrorMessage(null);
+    try {
+      await approveDraft(draftId, {
+        channel: fields.channel,
+        to: fields.to.trim(),
+        cc: fields.cc.trim() || undefined,
+        subject: fields.subject.trim() || undefined,
+        body: fields.body,
+        threadId: fields.threadId.trim() || undefined,
+        wasEdited: wasEdited(),
+      });
+      setStatus('sent');
+    } catch (error: unknown) {
+      setStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleDiscard = async () => {
+    if (status === 'sending') return;
+    setStatus('sending');
+    setErrorMessage(null);
+    try {
+      await rejectDraft(draftId);
+      setIsDiscarded(true);
+      setStatus('sent');
+    } catch (error: unknown) {
+      setStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  if (isHidden) return null;
+
+  // Friendly recipient for any header/summary surface. Falls back to the raw
+  // `to` (likely an opaque id) only when no display label is set.
+  const toFriendly = fields.toLabel.trim() || fields.to.trim();
+
+  // Whether to surface email-style fields. Defaults to gmail (which always
+  // wants them), but any channel can opt in by supplying a subject or cc on
+  // the original draft — covers exotic email-shaped channels we don't know
+  // about by name.
+  const supportsEmailFields = fields.channel === 'gmail'
+    || initial.subject.length > 0
+    || initial.cc.length > 0;
+
+  const toPlaceholder = fields.channel === 'gmail'
+    ? 'name@example.com'
+    : fields.channel === 'slack'
+      ? '#channel or @user'
+      : 'Recipient';
+
+  if (status === 'sent') {
+    return (
+      <div className="message-draft-card is-terminal">
+        <ToolkitLogo name={channelLabel} logoUrl={channelLogoUrl} />
+        <div className="message-draft-card-meta">
+          <div className="message-draft-card-title">
+            {isDiscarded ? 'Draft discarded' : `Sent via ${channelLabel}`}
+          </div>
+          {!isDiscarded && toFriendly && (
+            <div className="message-draft-card-subtitle">{truncate(toFriendly, 36)}</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (isMinimized) {
+    const summary = toFriendly || `New ${channelLabel.toLowerCase()} message`;
+    return (
+      <button
+        type="button"
+        className="message-draft-card-minimized"
+        onClick={() => setIsMinimized(false)}
+        title="Expand draft"
+      >
+        <ToolkitLogo name={channelLabel} logoUrl={channelLogoUrl} />
+        <span className="message-draft-card-minimized-text">
+          {channelLabel} draft · {truncate(summary, 28)}
+        </span>
+        <ExpandIcon />
+      </button>
+    );
+  }
+
+  return (
+    <div className="message-draft-card">
+      <div className="message-draft-card-head">
+        <ToolkitLogo name={channelLabel} logoUrl={channelLogoUrl} />
+        <div className="message-draft-card-meta">
+          <div className="message-draft-card-title">Review & send via {channelLabel}</div>
+          <div className="message-draft-card-subtitle">Edit anything before sending.</div>
+        </div>
+        <button
+          type="button"
+          className="message-draft-card-icon-button"
+          onClick={() => setIsMinimized(true)}
+          aria-label="Minimize draft"
+          title="Minimize"
+        >
+          <MinimizeIcon />
+        </button>
+      </div>
+
+      <div className="message-draft-card-fields">
+        <DraftRow label="To">
+          {fields.toAvatarUrl && (
+            <img
+              src={fields.toAvatarUrl}
+              alt=""
+              aria-hidden="true"
+              className="message-draft-card-avatar"
+            />
+          )}
+          <input
+            type="text"
+            className="message-draft-card-input"
+            placeholder={toPlaceholder}
+            value={fields.toLabel}
+            onChange={(e) => {
+              const value = e.target.value;
+              // Once the user edits the field they take over both surfaces —
+              // we send whatever they typed, not the agent's original id.
+              setFields((prev) => ({ ...prev, to: value, toLabel: value }));
+              if (status === 'error') setStatus('draft');
+            }}
+            disabled={status === 'sending'}
+          />
+          {supportsEmailFields && !showCc && (
+            <button
+              type="button"
+              className="message-draft-card-row-toggle"
+              onClick={() => setShowCc(true)}
+              disabled={status === 'sending'}
+            >
+              Cc
+            </button>
+          )}
+        </DraftRow>
+
+        {supportsEmailFields && showCc && (
+          <DraftRow label="Cc">
+            <input
+              type="text"
+              className="message-draft-card-input"
+              placeholder="name@example.com"
+              value={fields.cc}
+              onChange={(e) => update('cc', e.target.value)}
+              disabled={status === 'sending'}
+              autoFocus
+            />
+          </DraftRow>
+        )}
+
+        {supportsEmailFields && (
+          <DraftRow label="Subject">
+            <input
+              type="text"
+              className="message-draft-card-input"
+              value={fields.subject}
+              onChange={(e) => update('subject', e.target.value)}
+              disabled={status === 'sending'}
+            />
+          </DraftRow>
+        )}
+
+        <textarea
+          className="message-draft-card-body"
+          value={fields.body}
+          onChange={(e) => update('body', e.target.value)}
+          rows={Math.max(4, Math.min(10, fields.body.split('\n').length + 1))}
+          disabled={status === 'sending'}
+        />
+      </div>
+
+      {errorMessage && status === 'error' && (
+        <div className="message-draft-card-error">{errorMessage}</div>
+      )}
+
+      <div className="message-draft-card-actions">
+        <button
+          type="button"
+          className="message-draft-card-button is-secondary"
+          onClick={handleDiscard}
+          disabled={status === 'sending'}
+        >
+          Discard
+        </button>
+        <button
+          type="button"
+          className="message-draft-card-button is-primary"
+          onClick={handleSend}
+          disabled={sendDisabled}
+        >
+          {status === 'sending' ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MinimizeIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <line x1="2" y1="5" x2="8" y2="5" />
+    </svg>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="2.5,7 5,4 7.5,7" />
+    </svg>
+  );
+}
+
+function DraftRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="message-draft-card-row">
+      <span className="message-draft-card-label">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
 }
 
 function ToolStep({

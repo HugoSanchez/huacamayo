@@ -4,6 +4,7 @@ import { InputBar } from './InputBar';
 import { CatalogOverlay } from './CatalogOverlay';
 import { SkillsCatalogOverlay } from './SkillsCatalogOverlay';
 import { SkillDetailPage } from './SkillDetailPage';
+import { HubSkillDetailPage } from './HubSkillDetailPage';
 import { CronDetailPage } from './CronDetailPage';
 import { SettingsPage } from './SettingsPage';
 import {
@@ -105,6 +106,7 @@ export function App() {
     Boolean(typeof window !== 'undefined' && window.__versoPendingSkillsCatalogOpen),
   );
   const [selectedSkillSlug, setSelectedSkillSlug] = useState<string | null>(null);
+  const [selectedHubSkillIdentifier, setSelectedHubSkillIdentifier] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedCronId, setSelectedCronId] = useState<string | null>(null);
   // Names resolved by the detail pages (via onTitleResolved) so the header
@@ -158,6 +160,7 @@ export function App() {
     isCatalogOpen,
     isSkillsCatalogOpen,
     selectedSkillSlug,
+    selectedHubSkillIdentifier,
     selectedCronId,
     isSettingsOpen,
   });
@@ -167,6 +170,7 @@ export function App() {
       isCatalogOpen,
       isSkillsCatalogOpen,
       selectedSkillSlug,
+      selectedHubSkillIdentifier,
       selectedCronId,
       isSettingsOpen,
     };
@@ -178,7 +182,7 @@ export function App() {
     const v = viewStateRef.current;
     if (v.selectedSessionId !== sessionId) return false;
     if (v.isCatalogOpen || v.isSkillsCatalogOpen) return false;
-    if (v.selectedSkillSlug || v.selectedCronId) return false;
+    if (v.selectedSkillSlug || v.selectedHubSkillIdentifier || v.selectedCronId) return false;
     if (v.isSettingsOpen) return false;
     return true;
   }, []);
@@ -218,6 +222,7 @@ export function App() {
       !isCatalogOpen &&
       !isSkillsCatalogOpen &&
       !selectedSkillSlug &&
+      !selectedHubSkillIdentifier &&
       !selectedCronId &&
       !isSettingsOpen;
     if (!activelyViewed) return;
@@ -233,6 +238,7 @@ export function App() {
     isCatalogOpen,
     isSkillsCatalogOpen,
     selectedSkillSlug,
+    selectedHubSkillIdentifier,
     selectedCronId,
     isSettingsOpen,
   ]);
@@ -240,7 +246,9 @@ export function App() {
   // Clear the cached detail-page names when their id clears, so the next
   // time you open a routine/skill the header doesn't briefly show the
   // previous one's name.
-  useEffect(() => { if (!selectedSkillSlug) setActiveSkillName(null); }, [selectedSkillSlug]);
+  useEffect(() => {
+    if (!selectedSkillSlug && !selectedHubSkillIdentifier) setActiveSkillName(null);
+  }, [selectedSkillSlug, selectedHubSkillIdentifier]);
   useEffect(() => { if (!selectedCronId) setActiveCronName(null); }, [selectedCronId]);
 
   // System sleep: tear down anything that would otherwise keep waking the
@@ -534,6 +542,7 @@ export function App() {
     // session click from the leftbar should land you in the chat surface.
     if (next) {
       setSelectedSkillSlug(null);
+      setSelectedHubSkillIdentifier(null);
       setSelectedCronId(null);
       setIsSettingsOpen(false);
     }
@@ -573,6 +582,7 @@ export function App() {
       if (!id) return;
       setSelectedCronId(id);
       setSelectedSkillSlug(null);
+      setSelectedHubSkillIdentifier(null);
       setIsCatalogOpen(false);
       setIsSkillsCatalogOpen(false);
     };
@@ -587,6 +597,7 @@ export function App() {
       setIsSettingsOpen(true);
       setSelectedCronId(null);
       setSelectedSkillSlug(null);
+      setSelectedHubSkillIdentifier(null);
       setIsCatalogOpen(false);
       setIsSkillsCatalogOpen(false);
     };
@@ -637,6 +648,19 @@ export function App() {
 
   const handleSelectSkill = useCallback((slug: string) => {
     setSelectedSkillSlug(slug);
+    setSelectedHubSkillIdentifier(null);
+    setIsSkillsCatalogOpen(false);
+    if (isNativeShell) {
+      window.webkit?.messageHandlers?.chatBridge?.postMessage({
+        type: 'skillsCatalogStateChanged',
+        open: false,
+      });
+    }
+  }, [isNativeShell]);
+
+  const handleSelectHubSkill = useCallback((identifier: string) => {
+    setSelectedHubSkillIdentifier(identifier);
+    setSelectedSkillSlug(null);
     setIsSkillsCatalogOpen(false);
     if (isNativeShell) {
       window.webkit?.messageHandlers?.chatBridge?.postMessage({
@@ -983,6 +1007,7 @@ export function App() {
     sessionIdRef.current = null;
     setSelectedSessionId(null);
     setSelectedSkillSlug(null);
+    setSelectedHubSkillIdentifier(null);
     setMessagesBySession((prev) => {
       if (!(PENDING_SESSION_KEY in prev)) return prev;
       const next = { ...prev };
@@ -1046,7 +1071,7 @@ export function App() {
     ? 'Settings'
     : selectedCronId
       ? activeCronName ? `Routines: ${activeCronName}` : 'Routines'
-      : selectedSkillSlug
+      : selectedSkillSlug || selectedHubSkillIdentifier
         ? activeSkillName ? `Skills: ${activeSkillName}` : 'Skills'
         : selectedSession?.title ?? 'New chat';
   const headerSubtitle = !connected
@@ -1079,7 +1104,7 @@ export function App() {
   const mainPanel = (
     <main className="chat-panel">
       {isNativeShell && <ChatHeaderScaffold title={headerTitle} />}
-      {!isNativeShell && !selectedSkillSlug && !selectedCronId && !isSettingsOpen && (
+      {!isNativeShell && !selectedSkillSlug && !selectedHubSkillIdentifier && !selectedCronId && !isSettingsOpen && (
         <div className="chat-toolbar">
           <div>
             <div className="chat-toolbar-title">{selectedSession?.title ?? 'New Chat'}</div>
@@ -1110,6 +1135,11 @@ export function App() {
         <SkillDetailPage
           slug={selectedSkillSlug}
           onOpenInNewSession={handleOpenSkillInNewSession}
+          onTitleResolved={setActiveSkillName}
+        />
+      ) : selectedHubSkillIdentifier ? (
+        <HubSkillDetailPage
+          identifier={selectedHubSkillIdentifier}
           onTitleResolved={setActiveSkillName}
         />
       ) : (
@@ -1154,6 +1184,7 @@ export function App() {
       isOpen={isSkillsCatalogOpen}
       onClose={handleCloseSkillsCatalog}
       onSelectSkill={handleSelectSkill}
+      onSelectHubSkill={handleSelectHubSkill}
     />
   );
 
