@@ -4,7 +4,9 @@ import path from 'node:path';
 import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
 import { ChatStore } from './chat-store.ts';
 import { buildComposioBridgeRoutes } from './composio-bridge.ts';
+import { ComposioToolUsageStore } from './composio-tool-usage-store.ts';
 import { buildConnectionsRoutes } from './connections.ts';
+import { ConnectionsStore } from './connections-store.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
 import { dispatch, json, route, type Route } from './router.ts';
 import { buildSkillsRoutes, setSkillsDir } from './skills.ts';
@@ -50,9 +52,22 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const store = new ChatStore();
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
-  const connections = new ConnectionsService(managedBackend);
-  const composioBridge = new ComposioBridgeService(managedBackend);
   const hermes = new HermesSupervisor({ runtimeMode });
+  const connectionsStore = new ConnectionsStore();
+  const composioToolUsage = new ComposioToolUsageStore();
+  const refreshComposioToolsManifest = () => {
+    composioToolUsage.writeManifest(
+      hermes.composioToolsManifestPath,
+      activeToolkitSlugs(connectionsStore),
+    );
+  };
+  refreshComposioToolsManifest();
+  const connections = new ConnectionsService(managedBackend, connectionsStore, refreshComposioToolsManifest);
+  const composioBridge = new ComposioBridgeService(managedBackend, {
+    store: composioToolUsage,
+    manifestPath: hermes.composioToolsManifestPath,
+    getActiveToolkitSlugs: () => activeToolkitSlugs(connectionsStore),
+  });
   // Point the skills scanner at the same Hermes home Hermes itself uses
   // (profile-aware, e.g. ~/.hermes/profiles/verso/skills). Without this it
   // falls back to the legacy ~/.hermes/skills path and misses any skills
@@ -100,6 +115,12 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       resolve({ server, port: addr.port, close });
     });
   });
+}
+
+function activeToolkitSlugs(store: ConnectionsStore): string[] {
+  return store.listConnections()
+    .filter((connection) => connection.status === 'active')
+    .map((connection) => connection.toolkitSlug);
 }
 
 const isMain = process.argv[1] && (
