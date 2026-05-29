@@ -226,6 +226,10 @@ export class HermesSupervisor {
     return this.manualMode ? this.templateHermesHome : this.managedHermesHome;
   }
 
+  get composioToolsManifestPath(): string {
+    return join(this.hermesHome, 'verso-composio-tools.json');
+  }
+
   // Resolved path/command of the Hermes binary the supervisor will spawn.
   // Exposed so one-off helpers (auth flows, etc.) can shell out to the same
   // binary without duplicating the detection logic. Callers that need to
@@ -792,6 +796,7 @@ export class HermesSupervisor {
         const bundled = getBundledHermesInvocation();
         const env: Record<string, string> = {
           VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
+          VERSO_COMPOSIO_TOOLS_MANIFEST: this.composioToolsManifestPath,
         };
         if (bundled) {
           env.PYTHONPATH = bundled.sitePackages;

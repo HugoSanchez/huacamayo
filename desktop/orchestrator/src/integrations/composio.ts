@@ -57,13 +57,16 @@ export class ConnectionsService {
   private readonly store: ConnectionsStore;
 
   private readonly bridgeClient: RemoteComposioBridgeClient;
+  private readonly onConnectionsChanged: (() => void) | null;
 
   constructor(
     managedBackend: ManagedBackendClient,
     store = new ConnectionsStore(),
+    onConnectionsChanged: (() => void) | null = null,
   ) {
     this.store = store;
     this.bridgeClient = new RemoteComposioBridgeClient(managedBackend);
+    this.onConnectionsChanged = onConnectionsChanged;
   }
 
   get configured(): boolean {
@@ -84,6 +87,7 @@ export class ConnectionsService {
       // pop back with an "Active" tag right after the user removes it.
       const filtered = remote.filter((item) => !this.store.isTombstoned(item.connectedAccountId));
       syncRemoteConnectionsIntoStore(this.store, filtered);
+      this.notifyConnectionsChanged();
       return mergeConnectionViews(filtered, this.store.listConnections().map(toConnectionView));
     } catch {
       return this.store.listConnections().map(toConnectionView);
@@ -130,6 +134,7 @@ export class ConnectionsService {
     }
 
     this.store.deleteConnection(trimmedId);
+    this.notifyConnectionsChanged();
   }
 
   async requestConnection(toolkitSlug: string, baseUrl: string): Promise<ConnectionRequestView> {
@@ -138,6 +143,7 @@ export class ConnectionsService {
     try {
       const request = await this.bridgeClient.requestConnection(toolkitSlug, `${baseUrl}/connections/callback`);
       syncRemoteRequestIntoStore(this.store, request);
+      this.notifyConnectionsChanged();
       return request;
     } catch (error) {
       throw mapRemoteBridgeError(error);
@@ -148,6 +154,7 @@ export class ConnectionsService {
     try {
       const request = await this.bridgeClient.getRequest(requestId);
       syncRemoteRequestIntoStore(this.store, request);
+      this.notifyConnectionsChanged();
       return request;
     } catch {
       const cached = this.store.getRequest(requestId);
@@ -162,6 +169,14 @@ export class ConnectionsService {
   private assertConfigured(): void {
     if (this.bridgeClient.configured) return;
     throw new HttpError(503, 'Managed backend URL is not configured.');
+  }
+
+  private notifyConnectionsChanged(): void {
+    try {
+      this.onConnectionsChanged?.();
+    } catch {
+      // Manifest refresh is best-effort and must not break connection flows.
+    }
   }
 }
 

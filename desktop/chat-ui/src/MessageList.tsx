@@ -18,6 +18,7 @@ interface Props {
 export interface ToolkitInfo {
   name: string;
   logoUrl: string | null;
+  connected: boolean;
 }
 
 // Build a slug → {name, logoUrl} map from the full toolkit catalog first
@@ -32,7 +33,7 @@ function buildToolkitMap(
   for (const tk of catalog) {
     const slug = tk.slug?.toLowerCase();
     if (!slug) continue;
-    map.set(slug, { name: tk.name, logoUrl: tk.logoUrl });
+    map.set(slug, { name: tk.name, logoUrl: tk.logoUrl, connected: tk.connected });
   }
   for (const conn of connections) {
     const slug = conn.toolkitSlug?.toLowerCase();
@@ -41,6 +42,7 @@ function buildToolkitMap(
     map.set(slug, {
       name: conn.toolkitName || existing?.name || slug,
       logoUrl: conn.logoUrl ?? existing?.logoUrl ?? null,
+      connected: conn.status === 'active' || existing?.connected === true,
     });
   }
   return map;
@@ -574,38 +576,69 @@ function parseComposioExecute(
   step: Extract<ActivityStep, { type: 'tool' }>,
   toolkits: Map<string, ToolkitInfo>,
 ): ComposioExecuteView | null {
-  if (stripNamespace(step.name).toLowerCase() !== 'execute_composio_tool') return null;
+  const strippedName = stripNamespace(step.name).toLowerCase();
+  if (strippedName !== 'execute_composio_tool') {
+    return parseNativeComposioToolName(strippedName, toolkits);
+  }
+
   const input = step.input;
   if (!input || typeof input !== 'object') return null;
   const rawSlug = (input as Record<string, unknown>).tool_slug
     ?? (input as Record<string, unknown>).toolSlug;
   if (typeof rawSlug !== 'string' || rawSlug.length === 0) return null;
 
-  const lowered = rawSlug.toLowerCase();
-  const parts = lowered.split('_');
+  return composioViewFromToolSlug(rawSlug, toolkits);
+}
 
+function parseNativeComposioToolName(
+  strippedToolName: string,
+  toolkits: Map<string, ToolkitInfo>,
+): ComposioExecuteView | null {
+  const match = matchComposioToolkitPrefix(strippedToolName, toolkits);
+  if (!match || match.info?.connected !== true) return null;
+  return composioViewFromMatchedPrefix(strippedToolName, match);
+}
+
+function composioViewFromToolSlug(
+  toolSlug: string,
+  toolkits: Map<string, ToolkitInfo>,
+): ComposioExecuteView | null {
+  const lowered = toolSlug.toLowerCase();
+  const match = matchComposioToolkitPrefix(lowered, toolkits);
+  if (!match) {
+    const fallbackSlug = lowered.split('_')[0] ?? lowered;
+    return composioViewFromMatchedPrefix(lowered, { slug: fallbackSlug, info: undefined });
+  }
+  return composioViewFromMatchedPrefix(lowered, match);
+}
+
+function matchComposioToolkitPrefix(
+  loweredToolSlug: string,
+  toolkits: Map<string, ToolkitInfo>,
+): { slug: string; info: ToolkitInfo | undefined } | null {
+  const parts = loweredToolSlug.split('_');
   // Composio toolkit slugs can themselves contain underscores (e.g.
   // `granola_mcp`), so we can't just take the substring before the first
   // underscore. Try the longest prefix first and walk back; first hit in the
-  // catalog wins. Falls back to the first segment so labels stay reasonable
-  // even when the catalog hasn't loaded yet.
-  let matchedSlug: string | null = null;
-  let matchedInfo: ToolkitInfo | undefined;
+  // catalog wins.
   for (let i = parts.length - 1; i >= 1; i -= 1) {
     const candidate = parts.slice(0, i).join('_');
     const info = toolkits.get(candidate) ?? toolkits.get(candidate.replace(/_/g, '-'));
     if (info) {
-      matchedSlug = candidate;
-      matchedInfo = info;
-      break;
+      return { slug: candidate, info };
     }
   }
+  return null;
+}
 
-  const toolkitSlug = matchedSlug ?? parts[0];
-  const actionRaw = lowered.slice(toolkitSlug.length + 1);
-  const toolkitName = matchedInfo?.name ?? titleCase(toolkitSlug);
-  const actionLabel = actionRaw.replace(/_+/g, ' ').trim() || lowered;
-  return { toolkitName, logoUrl: matchedInfo?.logoUrl ?? null, actionLabel };
+function composioViewFromMatchedPrefix(
+  loweredToolSlug: string,
+  match: { slug: string; info: ToolkitInfo | undefined },
+): ComposioExecuteView {
+  const actionRaw = loweredToolSlug.slice(match.slug.length + 1);
+  const toolkitName = match.info?.name ?? titleCase(match.slug);
+  const actionLabel = actionRaw.replace(/_+/g, ' ').trim() || loweredToolSlug;
+  return { toolkitName, logoUrl: match.info?.logoUrl ?? null, actionLabel };
 }
 
 function titleCase(slug: string): string {

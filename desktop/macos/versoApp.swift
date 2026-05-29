@@ -9,11 +9,25 @@ struct versoApp: App {
     @StateObject private var managedSessionStore = ManagedSessionStore()
     @State private var didScheduleLaunchUpdateCheck = false
 
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: true,
-        updaterDelegate: nil,
-        userDriverDelegate: nil
-    )
+    private let updateUserDriver: VersoUpdateUserDriver
+    private let updater: SPUUpdater
+
+    init() {
+        let updateUserDriver = VersoUpdateUserDriver()
+        self.updateUserDriver = updateUserDriver
+        self.updater = SPUUpdater(
+            hostBundle: Bundle.main,
+            applicationBundle: Bundle.main,
+            userDriver: updateUserDriver,
+            delegate: nil
+        )
+
+        do {
+            try updater.start()
+        } catch {
+            NSLog("Failed to start Sparkle updater: \(error.localizedDescription)")
+        }
+    }
 
     var body: some Scene {
         Window("verso", id: "main") {
@@ -42,13 +56,12 @@ struct versoApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updater: updaterController.updater)
+                CheckForUpdatesView(updater: updater)
             }
         }
     }
 
     private func scheduleLaunchUpdateCheck() {
-        let updater = updaterController.updater
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             guard updater.automaticallyChecksForUpdates,
                   !updater.sessionInProgress else { return }
@@ -98,7 +111,9 @@ private struct CheckForUpdatesView: View {
     }
 
     var body: some View {
-        Button("Check for Updates…") { updater.checkForUpdates() }
+        Button("Check for Updates…") {
+            updater.checkForUpdates()
+        }
             .disabled(!viewModel.canCheckForUpdates)
     }
 }

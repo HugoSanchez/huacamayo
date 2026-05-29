@@ -12,16 +12,20 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import anyio
 import mcp.types as types
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.tools.base import Tool
+from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase, FuncMetadata
 from mcp.server.stdio import stdio_server
 
 
 SERVER_NAME = "verso"
 ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
+COMPOSIO_TOOLS_MANIFEST = os.environ.get("VERSO_COMPOSIO_TOOLS_MANIFEST", "").strip()
 
 mcp = FastMCP(
     SERVER_NAME,
@@ -198,6 +202,116 @@ def execute_composio_tool(
     return _structured_result(payload)
 
 
+class _ManifestToolArgs(ArgModelBase):
+    """Pass arbitrary MCP arguments through to the mapped Composio tool."""
+
+    _payload: dict[str, Any] = {}
+
+    @classmethod
+    def model_validate(cls, obj: Any) -> "_ManifestToolArgs":  # type: ignore[override]
+        inst = cls()
+        inst._payload = obj if isinstance(obj, dict) else {}
+        return inst
+
+    def model_dump_one_level(self) -> dict[str, Any]:
+        return {"arguments": self._payload}
+
+
+def _register_manifest_tools() -> None:
+    for item in _read_manifest_tools():
+        native_name = item["nativeName"]
+        tool_slug = item["toolSlug"]
+        description = item["description"] or item["name"] or tool_slug
+        input_schema = _normalize_input_schema(item["inputParameters"])
+
+        def _handler(arguments: dict[str, Any], _tool_slug: str = tool_slug) -> types.CallToolResult:
+            payload = _request(
+                "POST",
+                "/composio/tools/execute",
+                {
+                    "toolSlug": _tool_slug,
+                    "arguments": arguments,
+                },
+            )
+            return _structured_result(payload)
+
+        # FastMCP's public add_tool() derives JSON Schema from a Python
+        # signature. Composio already gives us the exact JSON Schema, so we
+        # insert a Tool directly while still using FastMCP's normal list/call
+        # machinery.
+        mcp._tool_manager._tools[native_name] = Tool(  # noqa: SLF001
+            fn=_handler,
+            name=native_name,
+            description=description,
+            parameters=input_schema,
+            fn_metadata=FuncMetadata(arg_model=_ManifestToolArgs),
+            is_async=False,
+        )
+
+
+def _read_manifest_tools() -> list[dict[str, Any]]:
+    if not COMPOSIO_TOOLS_MANIFEST:
+        return []
+    try:
+        path = Path(COMPOSIO_TOOLS_MANIFEST)
+        if not path.exists():
+            return []
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    if not isinstance(parsed, dict) or parsed.get("version") != 1:
+        return []
+    raw_tools = parsed.get("tools")
+    if not isinstance(raw_tools, list):
+        return []
+
+    tools: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_tools:
+        if not isinstance(raw, dict):
+            continue
+        native_name = raw.get("nativeName")
+        tool_slug = raw.get("toolSlug")
+        toolkit_slug = raw.get("toolkitSlug")
+        input_parameters = raw.get("inputParameters")
+        if (
+            not isinstance(native_name, str)
+            or not native_name
+            or native_name in seen
+            or not isinstance(tool_slug, str)
+            or not tool_slug
+            or not isinstance(toolkit_slug, str)
+            or not toolkit_slug
+            or not isinstance(input_parameters, dict)
+        ):
+            continue
+        seen.add(native_name)
+        tools.append(
+            {
+                "nativeName": native_name,
+                "toolSlug": tool_slug,
+                "toolkitSlug": toolkit_slug,
+                "name": raw.get("name") if isinstance(raw.get("name"), str) else tool_slug,
+                "description": raw.get("description") if isinstance(raw.get("description"), str) else None,
+                "inputParameters": input_parameters,
+            }
+        )
+    return tools
+
+
+def _normalize_input_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(schema)
+    if not isinstance(normalized.get("type"), str):
+        normalized["type"] = "object"
+    if not isinstance(normalized.get("properties"), dict):
+        normalized["properties"] = {}
+    required = normalized.get("required")
+    if not isinstance(required, list):
+        normalized["required"] = []
+    return normalized
+
+
 def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     if not ORCHESTRATOR_BASE_URL:
         raise RuntimeError("VERSO_ORCHESTRATOR_BASE_URL is not set")
@@ -285,6 +399,7 @@ async def _run_stdio_async() -> None:
 
 
 def main() -> None:
+    _register_manifest_tools()
     anyio.run(_run_stdio_async)
 
 
