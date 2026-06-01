@@ -54,6 +54,28 @@ for p in "${required_paths[@]}"; do
     fi
 done
 
+orchestrator_deps_changed=false
+for dep_file in package.json package-lock.json; do
+    if ! cmp -s "${REPO_ROOT}/desktop/orchestrator/${dep_file}" "${BUNDLE_SRC}/orchestrator/${dep_file}"; then
+        orchestrator_deps_changed=true
+    fi
+done
+
+echo "[copy-bundles] refreshing orchestrator source snapshot"
+rsync -a --delete \
+    --exclude 'node_modules' \
+    --exclude 'test' \
+    --exclude '.env' \
+    --exclude '.env.*' \
+    --exclude '*.log' \
+    --exclude '.DS_Store' \
+    "${REPO_ROOT}/desktop/orchestrator/" "${BUNDLE_SRC}/orchestrator/"
+
+if ${orchestrator_deps_changed}; then
+    echo "[copy-bundles] orchestrator dependencies changed, reinstalling bundled node_modules"
+    ( cd "${BUNDLE_SRC}/orchestrator" && npm ci --include=dev --no-audit --no-fund --loglevel=error )
+fi
+
 if [ -z "$(find "${BUNDLE_SRC}/hermes-defaults/skills" -path '*/SKILL.md' -print -quit)" ]; then
     echo "error: desktop/runtime-bundles/hermes-defaults/skills does not contain any SKILL.md files." >&2
     echo "       Run: ./scripts/build-runtime-bundles.sh" >&2
