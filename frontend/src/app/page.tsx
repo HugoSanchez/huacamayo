@@ -29,7 +29,7 @@ export default function HomePage() {
           <div className={styles.actions}>
             <a
               className={styles.btnPrimary}
-              href="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.8/verso-1.0.8.dmg"
+              href="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.9/verso-1.0.9.dmg"
               download
             >
               <svg
