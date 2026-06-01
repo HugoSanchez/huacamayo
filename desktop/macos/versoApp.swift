@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Sentry
 import Sparkle
 
 @main
@@ -13,6 +14,18 @@ struct versoApp: App {
     private let updater: SPUUpdater
 
     init() {
+        if let dsn = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String,
+           !dsn.isEmpty {
+            SentrySDK.start { options in
+                options.dsn = dsn
+                #if DEBUG
+                options.environment = "development"
+                #else
+                options.environment = "production"
+                #endif
+            }
+        }
+
         let updateUserDriver = VersoUpdateUserDriver()
         self.updateUserDriver = updateUserDriver
         self.updater = SPUUpdater(
@@ -26,6 +39,7 @@ struct versoApp: App {
             try updater.start()
         } catch {
             NSLog("Failed to start Sparkle updater: \(error.localizedDescription)")
+            Telemetry.reportError(error, context: "sparkle-start")
         }
     }
 
@@ -58,6 +72,18 @@ struct versoApp: App {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updater)
             }
+            #if DEBUG
+            CommandMenu("Debug") {
+                Button("Send Test Event to Sentry") {
+                    let testError = NSError(
+                        domain: "verso.SentrySmokeTest",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Test event from Debug menu"]
+                    )
+                    Telemetry.reportError(testError, context: "sentry-smoke-test")
+                }
+            }
+            #endif
         }
     }
 

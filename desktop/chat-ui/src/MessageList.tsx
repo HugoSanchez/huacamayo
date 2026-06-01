@@ -113,7 +113,7 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
   const draftSteps: Extract<ActivityStep, { type: 'tool' }>[] = [];
   for (const msg of messages) {
     for (const step of msg.steps ?? []) {
-      if (step.type === 'tool' && isProposeMessageDraftStep(step)) {
+      if (step.type === 'tool' && isProposeMessageDraftStep(step) && !isDraftFinalized(step)) {
         draftSteps.push(step);
       }
     }
@@ -169,10 +169,9 @@ function MessageBubble({
     );
   }
 
-  // Connection cards render alongside the message body; draft cards live in
-  // a floating overlay (rendered by MessageList itself). Both get pulled out
-  // of the activity stream so they never show up in the "N tool calls"
-  // collapsible — but the draft steps themselves aren't rendered here.
+  // Connection cards render alongside the message body; active draft cards live
+  // in a floating overlay. Finalized draft tools stay in the history activity
+  // stream so old messages do not lose their tool-call context.
   const allSteps = message.steps ?? [];
   const connectionRequests: ConnectionRequestView[] = [];
   const stepsForActivity: ActivityStep[] = [];
@@ -181,7 +180,7 @@ function MessageBubble({
       connectionRequests.push(step.connection);
       continue;
     }
-    if (step.type === 'tool' && isProposeMessageDraftStep(step)) {
+    if (step.type === 'tool' && isProposeMessageDraftStep(step) && !isDraftFinalized(step)) {
       continue;
     }
     stepsForActivity.push(step);
@@ -208,7 +207,13 @@ function MessageBubble({
           width: isUser ? 'auto' : '100%',
         }}
       >
-        {!isUser && <AssistantActivity message={assistantMessage} onConnect={onConnect} toolkits={toolkits} />}
+        {!isUser && (
+          <AssistantActivity
+            message={assistantMessage}
+            onConnect={onConnect}
+            toolkits={toolkits}
+          />
+        )}
 
         <div className="message-content">
           {isUser ? (
@@ -236,6 +241,8 @@ function MessageBubble({
             </ReactMarkdown>
           ) : null}
         </div>
+
+        {!isUser && <AssistantMessageActions message={assistantMessage} />}
 
         {!isUser && connectionRequests.length > 0 && (
           <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -322,13 +329,23 @@ function AssistantActivity({
     wasStreaming.current = !!message.isStreaming;
   }, [message.isStreaming]);
 
-  if (!hasActivity && !message.isStreaming) return null;
+  if (!hasActivity) return null;
 
   const toolCount = steps.filter(s => s.type === 'tool').length;
   const msgCount = steps.filter(s => s.type === 'text').length;
 
+  if (message.isStreaming) {
+    return (
+      <div className="assistant-activity-wrap">
+        <div className="assistant-activity-live">
+          {steps.map((step, i) => <StepView key={i} step={step} onConnect={onConnect} toolkits={toolkits} />)}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ marginBottom: message.content ? '12px' : '0' }}>
+    <div className="assistant-activity-wrap">
       <ActivityHeader
         message={message}
         toolCount={toolCount}
@@ -337,10 +354,37 @@ function AssistantActivity({
         onToggle={() => setExpanded(e => !e)}
       />
       {expanded && hasActivity && (
-        <div style={{ marginTop: '6px', paddingLeft: '18px' }}>
+        <div className="assistant-activity-details">
           {steps.map((step, i) => <StepView key={i} step={step} onConnect={onConnect} toolkits={toolkits} />)}
         </div>
       )}
+    </div>
+  );
+}
+
+function AssistantMessageActions({ message }: { message: ChatMessage }) {
+  const hasTiming = typeof message.startedAt === 'number'
+    && (message.isStreaming || typeof message.endedAt === 'number');
+  const hasCopyableContent = message.content.trim().length > 0;
+
+  if (!hasTiming && !hasCopyableContent) return null;
+
+  return (
+    <div className="assistant-message-footer-wrap">
+      <div className="assistant-message-footer">
+        {hasTiming && <ResponseTime message={message} />}
+        {hasCopyableContent && <CopyMessageButton text={message.content} />}
+      </div>
+    </div>
+  );
+}
+
+function ResponseTime({ message }: { message: ChatMessage }) {
+  const elapsed = useElapsed(message.startedAt, message.endedAt, message.isStreaming);
+
+  return (
+    <div className="assistant-response-time">
+      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatElapsed(elapsed)}</span>
     </div>
   );
 }
@@ -354,18 +398,15 @@ function ActivityHeader({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const elapsed = useElapsed(message.startedAt, message.endedAt, message.isStreaming);
-
   const hasActivity = toolCount > 0 || msgCount > 0;
-  const summary = !hasActivity
-    ? ''
-    : [
-        toolCount ? `${toolCount} tool call${toolCount === 1 ? '' : 's'}` : '',
-        msgCount ? `${msgCount} message${msgCount === 1 ? '' : 's'}` : '',
-      ].filter(Boolean).join(', ');
+  const summary = [
+    toolCount ? `${toolCount} tool call${toolCount === 1 ? '' : 's'}` : '',
+    msgCount ? `${msgCount} message${msgCount === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(', ');
 
   return (
     <button
+      type="button"
       onClick={hasActivity ? onToggle : undefined}
       style={{
         display: 'flex',
@@ -394,10 +435,102 @@ function ActivityHeader({
           <polyline points="3.5,2 7,5 3.5,8" />
         </svg>
       )}
-      {message.isStreaming ? <Spinner /> : <Dot />}
-      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatElapsed(elapsed)}</span>
-      {summary && <span>· {summary}</span>}
+      {summary && <span>{summary}</span>}
     </button>
+  );
+}
+
+function CopyMessageButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+  }, []);
+
+  async function handleCopy() {
+    const value = text.trim();
+    if (!value) return;
+
+    try {
+      await copyText(value);
+    } catch {
+      return;
+    }
+
+    setCopied(true);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setCopied(false), 1400);
+  }
+
+  return (
+    <button
+      type="button"
+      className={`message-copy-button${copied ? ' is-copied' : ''}`}
+      onClick={handleCopy}
+      aria-label={copied ? 'Message copied' : 'Copy message'}
+      title={copied ? 'Copied' : 'Copy message'}
+    >
+      {copied ? <MessageCheckIcon /> : <MessageCopyIcon />}
+    </button>
+  );
+}
+
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const ok = document.execCommand('copy');
+  textarea.remove();
+  if (!ok) throw new Error('Copy failed');
+}
+
+function MessageCopyIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function MessageCheckIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
   );
 }
 
@@ -1225,31 +1358,6 @@ function ToolkitLogo({ logoUrl, name }: { logoUrl: string | null; name: string }
 
   const initial = name.trim().charAt(0).toUpperCase() || '?';
   return <div className="connection-card-logo-fallback" aria-hidden="true">{initial}</div>;
-}
-
-function Spinner() {
-  return (
-    <span style={{
-      display: 'inline-block',
-      width: '6px',
-      height: '6px',
-      borderRadius: '50%',
-      background: 'var(--text-dim)',
-      animation: 'activity-pulse 1.2s ease-in-out infinite',
-    }} />
-  );
-}
-
-function Dot() {
-  return (
-    <span style={{
-      display: 'inline-block',
-      width: '6px',
-      height: '6px',
-      borderRadius: '50%',
-      background: 'var(--text-dim)',
-    }} />
-  );
 }
 
 function useElapsed(startedAt: number | undefined, endedAt: number | undefined, isStreaming: boolean | undefined): number {

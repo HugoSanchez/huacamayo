@@ -93,7 +93,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
     ...buildModelAuthRoutes(codexAuth),
-    ...buildChatRoutes(store, hermes),
+    ...buildChatRoutes(store, hermes, managedBackend),
   ];
 
   const server = http.createServer((req, res) => {

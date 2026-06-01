@@ -245,7 +245,43 @@ export class ManagedBackendClient {
       body.message ?? `Backend returned HTTP ${response.status}.`,
     );
   }
+
+  /**
+   * Fire-and-forget product analytics. Never throws: the orchestrator's hot
+   * paths (chat, connections) call this; an outage or expired session must
+   * not break user-visible behavior. Errors land in stderr for diagnostics.
+   */
+  recordAnalyticsEvent(event: AnalyticsEventInput): void {
+    if (!this.configured) return;
+    const stored = this.currentSession;
+    if (!stored) return;
+    if (isIsoExpired(stored.expiresAt)) return;
+
+    void fetch(`${this.baseUrl}/v1/analytics/event`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${stored.token}`,
+      },
+      body: JSON.stringify(event),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          console.error(`[managed-backend] analytics event rejected: HTTP ${response.status}`);
+        }
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[managed-backend] analytics event failed: ${message}`);
+      });
+  }
 }
+
+export type AnalyticsEventInput =
+  | { eventType: 'connection_added' }
+  | { eventType: 'session_created'; sessionId: string }
+  | { eventType: 'message_sent'; sessionId: string }
+  | { eventType: 'message_completed'; sessionId: string; toolCallCount: number };
 
 function readSessionFromEnv(): ManagedSessionRecord | null {
   const token = process.env.VERSO_MANAGED_SESSION_TOKEN?.trim() || '';

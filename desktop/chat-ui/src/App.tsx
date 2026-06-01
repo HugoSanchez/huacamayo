@@ -1386,6 +1386,9 @@ function toUiMessage(message: StoredChatMessage): ChatMessage {
     id: message.id,
     role: message.role,
     content: message.content,
+    steps: message.steps,
+    startedAt: message.startedAt,
+    endedAt: message.endedAt,
   };
 }
 

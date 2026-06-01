@@ -6,12 +6,25 @@ import { DatabaseSync } from 'node:sqlite';
 
 export type ChatRole = 'user' | 'assistant';
 
+export type ChatActivityStep =
+  | { type: 'text'; text: string }
+  | {
+      type: 'tool';
+      id?: string;
+      name: string;
+      input?: unknown;
+      result?: string;
+    };
+
 export interface ChatMessageRecord {
   id: string;
   sessionId: string;
   role: ChatRole;
   content: string;
   createdAt: string;
+  steps?: ChatActivityStep[];
+  startedAt?: number;
+  endedAt?: number;
 }
 
 export interface ChatSessionRecord {

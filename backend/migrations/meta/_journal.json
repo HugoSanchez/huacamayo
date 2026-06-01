@@ -8,6 +8,13 @@
       "when": 1778349458240,
       "tag": "0000_aberrant_liz_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780318664967,
+      "tag": "0001_silent_pyro",
+      "breakpoints": true
     }
   ]
 }

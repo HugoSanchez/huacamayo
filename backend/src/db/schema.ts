@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
   id: text('id').primaryKey(),
@@ -38,6 +38,16 @@ export const entitlements = pgTable('entitlements', {
   allowedModels: jsonb('allowed_models').$type<string[] | null>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+});
+
+export const analyticsEvents = pgTable('analytics_events', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  deviceId: text('device_id'),
+  eventType: text('event_type').notNull(),
+  sessionId: text('session_id'),
+  toolCallCount: integer('tool_call_count'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
 });
 
 // Legacy table retained for production data retention. No runtime code writes

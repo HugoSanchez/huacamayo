@@ -277,11 +277,11 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
 
     private func showDownloadToast(cancellation: (() -> Void)? = nil) {
         let cancellationAction = cancellation ?? downloadCancellation
-        let progress: Double?
+        let progress: Double
         if expectedContentLength > 0 {
             progress = min(Double(receivedContentLength) / Double(expectedContentLength), 1)
         } else {
-            progress = nil
+            progress = 0
         }
 
         showToast(
@@ -289,7 +289,7 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
                 title: "Downloading update",
                 message: "Verso is downloading the latest version.",
                 progress: progress,
-                showsActivity: progress == nil,
+                showsActivity: false,
                 primaryTitle: nil,
                 primaryAction: nil,
                 secondaryTitle: cancellationAction == nil ? nil : "Cancel",
@@ -526,15 +526,20 @@ private struct VersoUpdateToastView: View {
     }
 
     private static func cardHeight(for state: VersoUpdateToastState) -> CGFloat {
-        if state.progress != nil {
+        if state.progress != nil || state.showsActivity {
             if hasActions(state) {
                 return state.message.isEmpty ? 138 : 154
             }
-            return state.message.isEmpty ? 110 : 126
-        }
 
-        if state.showsActivity && !hasActions(state) && state.closeAction == nil {
-            return 78
+            if state.showsActivity && state.closeAction == nil {
+                return 78
+            }
+
+            if state.progress == nil {
+                return state.message.isEmpty ? 72 : 90
+            }
+
+            return state.message.isEmpty ? 110 : 126
         }
 
         if hasActions(state) {
