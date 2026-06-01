@@ -58,6 +58,7 @@ export class ConnectionsService {
 
   private readonly bridgeClient: RemoteComposioBridgeClient;
   private readonly onConnectionsChanged: (() => void) | null;
+  private readonly managedBackend: ManagedBackendClient;
 
   constructor(
     managedBackend: ManagedBackendClient,
@@ -67,6 +68,7 @@ export class ConnectionsService {
     this.store = store;
     this.bridgeClient = new RemoteComposioBridgeClient(managedBackend);
     this.onConnectionsChanged = onConnectionsChanged;
+    this.managedBackend = managedBackend;
   }
 
   get configured(): boolean {
@@ -152,8 +154,14 @@ export class ConnectionsService {
 
   async getRequest(requestId: string): Promise<ConnectionRequestView | null> {
     try {
+      const beforeIds = new Set(this.store.listConnections().map((c) => c.connectedAccountId));
       const request = await this.bridgeClient.getRequest(requestId);
       syncRemoteRequestIntoStore(this.store, request);
+      for (const connection of this.store.listConnections()) {
+        if (!beforeIds.has(connection.connectedAccountId)) {
+          this.managedBackend.recordAnalyticsEvent({ eventType: 'connection_added' });
+        }
+      }
       this.notifyConnectionsChanged();
       return request;
     } catch {

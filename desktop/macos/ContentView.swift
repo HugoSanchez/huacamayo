@@ -416,6 +416,7 @@ struct ContentView: View {
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
+            Telemetry.reportError(error, context: "load-sessions")
         }
 
         isLoadingSessions = false
@@ -563,6 +564,7 @@ struct ContentView: View {
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
+            Telemetry.reportError(error, context: "create-session")
         }
     }
 
@@ -592,6 +594,7 @@ struct ContentView: View {
             showSidebarToast("Session archived")
         } catch {
             sessionError = error.localizedDescription
+            Telemetry.reportError(error, context: "archive-session")
         }
     }
 
@@ -621,6 +624,7 @@ struct ContentView: View {
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
+            Telemetry.reportError(error, context: "rename-session")
         }
     }
 
@@ -646,6 +650,7 @@ struct ContentView: View {
             sessionError = nil
         } catch {
             sessionError = error.localizedDescription
+            Telemetry.reportError(error, context: "resume-archived-session")
         }
     }
 

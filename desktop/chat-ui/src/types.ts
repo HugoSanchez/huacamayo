@@ -33,6 +33,9 @@ export interface StoredChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  steps?: ActivityStep[];
+  startedAt?: number;
+  endedAt?: number;
 }
 
 export interface ConnectionRequestView {

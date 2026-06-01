@@ -143,6 +143,7 @@ final class SidecarManager: ObservableObject {
             } catch {
                 state = .failed(error.localizedDescription)
                 logger.error("Sidecar failed: \(error.localizedDescription)")
+                Telemetry.reportError(error, context: "sidecar-launch")
                 scheduleRestart()
             }
         }
@@ -189,6 +190,7 @@ final class SidecarManager: ObservableObject {
             managedAccount = decoded
         } catch {
             logger.error("Managed account refresh failed: \(error.localizedDescription, privacy: .public)")
+            Telemetry.reportError(error, context: "managed-account-refresh")
         }
     }
 
@@ -207,6 +209,7 @@ final class SidecarManager: ObservableObject {
                 request.httpBody = try JSONEncoder().encode(session)
             } catch {
                 logger.error("Failed to encode managed session for push: \(error.localizedDescription, privacy: .public)")
+                Telemetry.reportError(error, context: "managed-session-encode")
                 return
             }
         } else {
@@ -220,6 +223,7 @@ final class SidecarManager: ObservableObject {
             }
         } catch {
             logger.error("Managed session push failed: \(error.localizedDescription, privacy: .public)")
+            Telemetry.reportError(error, context: "managed-session-push")
         }
     }
 

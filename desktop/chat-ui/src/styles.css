@@ -669,6 +669,91 @@ textarea {
   font-weight: 600;
 }
 
+.assistant-activity-wrap {
+  margin-bottom: 8px;
+}
+
+.assistant-message-footer-wrap {
+  margin-top: 7px;
+}
+
+.assistant-message-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--text-dim);
+}
+
+.assistant-activity-details {
+  margin-top: 6px;
+  padding-left: 18px;
+}
+
+.assistant-activity-live {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.assistant-response-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.message-copy-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-thinking);
+  cursor: pointer;
+  opacity: 0.75;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.message-copy-button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  opacity: 1;
+}
+
+.message-copy-button.is-copied {
+  color: #5da66b;
+  opacity: 1;
+  transform: scale(1.04);
+}
+
+.message-copy-button.is-copied svg {
+  animation: message-copy-check 280ms ease;
+}
+
+@keyframes message-copy-check {
+  0% { opacity: 0; transform: scale(0.75); }
+  55% { opacity: 1; transform: scale(1.12); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-color-scheme: light) {
+  .message-copy-button:hover {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-dim);
+  }
+}
+
 .connection-card {
   margin: 10px 0;
   padding: 14px;

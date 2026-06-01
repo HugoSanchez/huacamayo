@@ -9,6 +9,7 @@ import { DrizzleAuthStore } from './db/auth-store.ts';
 import { registerHealthRoutes } from './routes/health.ts';
 import { registerAuthRoutes } from './routes/auth.ts';
 import { registerComposioRoutes } from './routes/composio.ts';
+import { registerAnalyticsRoutes } from './routes/analytics.ts';
 import { ComposioService } from './composio/service.ts';
 
 export interface BuildServerOptions {
@@ -41,6 +42,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await registerAuthRoutes(app, authService);
   const composioService = options.composioService ?? new ComposioService();
   await registerComposioRoutes(app, { authService, composioService });
+  await registerAnalyticsRoutes(app, { authService, config });
   return app;
 }
 

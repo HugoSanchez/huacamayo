@@ -8,12 +8,14 @@ import {
   type ChatSessionSummary,
 } from './chat-store.ts';
 import { HermesSupervisor, type HermesGatewayConfig } from './hermes-supervisor.ts';
+import { readHermesChatMessages } from './hermes-history.ts';
 import {
   buildSkillInvocationPrompt,
   extractSlashSkillRequest,
   findSkillBySlug,
 } from './skills.ts';
 import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts';
+import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 
 type ChatStatus = 'idle' | 'running';
 
@@ -48,6 +50,7 @@ const activeRequests = new Map<string, ActiveChatRequest>();
 export function buildChatRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
+  managedBackend: ManagedBackendClient,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
@@ -79,6 +82,7 @@ export function buildChatRoutes(
         ? ((body as { title?: string }).title ?? undefined)
         : undefined;
       const session = store.createSession(title);
+      managedBackend.recordAnalyticsEvent({ eventType: 'session_created', sessionId: session.id });
       json(res, 201, { session });
     }),
 
@@ -96,7 +100,7 @@ export function buildChatRoutes(
       if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
-      const messages = hydrateSessionMessages(record, store);
+      const messages = hydrateSessionMessages(record, store, hermes);
       json(res, 200, { messages });
     }),
 
@@ -161,6 +165,7 @@ export function buildChatRoutes(
       const isFirstUserMessage = priorMessageCount === 0;
 
       store.appendMessage(params.id, 'user', content);
+      managedBackend.recordAnalyticsEvent({ eventType: 'message_sent', sessionId: params.id });
 
       const attached = parseAttached(body);
       let promptForHermes = content;
@@ -195,7 +200,7 @@ export function buildChatRoutes(
           isFirstUserMessage,
           res,
           requestBaseUrl: requestBaseUrl(req),
-        }, store, hermes);
+        }, store, hermes, managedBackend);
       } catch (error: unknown) {
         if (isAbortError(error)) {
           sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
@@ -317,8 +322,40 @@ function hydrateSessionSummary(record: ChatSessionRecord, store: ChatStore): Cha
   return hydrateSessionSummaryRecord(record, store);
 }
 
-function hydrateSessionMessages(record: ChatSessionRecord, store: ChatStore): ChatMessageRecord[] {
-  return store.getMessages(record.id) ?? [];
+function hydrateSessionMessages(
+  record: ChatSessionRecord,
+  store: ChatStore,
+  hermes: HermesSupervisor,
+): ChatMessageRecord[] {
+  const localMessages = store.getMessages(record.id) ?? [];
+  const hermesMessages = readHermesChatMessages({
+    hermesHome: hermes.hermesHome,
+    hermesSessionId: record.hermesSessionId,
+    versoSessionId: record.id,
+    localMessages,
+  });
+  return hermesMessages ?? addLocalResponseTimings(localMessages);
+}
+
+function addLocalResponseTimings(messages: ChatMessageRecord[]): ChatMessageRecord[] {
+  let lastUserStartedAt: number | undefined;
+
+  return messages.map((message) => {
+    if (message.role === 'user') {
+      lastUserStartedAt = Date.parse(message.createdAt);
+      if (!Number.isFinite(lastUserStartedAt)) {
+        lastUserStartedAt = undefined;
+      }
+      return message;
+    }
+
+    const endedAt = Date.parse(message.createdAt);
+    return {
+      ...message,
+      startedAt: message.startedAt ?? lastUserStartedAt,
+      endedAt: message.endedAt ?? (Number.isFinite(endedAt) ? endedAt : undefined),
+    };
+  });
 }
 
 function hydrateSessionSummaryRecord(
@@ -357,7 +394,9 @@ async function runHermesMessage(
   },
   store: ChatStore,
   hermes: HermesSupervisor,
+  managedBackend: ManagedBackendClient,
 ): Promise<void> {
+  let toolCallCount = 0;
   const controller = new AbortController();
   const runtime = await hermes.getStatus(500);
 
@@ -419,6 +458,7 @@ async function runHermesMessage(
       if (!item) return;
 
       if (item.type === 'function_call') {
+        toolCallCount += 1;
         const toolName = typeof item.name === 'string' ? item.name : 'tool';
         sendSSE(opts.res, {
           type: 'assistant',
@@ -515,6 +555,12 @@ async function runHermesMessage(
   }
 
   store.touchSession(opts.session.id);
+
+  managedBackend.recordAnalyticsEvent({
+    eventType: 'message_completed',
+    sessionId: opts.session.id,
+    toolCallCount,
+  });
 
   if (opts.isFirstUserMessage && assistantText) {
     const currentTitle = store.getSessionRecord(opts.session.id)?.title ?? '';
