@@ -2,6 +2,32 @@ import SwiftUI
 import WebKit
 import AppKit
 
+private final class FocusableWKWebView: WKWebView {
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let window = self.window,
+                  window.isVisible,
+                  NSApp.isActive || window.isKeyWindow else { return }
+            window.makeFirstResponder(self)
+        }
+    }
+}
+
 // MARK: - Shell protocol
 //
 // Single wire format between the Swift shell and the chat-ui WebView. Today
@@ -176,7 +202,7 @@ struct ChatWebView: NSViewRepresentable {
             forMainFrameOnly: true
         ))
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = FocusableWKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         if #available(macOS 13.3, *) {
             webView.isInspectable = true
@@ -403,6 +429,7 @@ struct ChatWebView: NSViewRepresentable {
             if let state = pendingShellState {
                 injectShellState(state)
             }
+            recoverKeyboardFocus()
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
