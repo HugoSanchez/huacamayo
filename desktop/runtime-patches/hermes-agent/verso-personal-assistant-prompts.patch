@@ -1,6 +1,6 @@
 --- a/agent/prompt_builder.py
 +++ b/agent/prompt_builder.py
-@@ -253,16 +253,21 @@ KANBAN_GUIDANCE = (
+@@ -246,16 +246,21 @@
  TOOL_USE_ENFORCEMENT_GUIDANCE = (
      "# Tool-use enforcement\n"
 -    "You MUST use your tools to take action — do not describe what you would do "
@@ -33,7 +33,7 @@
  )
  
  # Model name substrings that trigger tool-use enforcement guidance.
-@@ -277,12 +283,14 @@ TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex", "gemini", "gemma", "grok", "glm"
+@@ -273,12 +278,14 @@
  OPENAI_MODEL_EXECUTION_GUIDANCE = (
      "# Execution discipline\n"
      "<tool_persistence>\n"
@@ -54,7 +54,7 @@
      "</tool_persistence>\n"
      "\n"
      "<mandatory_tool_use>\n"
-@@ -291,8 +300,10 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
+@@ -286,8 +293,10 @@
      "- Arithmetic, math, calculations → use terminal or execute_code\n"
      "- Hashes, encodings, checksums → use terminal (e.g. sha256sum, base64)\n"
      "- Current time, date, timezone → use terminal (e.g. date)\n"
@@ -67,7 +67,7 @@
      "- Git history, branches, diffs → use terminal\n"
      "- Current facts (weather, news, versions) → use web_search\n"
      "Your memory and user profile describe the USER, not the system you are "
-@@ -308,7 +319,7 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
+@@ -302,7 +311,7 @@
      "- 'What OS am I running?' → check the live system (don't use user profile)\n"
      "- 'What time is it?' → run `date` (don't guess)\n"
      "Only ask for clarification when the ambiguity genuinely changes what tool "
@@ -76,7 +76,7 @@
      "</act_dont_ask>\n"
      "\n"
      "<prerequisite_checks>\n"
-@@ -316,15 +327,18 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
+@@ -310,24 +319,41 @@
      "context-gathering steps are needed.\n"
      "- Do not skip prerequisite steps just because the final action seems obvious.\n"
      "- If a task depends on output from a prior step, resolve that dependency first.\n"
@@ -96,7 +96,7 @@
      "</verification>\n"
      "\n"
      "<missing_context>\n"
-@@ -332,8 +346,22 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
+     "- If required context is missing, do NOT guess or hallucinate an answer.\n"
      "- Use the appropriate lookup tool when missing information is retrievable "
      "(search_files, web_search, read_file, etc.).\n"
 -    "- Ask a clarifying question only when the information cannot be retrieved by tools.\n"
@@ -121,7 +121,33 @@
  )
  
  # Gemini/Gemma-specific operational guidance, adapted from OpenCode's gemini.txt.
-@@ -1201,31 +1227,26 @@ def build_skills_system_prompt(
+@@ -594,9 +620,20 @@
+     ),
+     "api_server": (
+-        "You're responding through an API server. The rendering layer is unknown — "
+-        "assume plain text. No markdown formatting (no asterisks, bullets, headers, "
+-        "code fences). Treat this like a conversation, not a document. Keep responses "
+-        "brief and natural."
++        "You are responding in Verso, a desktop chat app whose final assistant "
++        "answers render GitHub-flavored Markdown.\n\n"
++        "Treat this as the default Verso answer style, not a hard rule: if the "
++        "current user request or durable user preferences call for a different "
++        "format, follow those instead.\n\n"
++        "For final chat answers, use Markdown when it improves readability. "
++        "Prefer a prose-first style: short paragraphs with clear narrative flow.\n\n"
++        "When structure helps, use numbered sections with a bold lead phrase "
++        "followed by explanation in the same paragraph.\n\n"
++        "Avoid deeply nested bullets and long bullet lists unless the user asks "
++        "for a checklist, inventory, exhaustive summary, or comparison. Use "
++        "bullets sparingly for genuinely scannable sets of facts.\n\n"
++        "For streamed thinking/reasoning shown in Verso activity, avoid Markdown "
++        "headings or title lines. Use compact plain sentences or short bullets.\n\n"
++        "Do not overdo any of this, use common sense."
+     ),
+     "webui": (
+         "You are in the Hermes WebUI, a browser-based chat interface. "
+@@ -1176,32 +1202,27 @@
+                     index_lines.append(f"    - {name}")
  
          result = (
 -            "## Skills (mandatory)\n"

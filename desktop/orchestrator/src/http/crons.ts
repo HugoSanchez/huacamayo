@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { json, route, type Route } from './router.ts';
-import { HermesSupervisor } from './hermes-supervisor.ts';
+import { HermesSupervisor, hermesGatewayAuthHeaders } from './hermes-supervisor.ts';
 import {
   HermesCronsClient,
   HermesCronsError,
@@ -195,7 +195,7 @@ function actionRoute(hermes: HermesSupervisor, op: 'pause' | 'resume' | 'run') {
 
 async function getClient(hermes: HermesSupervisor): Promise<HermesCronsClient> {
   const config = await hermes.ensureReady();
-  return new HermesCronsClient(config.baseUrl);
+  return new HermesCronsClient(config.baseUrl, config.apiKey ?? undefined);
 }
 
 function isValidJobId(id: string): boolean {
@@ -381,7 +381,7 @@ async function generateDescriptionViaHermes(
   try {
     const res = await fetch(`${config.baseUrl}/v1/responses`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...hermesGatewayAuthHeaders(config) },
       body: JSON.stringify({
         input: DESCRIPTION_PROMPT(job.name, job.prompt),
         truncation: 'auto',

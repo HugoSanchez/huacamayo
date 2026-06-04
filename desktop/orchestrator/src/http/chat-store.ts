@@ -5,9 +5,11 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export type ChatRole = 'user' | 'assistant';
+export type DraftResolutionStatus = 'sent' | 'discarded';
 
 export type ChatActivityStep =
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
   | {
       type: 'tool';
       id?: string;
@@ -22,6 +24,7 @@ export interface ChatMessageRecord {
   role: ChatRole;
   content: string;
   createdAt: string;
+  reasoning?: string | null;
   steps?: ChatActivityStep[];
   startedAt?: number;
   endedAt?: number;
@@ -44,6 +47,14 @@ export interface ChatSessionSummary {
   archivedAt: string | null;
   messageCount: number;
   lastMessagePreview: string | null;
+}
+
+export interface DraftResolutionRecord {
+  sessionId: string;
+  draftId: string;
+  status: DraftResolutionStatus;
+  channel: string;
+  updatedAt: string;
 }
 
 function defaultStorePath(): string {
@@ -83,6 +94,15 @@ export class ChatStore {
         ON chat_sessions(updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_local_messages_session_id
         ON local_messages(session_id, created_at ASC);
+
+      CREATE TABLE IF NOT EXISTS draft_resolutions (
+        session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+        draft_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('sent', 'discarded')),
+        channel TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, draft_id)
+      );
     `);
   }
 
@@ -223,6 +243,49 @@ export class ChatStore {
     `).run(updatedAt, sessionId);
   }
 
+  recordDraftResolution(
+    sessionId: string,
+    draftId: string,
+    status: DraftResolutionStatus,
+    channel: string,
+  ): DraftResolutionRecord | null {
+    const session = this.getSessionRecord(sessionId);
+    if (!session) return null;
+
+    const resolvedDraftId = normalizeDraftId(draftId);
+    const resolvedChannel = normalizeChannel(channel);
+    if (!resolvedDraftId || !resolvedChannel) return null;
+
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO draft_resolutions (session_id, draft_id, status, channel, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, draft_id) DO UPDATE SET
+        status = excluded.status,
+        channel = excluded.channel,
+        updated_at = excluded.updated_at
+    `).run(sessionId, resolvedDraftId, status, resolvedChannel, now);
+    this.touchSession(sessionId, now);
+
+    return {
+      sessionId,
+      draftId: resolvedDraftId,
+      status,
+      channel: resolvedChannel,
+      updatedAt: now,
+    };
+  }
+
+  listDraftResolutions(sessionId: string): DraftResolutionRecord[] {
+    const rows = this.db.prepare(`
+      SELECT session_id, draft_id, status, channel, updated_at
+      FROM draft_resolutions
+      WHERE session_id = ?
+    `).all(sessionId) as unknown as DraftResolutionRow[];
+
+    return rows.map(rowToDraftResolutionRecord);
+  }
+
   renameSession(sessionId: string, title: string): ChatSessionRecord | null {
     const session = this.getSessionRecord(sessionId);
     if (!session) return null;
@@ -293,6 +356,14 @@ interface MessageRow {
   created_at: string;
 }
 
+interface DraftResolutionRow {
+  session_id: string;
+  draft_id: string;
+  status: DraftResolutionStatus;
+  channel: string;
+  updated_at: string;
+}
+
 function rowToSessionRecord(row: SessionRow): ChatSessionRecord {
   return {
     id: row.id,
@@ -304,9 +375,27 @@ function rowToSessionRecord(row: SessionRow): ChatSessionRecord {
   };
 }
 
+function rowToDraftResolutionRecord(row: DraftResolutionRow): DraftResolutionRecord {
+  return {
+    sessionId: row.session_id,
+    draftId: row.draft_id,
+    status: row.status,
+    channel: row.channel,
+    updatedAt: row.updated_at,
+  };
+}
+
 function normalizeTitle(input: string | undefined): string {
   if (!input) return '';
   const compact = input.replace(/\s+/g, ' ').trim();
   if (!compact) return '';
   return compact.length > 80 ? `${compact.slice(0, 80)}...` : compact;
+}
+
+function normalizeDraftId(input: string): string {
+  return input.trim().slice(0, 128);
+}
+
+function normalizeChannel(input: string): string {
+  return input.trim().toLowerCase().slice(0, 64);
 }

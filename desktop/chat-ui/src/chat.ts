@@ -467,6 +467,11 @@ export function codexConnectUrl(): string {
 // agent can dispatch the matching Composio send tool.
 export type DraftChannel = string;
 
+// Channels Verso dispatches itself (must match NATIVE_DRAFT_CHANNELS in the
+// orchestrator). For these the widget Send button hits /drafts/send directly
+// and the model is never re-engaged.
+export const NATIVE_DRAFT_CHANNELS = new Set(['gmail', 'slack']);
+
 export interface DraftApproveInput {
   channel: string;
   to: string;
@@ -475,6 +480,38 @@ export interface DraftApproveInput {
   body: string;
   threadId?: string;
   wasEdited: boolean;
+}
+
+// Native-channel send: dispatches directly, no held draft. The model already
+// ended its turn after proposing, so this is a pure UI → orchestrator action.
+export async function sendDraft(
+  draftId: string,
+  sessionId: string,
+  payload: DraftApproveInput,
+): Promise<void> {
+  const res = await fetch(`${baseURL()}/drafts/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, draftId, sessionId }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, `Failed to send draft (HTTP ${res.status})`));
+  }
+}
+
+export async function discardDraft(
+  draftId: string,
+  sessionId: string,
+  channel: string,
+): Promise<void> {
+  const res = await fetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/discard`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, channel }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, `Failed to discard draft (HTTP ${res.status})`));
+  }
 }
 
 export async function approveDraft(draftId: string, payload: DraftApproveInput): Promise<void> {

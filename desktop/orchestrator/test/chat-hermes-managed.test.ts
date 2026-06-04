@@ -8,6 +8,8 @@ describe('Managed Hermes Startup', () => {
   let port = 0;
   let gatewayPort = 0;
   let envSnapshot: {
+    API_SERVER_KEY?: string;
+    VERSO_HERMES_API_SERVER_KEY?: string;
     VERSO_HERMES_GATEWAY_URL?: string;
     VERSO_CHAT_STORE_PATH?: string;
     VERSO_HERMES_COMMAND?: string;
@@ -18,6 +20,8 @@ describe('Managed Hermes Startup', () => {
 
   beforeAll(async () => {
     envSnapshot = {
+      API_SERVER_KEY: process.env.API_SERVER_KEY,
+      VERSO_HERMES_API_SERVER_KEY: process.env.VERSO_HERMES_API_SERVER_KEY,
       VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
       VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
       VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
@@ -27,6 +31,8 @@ describe('Managed Hermes Startup', () => {
     };
 
     gatewayPort = await allocatePort();
+    delete process.env.API_SERVER_KEY;
+    delete process.env.VERSO_HERMES_API_SERVER_KEY;
     process.env.VERSO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
     process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-managed-${process.pid}.sqlite`;
     process.env.VERSO_HERMES_COMMAND = process.execPath;
@@ -49,12 +55,10 @@ describe('Managed Hermes Startup', () => {
       server = null;
     }
 
-    process.env.VERSO_HERMES_GATEWAY_URL = envSnapshot.VERSO_HERMES_GATEWAY_URL;
-    process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
-    process.env.VERSO_HERMES_COMMAND = envSnapshot.VERSO_HERMES_COMMAND;
-    process.env.VERSO_HERMES_ARGS = envSnapshot.VERSO_HERMES_ARGS;
-    process.env.VERSO_HERMES_CWD = envSnapshot.VERSO_HERMES_CWD;
-    process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
+    for (const [key, value] of Object.entries(envSnapshot)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   function url(pathname: string): string {

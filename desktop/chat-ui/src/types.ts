@@ -1,7 +1,9 @@
 export interface ChatMessage {
   id: string;
+  sessionId?: string;
   role: 'user' | 'assistant';
   content: string;
+  reasoning?: string | null;
   steps?: ActivityStep[];
   isStreaming?: boolean;
   startedAt?: number;
@@ -33,6 +35,7 @@ export interface StoredChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
+  reasoning?: string | null;
   steps?: ActivityStep[];
   startedAt?: number;
   endedAt?: number;
@@ -186,6 +189,7 @@ export type AttachedContext =
 
 export type ActivityStep =
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
   | {
       type: 'tool';
       id?: string;
@@ -201,6 +205,8 @@ export interface ChatSSEEvent {
     role?: string;
     content?: Array<{ type: string; text?: string; name?: string; input?: unknown }>;
   };
+  delta?: { text?: string } | string;
+  reasoning?: string | null;
   reason?: string;
   session_id?: string;
   role?: string;

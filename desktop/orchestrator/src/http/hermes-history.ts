@@ -15,6 +15,8 @@ interface HermesMessageRow {
   tool_calls: string | null;
   tool_name: string | null;
   timestamp: number;
+  reasoning?: string | null;
+  reasoning_content?: string | null;
 }
 
 interface ReadHermesMessagesOptions {
@@ -45,8 +47,14 @@ export function readHermesChatMessages(
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
+    const columns = tableColumns(db, 'messages');
+    const reasoningColumn = columns.has('reasoning') ? 'reasoning' : 'NULL AS reasoning';
+    const reasoningContentColumn = columns.has('reasoning_content')
+      ? 'reasoning_content'
+      : 'NULL AS reasoning_content';
     const rows = db.prepare(`
-      SELECT id, session_id, role, content, tool_call_id, tool_calls, tool_name, timestamp
+      SELECT id, session_id, role, content, tool_call_id, tool_calls, tool_name, timestamp,
+             ${reasoningColumn}, ${reasoningContentColumn}
       FROM messages
       WHERE session_id = ?
       ORDER BY timestamp ASC, id ASC
@@ -72,10 +80,15 @@ export function mapHermesRowsToChatMessages(
   options: MapHermesRowsOptions,
 ): ChatMessageRecord[] {
   const hermesMessages = buildHermesTranscript(rows, options)
-    .filter((message) => message.content.trim().length > 0 || (message.steps?.length ?? 0) > 0)
+    .filter((message) => (
+      message.content.trim().length > 0
+      || (message.steps?.length ?? 0) > 0
+      || (message.reasoning?.trim().length ?? 0) > 0
+    ))
     .map((message) => ({
       ...message,
       steps: message.steps && message.steps.length > 0 ? message.steps : undefined,
+      reasoning: normalizedText(message.reasoning) ?? undefined,
     }));
 
   if (options.localMessages && options.localMessages.length > 0) {
@@ -133,14 +146,21 @@ function buildHermesTranscript(
     if (row.role === 'assistant') {
       const toolCalls = parseToolCalls(row.tool_calls);
       const content = row.content ?? '';
+      const reasoning = readableReasoning(row);
 
-      if (toolCalls.length === 0 && content.trim().length === 0) continue;
+      if (toolCalls.length === 0 && content.trim().length === 0 && !reasoning) continue;
 
       const startsNewImplicitTurn = toolCalls.length > 0
         && hasAssistantContent(currentAssistant);
       const assistant = ensureAssistant(row, startsNewImplicitTurn);
       assistant.endedAt = timestamp;
       assistant.createdAt = timestampToIso(row.timestamp);
+      assistant.reasoning = appendReasoning(assistant.reasoning, reasoning);
+      if (reasoning) {
+        assistant.steps = appendReasoningStep(assistant.steps ?? [], reasoning);
+      }
+
+      if (toolCalls.length === 0 && content.trim().length === 0) continue;
 
       if (toolCalls.length > 0) {
         if (content.trim().length > 0) {
@@ -201,6 +221,17 @@ function toolCallToStep(toolCall: unknown): ChatActivityStep {
     name,
     ...(input === undefined ? {} : { input }),
   };
+}
+
+function appendReasoningStep(steps: ChatActivityStep[], reasoning: string): ChatActivityStep[] {
+  const last = steps.at(-1);
+  if (last?.type === 'reasoning') {
+    return [
+      ...steps.slice(0, -1),
+      { ...last, text: `${last.text}\n\n${reasoning}` },
+    ];
+  }
+  return [...steps, { type: 'reasoning', text: reasoning }];
 }
 
 function attachToolResult(
@@ -264,6 +295,7 @@ function mergeWithLocalMessageSkeleton(
     merged.push({
       ...localMessage,
       content: localMessage.content || hermesMessage?.content || '',
+      reasoning: hermesMessage?.reasoning ?? localMessage.reasoning,
       steps: hermesMessage?.steps,
       startedAt,
       endedAt,
@@ -275,6 +307,28 @@ function mergeWithLocalMessageSkeleton(
   }
 
   return merged;
+}
+
+function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
+  return new Set(rows.map((row) => typeof row.name === 'string' ? row.name : '').filter(Boolean));
+}
+
+function readableReasoning(row: HermesMessageRow): string | null {
+  return normalizedText(row.reasoning) ?? normalizedText(row.reasoning_content);
+}
+
+function normalizedText(value: string | null | undefined): string | null {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function appendReasoning(existing: string | null | undefined, next: string | null): string | undefined {
+  const current = normalizedText(existing);
+  if (!next) return current ?? undefined;
+  if (!current) return next;
+  if (current === next || current.includes(next)) return current;
+  return `${current}\n\n${next}`;
 }
 
 function parseJsonMaybe(value: unknown): unknown {

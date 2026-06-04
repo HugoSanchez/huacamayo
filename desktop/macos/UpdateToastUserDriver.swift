@@ -1,18 +1,16 @@
 import AppKit
+import Combine
 import Sparkle
 import SwiftUI
 
 @MainActor
-final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
-    private var panel: VersoUpdatePanel?
-    private var hostingController: NSHostingController<VersoUpdateToastView>?
+final class VersoUpdateUserDriver: NSObject, SPUUserDriver, ObservableObject {
+    @Published fileprivate var activeToast: VersoUpdateToastState?
+
     private var dismissTimer: Timer?
-    private var panelHeight = VersoUpdateToastView.height(for: .empty)
     private var expectedContentLength: UInt64 = 0
     private var receivedContentLength: UInt64 = 0
     private var downloadCancellation: (() -> Void)?
-    private weak var attachedParentWindow: NSWindow?
-    private var parentWindowObservationTokens: [NSObjectProtocol] = []
 
     func show(_ request: SPUUpdatePermissionRequest, reply: @escaping (SUUpdatePermissionResponse) -> Void) {
         reply(SUUpdatePermissionResponse(automaticUpdateChecks: true, automaticUpdateDownloading: NSNumber(value: false), sendSystemProfile: false))
@@ -109,10 +107,9 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
                 secondaryAction: { [weak self] in
                     if let infoURL = appcastItem.infoURL {
                         NSWorkspace.shared.open(infoURL)
-                    } else {
-                        replyOnce(.dismiss)
-                        self?.dismissToast()
                     }
+                    replyOnce(.dismiss)
+                    self?.dismissToast()
                 },
                 closeAction: { [weak self] in
                     replyOnce(.dismiss)
@@ -270,9 +267,7 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
     }
 
     func showUpdateInFocus() {
-        guard let panel else { return }
-        position(panel)
-        panel.orderFrontRegardless()
+        NotificationCenter.default.post(name: .versoRestoreKeyboardFocus, object: self)
     }
 
     private func showDownloadToast(cancellation: (() -> Void)? = nil) {
@@ -321,40 +316,8 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
 
     private func showToast(_ state: VersoUpdateToastState, autoDismissAfter delay: TimeInterval? = nil, onAutoDismiss: (() -> Void)? = nil) {
         dismissTimer?.invalidate()
-
-        let view = VersoUpdateToastView(state: state)
-        if panel == nil || hostingController == nil {
-            let hostingController = NSHostingController(rootView: view)
-            panelHeight = VersoUpdateToastView.height(for: state)
-            let panel = VersoUpdatePanel(
-                contentRect: NSRect(x: 0, y: 0, width: VersoUpdateToastView.width, height: panelHeight),
-                styleMask: [.borderless, .fullSizeContentView],
-                backing: .buffered,
-                defer: false
-            )
-            panel.contentViewController = hostingController
-            panel.isReleasedWhenClosed = false
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = false
-            panel.hidesOnDeactivate = false
-            panel.level = .normal
-            panel.collectionBehavior = [.transient, .fullScreenAuxiliary]
-            self.panel = panel
-            self.hostingController = hostingController
-        } else {
-            panelHeight = VersoUpdateToastView.height(for: state)
-            hostingController?.rootView = view
-        }
-
-        if let panel {
-            position(panel)
-            if attachedParentWindow == nil {
-                panel.orderFrontRegardless()
-            } else {
-                panel.orderFront(nil)
-            }
-        }
+        dismissTimer = nil
+        activeToast = state
 
         if let delay {
             dismissTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -369,113 +332,10 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
     private func dismissToast() {
         dismissTimer?.invalidate()
         dismissTimer = nil
-        detachFromParentWindow()
-        panel?.orderOut(nil)
-    }
-
-    private func position(_ panel: NSPanel) {
-        guard let parentWindow = mainAppWindow() else {
-            detachFromParentWindow()
-            positionOnScreen(panel)
-            return
+        activeToast = nil
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .versoRestoreKeyboardFocus, object: self)
         }
-
-        attach(panel, to: parentWindow)
-
-        let contentFrame = contentScreenFrame(for: parentWindow)
-        let margin: CGFloat = 20
-        let x: CGFloat
-        let y: CGFloat
-
-        if contentFrame.width >= VersoUpdateToastView.width + (margin * 2) {
-            x = contentFrame.maxX - VersoUpdateToastView.width - margin
-        } else {
-            x = contentFrame.midX - (VersoUpdateToastView.width / 2)
-        }
-
-        if contentFrame.height >= panelHeight + (margin * 2) {
-            y = contentFrame.minY + margin
-        } else {
-            y = contentFrame.midY - (panelHeight / 2)
-        }
-
-        panel.setFrame(NSRect(x: x, y: y, width: VersoUpdateToastView.width, height: panelHeight), display: true)
-    }
-
-    private func positionOnScreen(_ panel: NSPanel) {
-        let screen = NSApp.keyWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first
-        guard let visibleFrame = screen?.visibleFrame else { return }
-        let margin: CGFloat = 24
-        let x = visibleFrame.maxX - VersoUpdateToastView.width - margin
-        let y = visibleFrame.minY + margin
-        panel.setFrame(NSRect(x: x, y: y, width: VersoUpdateToastView.width, height: panelHeight), display: true)
-    }
-
-    private func attach(_ panel: NSPanel, to parentWindow: NSWindow) {
-        guard attachedParentWindow !== parentWindow else { return }
-
-        detachFromParentWindow()
-        parentWindow.addChildWindow(panel, ordered: .above)
-        attachedParentWindow = parentWindow
-        observeParentWindow(parentWindow)
-    }
-
-    private func detachFromParentWindow() {
-        if let panel, let attachedParentWindow {
-            attachedParentWindow.removeChildWindow(panel)
-        }
-        attachedParentWindow = nil
-        stopObservingParentWindow()
-    }
-
-    private func observeParentWindow(_ window: NSWindow) {
-        stopObservingParentWindow()
-
-        let center = NotificationCenter.default
-        let names: [NSNotification.Name] = [
-            NSWindow.didMoveNotification,
-            NSWindow.didResizeNotification,
-            NSWindow.didEnterFullScreenNotification,
-            NSWindow.didExitFullScreenNotification
-        ]
-
-        parentWindowObservationTokens = names.map { name in
-            center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self, let panel = self.panel, panel.isVisible else { return }
-                    self.position(panel)
-                }
-            }
-        }
-    }
-
-    private func stopObservingParentWindow() {
-        for token in parentWindowObservationTokens {
-            NotificationCenter.default.removeObserver(token)
-        }
-        parentWindowObservationTokens = []
-    }
-
-    private func mainAppWindow() -> NSWindow? {
-        if let window = AppDelegate.shared?.registeredMainWindow,
-           window.isVisible,
-           !window.isMiniaturized {
-            return window
-        }
-
-        return NSApp.windows.first { window in
-            if let panel, window === panel { return false }
-            return window.isVisible && !window.isMiniaturized && !(window is NSPanel)
-        }
-    }
-
-    private func contentScreenFrame(for window: NSWindow) -> NSRect {
-        guard let contentView = window.contentView else {
-            return window.frame
-        }
-
-        let contentRectInWindow = contentView.convert(contentView.bounds, to: nil)
-        return window.convertToScreen(contentRectInWindow)
     }
 
     private func makeSingleReply(_ reply: @escaping (SPUUserUpdateChoice) -> Void) -> (SPUUserUpdateChoice) -> Void {
@@ -488,24 +348,19 @@ final class VersoUpdateUserDriver: NSObject, SPUUserDriver {
     }
 }
 
-private final class VersoUpdatePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+struct VersoUpdateToastOverlay: View {
+    @ObservedObject var driver: VersoUpdateUserDriver
+
+    var body: some View {
+        if let state = driver.activeToast {
+            VersoUpdateToastView(state: state)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .zIndex(1)
+        }
+    }
 }
 
 private struct VersoUpdateToastState {
-    static let empty = VersoUpdateToastState(
-        title: "",
-        message: "",
-        progress: nil,
-        showsActivity: false,
-        primaryTitle: nil,
-        primaryAction: nil,
-        secondaryTitle: nil,
-        secondaryAction: nil,
-        closeAction: nil
-    )
-
     let title: String
     let message: String
     let progress: Double?
@@ -567,6 +422,9 @@ private struct VersoUpdateToastView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(borderColor, lineWidth: 1)
             )
+            .overlay(alignment: .topTrailing) {
+                closeButton
+            }
             .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.10), radius: 12, y: 5)
         .frame(width: Self.width, height: Self.height(for: state), alignment: .topLeading)
     }
@@ -617,6 +475,24 @@ private struct VersoUpdateToastView: View {
     }
 
     @ViewBuilder
+    private var closeButton: some View {
+        if let closeAction = state.closeAction {
+            Button(action: closeAction) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.42))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss update notification")
+            .padding(.top, 8)
+            .padding(.trailing, 8)
+        }
+    }
+
+    @ViewBuilder
     private var cardView: some View {
         Group {
             if isCenteredActivity {
@@ -646,6 +522,7 @@ private struct VersoUpdateToastView: View {
                         .lineLimit(2)
                 }
             }
+            .padding(.trailing, state.closeAction == nil ? 0 : 26)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             statusView

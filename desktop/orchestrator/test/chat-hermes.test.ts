@@ -104,7 +104,7 @@ describe('Hermes Chat Streaming', () => {
             Connection: 'keep-alive',
             'X-Hermes-Session-Id': sessionId,
           });
-          writeResponseStream(res, responseId, outputText);
+          writeResponseStream(res, responseId, outputText, 'Thinking through inflation drivers.');
         });
         return;
       }
@@ -215,6 +215,8 @@ describe('Hermes Chat Streaming', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/event-stream');
     const body = await res.text();
+    expect(body).toContain('"type":"reasoning_delta"');
+    expect(body).toContain('Thinking through inflation drivers.');
     expect(body).toContain('content_block_delta');
     expect(body).toContain('Hermes Result: Give me an inflation summary');
     expect(body).toContain('"type":"done"');
@@ -227,6 +229,7 @@ describe('Hermes Chat Streaming', () => {
     expect(messages.body.messages[1].role).toBe('assistant');
     expect(requestLog).toHaveLength(1);
     expect(requestLog[0].conversation).toBe(sessionId);
+    expect(requestLog[0].instructions).toBeUndefined();
     expect(requestLog[0].conversation_history).toBeUndefined();
   });
 
@@ -268,7 +271,9 @@ describe('Hermes Chat Streaming', () => {
 
     expect(requestLog).toHaveLength(3);
     expect(requestLog[1].conversation).toBe(sessionId);
+    expect(requestLog[1].instructions).toBeUndefined();
     expect(requestLog[1].conversation_history).toBeUndefined();
+    expect(requestLog[2].instructions).toBeUndefined();
     expect(Array.isArray(requestLog[2].conversation_history)).toBe(true);
 
     const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
@@ -277,7 +282,12 @@ describe('Hermes Chat Streaming', () => {
   });
 });
 
-function writeResponseStream(res: http.ServerResponse, responseId: string, outputText: string): void {
+function writeResponseStream(
+  res: http.ServerResponse,
+  responseId: string,
+  outputText: string,
+  reasoningText?: string,
+): void {
   const messageId = `msg-${responseId}`;
   writeEvent(res, 'response.created', {
     type: 'response.created',
@@ -303,6 +313,14 @@ function writeResponseStream(res: http.ServerResponse, responseId: string, outpu
     },
     sequence_number: 1,
   });
+  if (reasoningText) {
+    writeEvent(res, 'hermes.reasoning.delta', {
+      type: 'hermes.reasoning.delta',
+      item_id: messageId,
+      delta: reasoningText,
+      sequence_number: 2,
+    });
+  }
   writeEvent(res, 'response.output_text.delta', {
     type: 'response.output_text.delta',
     item_id: messageId,
@@ -310,7 +328,7 @@ function writeResponseStream(res: http.ServerResponse, responseId: string, outpu
     content_index: 0,
     delta: outputText,
     logprobs: [],
-    sequence_number: 2,
+    sequence_number: 3,
   });
   writeEvent(res, 'response.output_text.done', {
     type: 'response.output_text.done',
@@ -319,7 +337,7 @@ function writeResponseStream(res: http.ServerResponse, responseId: string, outpu
     content_index: 0,
     text: outputText,
     logprobs: [],
-    sequence_number: 3,
+    sequence_number: 4,
   });
   writeEvent(res, 'response.output_item.done', {
     type: 'response.output_item.done',
@@ -331,12 +349,12 @@ function writeResponseStream(res: http.ServerResponse, responseId: string, outpu
       role: 'assistant',
       content: [{ type: 'output_text', text: outputText }],
     },
-    sequence_number: 4,
+    sequence_number: 5,
   });
   writeEvent(res, 'response.completed', {
     type: 'response.completed',
     response: buildCompletedResponse(responseId, outputText),
-    sequence_number: 5,
+    sequence_number: 6,
   });
   res.end();
 }

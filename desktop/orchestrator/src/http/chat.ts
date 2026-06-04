@@ -7,7 +7,8 @@ import {
   type ChatSessionRecord,
   type ChatSessionSummary,
 } from './chat-store.ts';
-import { HermesSupervisor, type HermesGatewayConfig } from './hermes-supervisor.ts';
+import { applyDraftResolutions } from './draft-resolutions.ts';
+import { HermesSupervisor, hermesGatewayAuthHeaders, type HermesGatewayConfig } from './hermes-supervisor.ts';
 import { readHermesChatMessages } from './hermes-history.ts';
 import {
   buildSkillInvocationPrompt,
@@ -273,7 +274,7 @@ async function buildCronContextPrompt(
   userText: string,
 ): Promise<string | null> {
   const config = await hermes.ensureReady();
-  const client = new HermesCronsClient(config.baseUrl);
+  const client = new HermesCronsClient(config.baseUrl, config.apiKey ?? undefined);
   const cron = await client.get(cronId);
   if (!cron) return null;
 
@@ -334,7 +335,8 @@ function hydrateSessionMessages(
     versoSessionId: record.id,
     localMessages,
   });
-  return hermesMessages ?? addLocalResponseTimings(localMessages);
+  const messages = hermesMessages ?? addLocalResponseTimings(localMessages);
+  return applyDraftResolutions(messages, store.listDraftResolutions(record.id));
 }
 
 function addLocalResponseTimings(messages: ChatMessageRecord[]): ChatMessageRecord[] {
@@ -453,6 +455,17 @@ async function runHermesMessage(
       return;
     }
 
+    if (isReasoningDeltaEvent(eventName)) {
+      const delta = extractReasoningDelta(data);
+      if (!delta) return;
+      sendSSE(opts.res, {
+        type: 'reasoning_delta',
+        session_id: opts.session.id,
+        delta: { text: delta },
+      });
+      return;
+    }
+
     if (eventName === 'response.output_item.added') {
       const item = asRecord(data?.item);
       if (!item) return;
@@ -550,6 +563,23 @@ async function runHermesMessage(
   }
 
   const assistantText = finalText || streamedText;
+  const assistantReasoning = linkedHermesSessionId && assistantText
+    ? readLatestAssistantReasoning({
+      hermes,
+      hermesSessionId: linkedHermesSessionId,
+      versoSessionId: opts.session.id,
+      localMessages: store.getMessages(opts.session.id) ?? [],
+      assistantText,
+    })
+    : null;
+  if (assistantReasoning) {
+    sendSSE(opts.res, {
+      type: 'reasoning',
+      session_id: opts.session.id,
+      reasoning: assistantReasoning,
+    });
+  }
+
   if (assistantText) {
     store.appendMessage(opts.session.id, 'assistant', assistantText);
   }
@@ -577,6 +607,33 @@ async function runHermesMessage(
   sendSSE(opts.res, { type: 'done', session_id: opts.session.id });
 }
 
+function readLatestAssistantReasoning(opts: {
+  hermes: HermesSupervisor;
+  hermesSessionId: string;
+  versoSessionId: string;
+  localMessages: ChatMessageRecord[];
+  assistantText: string;
+}): string | null {
+  const messages = readHermesChatMessages({
+    hermesHome: opts.hermes.hermesHome,
+    hermesSessionId: opts.hermesSessionId,
+    versoSessionId: opts.versoSessionId,
+    localMessages: opts.localMessages,
+  });
+  if (!messages) return null;
+
+  const expectedText = opts.assistantText.trim();
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== 'assistant') continue;
+    if (expectedText && message.content.trim() !== expectedText) continue;
+    const reasoning = message.reasoning?.trim();
+    return reasoning && reasoning.length > 0 ? reasoning : null;
+  }
+
+  return null;
+}
+
 const DEFAULT_SESSION_TITLE = 'New chat';
 const TITLE_GEN_TIMEOUT_MS = 8_000;
 const TITLE_PROMPT_TEMPLATE = (userPrompt: string, assistantText: string) =>
@@ -592,7 +649,7 @@ async function generateSessionTitle(
   try {
     const res = await fetch(`${config.baseUrl}/v1/responses`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...hermesGatewayAuthHeaders(config) },
       body: JSON.stringify({
         input: TITLE_PROMPT_TEMPLATE(userPrompt, assistantText),
         truncation: 'auto',
@@ -632,7 +689,11 @@ async function streamHermesConversation(
     onEvent: (eventName: string, data: HermesEventPayload) => void;
   },
 ): Promise<void> {
-  const payload = buildHermesRequestBody(opts.conversation, opts.userPrompt, opts.conversationHistory);
+  const payload = buildHermesRequestBody(
+    opts.conversation,
+    opts.userPrompt,
+    opts.conversationHistory,
+  );
   await streamHermesResponse(config, payload, opts.signal, opts.onSessionId, opts.onEvent);
 }
 
@@ -671,6 +732,7 @@ async function streamHermesResponse(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
+      ...hermesGatewayAuthHeaders(config),
     },
     body: JSON.stringify(body),
     signal,
@@ -779,6 +841,21 @@ function extractResponseError(data: HermesEventPayload): string {
   const error = asRecord(response?.error);
   const message = error?.message;
   return typeof message === 'string' ? message : '';
+}
+
+function isReasoningDeltaEvent(eventName: string): boolean {
+  return eventName === 'hermes.reasoning.delta'
+    || eventName === 'response.reasoning_text.delta'
+    || eventName === 'response.reasoning_summary_text.delta';
+}
+
+function extractReasoningDelta(data: HermesEventPayload): string {
+  const delta = data?.delta;
+  if (typeof delta === 'string') return delta;
+  const text = data?.text;
+  if (typeof text === 'string') return text;
+  const nestedText = asRecord(delta)?.text;
+  return typeof nestedText === 'string' ? nestedText : '';
 }
 
 function extractOutputText(content: unknown): string {

@@ -86,7 +86,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const routes = [
     ...buildRoutes(store, hermes, managedBackend),
     ...buildComposioBridgeRoutes(composioBridge),
-    ...buildDraftsRoutes(composioBridge),
+    ...buildDraftsRoutes(composioBridge, store),
     ...buildManagedAccountRoutes(managedBackend),
     ...buildConnectionsRoutes(connections),
     ...buildSkillsHubRoutes(hermes),

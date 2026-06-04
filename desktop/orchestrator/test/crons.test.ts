@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import path from 'node:path';
 import { startServer } from '../src/http/server.ts';
+import { getHermesGatewayConfig } from '../src/http/hermes-supervisor.ts';
 
 describe('Crons orchestrator routes', () => {
   let server: http.Server | null = null;
@@ -67,7 +68,7 @@ describe('Crons orchestrator routes', () => {
     // (Phase 1 is read+modify only; chat-side creation comes later).
     const res = await fetch(gatewayUrl('/api/jobs'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: gatewayRequestHeaders(),
       body: JSON.stringify({
         name: 'test-job',
         schedule: 'every 30m',
@@ -78,6 +79,13 @@ describe('Crons orchestrator routes', () => {
     expect(res.ok).toBe(true);
     const body = await res.json() as { job: { id: string } };
     return body.job.id;
+  }
+
+  function gatewayRequestHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const apiKey = getHermesGatewayConfig().apiKey;
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    return headers;
   }
 
   it('lists jobs from Hermes', async () => {

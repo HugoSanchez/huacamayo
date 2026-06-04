@@ -1,12 +1,14 @@
 import { json, route, type Route } from './router.ts';
+import { ChatStore } from './chat-store.ts';
 import {
   ComposioBridgeHttpError,
+  NATIVE_DRAFT_CHANNELS,
   resolvePendingDraft,
   type ComposioBridgeService,
   type DraftResolution,
 } from '../integrations/composio-bridge.ts';
 
-interface ApprovePayload {
+interface DraftPayload {
   channel: string;
   to: string;
   cc: string;
@@ -14,13 +16,14 @@ interface ApprovePayload {
   body: string;
   threadId: string;
   wasEdited: boolean;
+  sessionId: string;
+  draftId: string;
 }
 
-// Channels where Verso handles the actual send itself (cleanest UX — agent
-// gets a `status: 'sent'` result and doesn't need to make a follow-up tool
-// call). Any other channel falls through to the generic `approved` path,
-// where the agent dispatches the send tool of its choice.
-const NATIVE_DISPATCH: Record<string, { slug: string; buildArgs: (p: ApprovePayload) => Record<string, unknown> }> = {
+// Native channels: Verso dispatches the send directly from the widget's Send
+// button. The model already ended its turn after proposing, so this path
+// never touches the held-draft registry — it just fires the Composio tool.
+const NATIVE_DISPATCH: Record<string, { slug: string; buildArgs: (p: DraftPayload) => Record<string, unknown> }> = {
   gmail: {
     slug: 'GMAIL_SEND_EMAIL',
     buildArgs: (p) => {
@@ -47,60 +50,100 @@ const NATIVE_DISPATCH: Record<string, { slug: string; buildArgs: (p: ApprovePayl
   },
 };
 
-export function buildDraftsRoutes(bridge: ComposioBridgeService): Route[] {
+export function buildDraftsRoutes(bridge: ComposioBridgeService, store: ChatStore): Route[] {
   return [
-    // POST /drafts/:id/approve — user confirmed (possibly edited).
-    // For Gmail/Slack: Verso dispatches the send directly here, then resolves
-    // the held tool call with status='sent' so the agent doesn't need to make
-    // a second tool call. For any other channel: resolve with status='approved'
-    // and the agent handles dispatch using the final_* values.
-    route('POST', '/drafts/:id/approve', async (_req, res, params, body) => {
-      let payload: ApprovePayload;
+    // POST /drafts/send — native channels (Slack/Gmail). Dispatches the send
+    // directly and returns the result. No held draft involved; the model is
+    // not re-engaged. This is the fast, native-feeling path.
+    route('POST', '/drafts/send', async (_req, res, _params, body) => {
+      let payload: DraftPayload;
       try {
-        payload = parseApprovePayload(body);
+        payload = parseDraftPayload(body);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         return json(res, 400, { error: 'bad_request', message });
       }
 
       const native = NATIVE_DISPATCH[payload.channel];
-      if (native) {
-        try {
-          const result = await bridge.executeTool(native.slug, native.buildArgs(payload));
-          if (result.error) {
-            return json(res, 502, {
-              error: 'send_failed',
-              message: result.error,
-              channel: payload.channel,
-              toolSlug: native.slug,
-            });
-          }
-          const resolution: DraftResolution = {
-            status: 'sent',
-            channel: payload.channel,
-            sent_via: native.slug,
-            was_edited: payload.wasEdited,
-            result: result.data,
-          };
-          const resolved = resolvePendingDraft(params.id, resolution);
-          if (!resolved) {
-            return json(res, 410, {
-              error: 'not_pending',
-              message: 'This draft is no longer pending — it may have already been resolved or timed out.',
-            });
-          }
-          return json(res, 200, { status: 'sent', draftId: params.id, toolSlug: native.slug });
-        } catch (error: unknown) {
-          if (error instanceof ComposioBridgeHttpError) {
-            return json(res, error.status, { error: 'send_failed', message: error.message });
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          return json(res, 500, { error: 'internal_error', message });
-        }
+      if (!native) {
+        return json(res, 400, {
+          error: 'bad_request',
+          message: `Channel "${payload.channel}" is not dispatched by Verso — use the approval flow instead.`,
+        });
+      }
+      if (!payload.sessionId) {
+        return json(res, 400, { error: 'bad_request', message: 'Field "sessionId" is required' });
+      }
+      if (!payload.draftId) {
+        return json(res, 400, { error: 'bad_request', message: 'Field "draftId" is required' });
+      }
+      if (!store.getSessionRecord(payload.sessionId)) {
+        return json(res, 404, {
+          error: 'not_found',
+          message: `Unknown session: ${payload.sessionId}`,
+        });
       }
 
-      // Generic path: hand the (edited) envelope back to the agent and let
-      // it pick the Composio send tool to call next.
+      try {
+        const result = await bridge.executeTool(native.slug, native.buildArgs(payload));
+        if (result.error) {
+          return json(res, 502, {
+            error: 'send_failed',
+            message: result.error,
+            channel: payload.channel,
+            toolSlug: native.slug,
+          });
+        }
+        store.recordDraftResolution(payload.sessionId, payload.draftId, 'sent', payload.channel);
+        json(res, 200, { status: 'sent', channel: payload.channel, toolSlug: native.slug, result: result.data });
+      } catch (error: unknown) {
+        if (error instanceof ComposioBridgeHttpError) {
+          return json(res, error.status, { error: 'send_failed', message: error.message });
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        json(res, 500, { error: 'internal_error', message });
+      }
+    }),
+
+    // POST /drafts/:id/discard — native channels only. There is no held tool
+    // call to resolve for these, but the local chat history still needs a
+    // durable final state so reopened sessions do not resurrect stale widgets.
+    route('POST', '/drafts/:id/discard', async (_req, res, params, body) => {
+      const payload = parseDiscardPayload(body);
+      if (!payload.sessionId) {
+        return json(res, 400, { error: 'bad_request', message: 'Field "sessionId" is required' });
+      }
+      if (!payload.channel) {
+        return json(res, 400, { error: 'bad_request', message: 'Field "channel" is required' });
+      }
+      if (!NATIVE_DRAFT_CHANNELS.has(payload.channel)) {
+        return json(res, 400, {
+          error: 'bad_request',
+          message: `Channel "${payload.channel}" is not dispatched by Verso — use the rejection flow instead.`,
+        });
+      }
+      const resolution = store.recordDraftResolution(payload.sessionId, params.id, 'discarded', payload.channel);
+      if (!resolution) {
+        return json(res, 404, {
+          error: 'not_found',
+          message: `Unknown session: ${payload.sessionId}`,
+        });
+      }
+      json(res, 200, { status: 'discarded', draftId: params.id });
+    }),
+
+    // POST /drafts/:id/approve — generic channels only. Resolves the held
+    // tool call with the (possibly edited) final values so the agent
+    // dispatches the send itself.
+    route('POST', '/drafts/:id/approve', async (_req, res, params, body) => {
+      let payload: DraftPayload;
+      try {
+        payload = parseDraftPayload(body);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json(res, 400, { error: 'bad_request', message });
+      }
+
       const resolution: DraftResolution = {
         status: 'approved',
         was_edited: payload.wasEdited,
@@ -121,7 +164,8 @@ export function buildDraftsRoutes(bridge: ComposioBridgeService): Route[] {
       json(res, 200, { status: 'approved', draftId: params.id });
     }),
 
-    // POST /drafts/:id/reject — user discarded.
+    // POST /drafts/:id/reject — generic channels only. The held tool call
+    // resolves with status='rejected'; the agent acknowledges and moves on.
     route('POST', '/drafts/:id/reject', async (_req, res, params) => {
       const resolved = resolvePendingDraft(params.id, {
         status: 'rejected',
@@ -138,7 +182,11 @@ export function buildDraftsRoutes(bridge: ComposioBridgeService): Route[] {
   ];
 }
 
-function parseApprovePayload(body: unknown): ApprovePayload {
+// Exposed so the chat UI side and tests can agree on which channels skip the
+// approval round-trip.
+export { NATIVE_DRAFT_CHANNELS };
+
+function parseDraftPayload(body: unknown): DraftPayload {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new Error('Missing JSON body');
   }
@@ -157,6 +205,19 @@ function parseApprovePayload(body: unknown): ApprovePayload {
     body: body_,
     threadId: stringField(record.threadId),
     wasEdited: record.wasEdited === true,
+    sessionId: stringField(record.sessionId),
+    draftId: stringField(record.draftId),
+  };
+}
+
+function parseDiscardPayload(body: unknown): { sessionId: string; channel: string } {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { sessionId: '', channel: '' };
+  }
+  const record = body as Record<string, unknown>;
+  return {
+    sessionId: stringField(record.sessionId),
+    channel: stringField(record.channel),
   };
 }
 

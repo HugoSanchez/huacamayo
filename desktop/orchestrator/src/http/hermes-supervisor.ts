@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -16,6 +17,7 @@ import {
 export interface HermesGatewayConfig {
   baseUrl: string;
   startupTimeoutMs: number;
+  apiKey: string | null;
 }
 
 type HermesRuntimeState = 'idle' | 'starting' | 'ready' | 'error' | 'unavailable';
@@ -46,6 +48,7 @@ export interface HermesRuntimeSnapshot {
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8642;
 const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
+const MANAGED_API_SERVER_KEY = randomBytes(32).toString('hex');
 export function getHermesGatewayConfig(): HermesGatewayConfig {
   const baseUrl = normalizeBaseUrl(
     process.env.VERSO_HERMES_GATEWAY_URL?.trim() || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
@@ -57,12 +60,25 @@ export function getHermesGatewayConfig(): HermesGatewayConfig {
   const startupTimeoutMs = Number.isFinite(rawStartupTimeout) && rawStartupTimeout > 0
     ? rawStartupTimeout
     : DEFAULT_STARTUP_TIMEOUT_MS;
+  const apiKey = getHermesApiServerKey();
 
-  return { baseUrl, startupTimeoutMs };
+  return { baseUrl, startupTimeoutMs, apiKey };
 }
 
 function normalizeBaseUrl(rawBaseUrl: string): string {
   return rawBaseUrl.replace(/\/+$/, '');
+}
+
+function getHermesApiServerKey(): string | null {
+  const explicit = process.env.API_SERVER_KEY?.trim()
+    || process.env.VERSO_HERMES_API_SERVER_KEY?.trim()
+    || null;
+  if (explicit) return explicit;
+  return isManagedDisabled() ? null : MANAGED_API_SERVER_KEY;
+}
+
+export function hermesGatewayAuthHeaders(config: HermesGatewayConfig): Record<string, string> {
+  return config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};
 }
 
 function getHermesLaunchConfig(): HermesLaunchConfig {
@@ -536,6 +552,7 @@ export class HermesSupervisor {
       API_SERVER_ENABLED: 'true',
       API_SERVER_HOST: host,
       API_SERVER_PORT: port,
+      ...(this.config.apiKey ? { API_SERVER_KEY: this.config.apiKey } : {}),
       HERMES_HOME: this.managedHermesHome,
       VERSO_HERMES_GATEWAY_URL: this.config.baseUrl,
       ...(this.orchestratorBaseUrl ? { VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
