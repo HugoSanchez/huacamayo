@@ -58,14 +58,12 @@ const PROPOSE_MESSAGE_DRAFT_TOOL: ComposioNativeToolManifestTool = {
   name: 'Propose message draft',
   description:
     [
-      'Surface a draft message to the user for review before sending. Use this whenever the user asks you to send a message via any tool (Slack, Gmail, SMS, WhatsApp, Discord, Telegram, etc).',
+      'Surface a draft message to the user for review before sending. Use this whenever the user asks you to send a message via any tool (Slack, Gmail, SMS, WhatsApp, Discord, Telegram, etc). Always call this BEFORE the underlying send tool — never send first.',
       '',
-      'This call BLOCKS until the user clicks Send or Discard in the widget. The result tells you what to do next:',
-      '- status="sent": the message has already been dispatched on your behalf (Verso handles Slack and Gmail directly). Do NOT call any send tool. Confirm to the user in one sentence and continue.',
-      '- status="approved": the user confirmed but you must dispatch the send yourself. Call the appropriate Composio tool for the channel (e.g. WHATSAPP_SEND_MESSAGE), using `final_to`, `final_body`, `final_subject`, `final_cc` from the result — NOT your original input. The user may have edited them.',
-      '- status="rejected": the user discarded the draft. Acknowledge briefly and do not send. Ask the user what they\'d like to do instead.',
-      '',
-      'Always call this BEFORE the underlying send tool — never send first.',
+      'The result\'s `status` tells you what to do next:',
+      '- status="pending_review": Slack and Gmail are handled directly by Verso. The user reviews and sends the message themselves from the widget — you are DONE. Do NOT call any send tool. Reply in one short sentence that you\'ve prepared it for review, then stop.',
+      '- status="approved": (other channels) the user confirmed but you must dispatch the send yourself. Call the appropriate Composio tool for the channel (e.g. WHATSAPP_SEND_MESSAGE) using `final_to`, `final_body`, `final_subject`, `final_cc` from the result — NOT your original input, since the user may have edited them.',
+      '- status="rejected": the user discarded the draft. Acknowledge briefly, do not send, and ask what they\'d like to do instead.',
     ].join('\n'),
   inputParameters: {
     type: 'object',

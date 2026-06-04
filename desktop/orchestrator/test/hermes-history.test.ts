@@ -64,11 +64,22 @@ describe('Hermes history mapper', () => {
         id: 4,
         session_id: 'hermes-session',
         role: 'assistant',
+        content: '',
+        tool_call_id: null,
+        tool_calls: null,
+        tool_name: null,
+        reasoning: 'I should search the contract first, then update the document.',
+        timestamp: 1779962403,
+      },
+      {
+        id: 5,
+        session_id: 'hermes-session',
+        role: 'assistant',
         content: 'Done.',
         tool_call_id: null,
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962403,
+        timestamp: 1779962404,
       },
     ], {
       hermesSessionId: 'hermes-session',
@@ -88,14 +99,21 @@ describe('Hermes history mapper', () => {
       content: 'Done.',
       startedAt: Date.parse('2026-06-01T10:00:00.000Z'),
       endedAt: Date.parse('2026-06-01T10:00:05.000Z'),
+      reasoning: 'I should search the contract first, then update the document.',
     });
-    expect(messages[1].steps).toEqual([{
-      type: 'tool',
-      id: 'call_1',
-      name: 'google_drive',
-      input: { action: 'search', query: 'contract' },
-      result: JSON.stringify({ ok: true }),
-    }]);
+    expect(messages[1].steps).toEqual([
+      {
+        type: 'tool',
+        id: 'call_1',
+        name: 'google_drive',
+        input: { action: 'search', query: 'contract' },
+        result: JSON.stringify({ ok: true }),
+      },
+      {
+        type: 'reasoning',
+        text: 'I should search the contract first, then update the document.',
+      },
+    ]);
   });
 
   it('uses local messages as the visible turn skeleton when Hermes omits a user row', () => {

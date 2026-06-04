@@ -1,76 +1,21 @@
 import SwiftUI
 import AppKit
+import Combine
 import Sentry
 import Sparkle
 
 @main
 struct versoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var sidecar = SidecarManager()
-    @StateObject private var managedSessionStore = ManagedSessionStore()
-    @State private var didScheduleLaunchUpdateCheck = false
-
-    private let updateUserDriver: VersoUpdateUserDriver
-    private let updater: SPUUpdater
-
-    init() {
-        if let dsn = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String,
-           !dsn.isEmpty {
-            SentrySDK.start { options in
-                options.dsn = dsn
-                #if DEBUG
-                options.environment = "development"
-                #else
-                options.environment = "production"
-                #endif
-            }
-        }
-
-        let updateUserDriver = VersoUpdateUserDriver()
-        self.updateUserDriver = updateUserDriver
-        self.updater = SPUUpdater(
-            hostBundle: Bundle.main,
-            applicationBundle: Bundle.main,
-            userDriver: updateUserDriver,
-            delegate: nil
-        )
-
-        do {
-            try updater.start()
-        } catch {
-            NSLog("Failed to start Sparkle updater: \(error.localizedDescription)")
-            Telemetry.reportError(error, context: "sparkle-start")
-        }
-    }
 
     var body: some Scene {
-        Window("verso", id: "main") {
-            RootView(sidecar: sidecar, managedSessionStore: managedSessionStore)
-                .onAppear {
-                    appDelegate.sidecar = sidecar
-                    if !didScheduleLaunchUpdateCheck {
-                        didScheduleLaunchUpdateCheck = true
-                        scheduleLaunchUpdateCheck()
-                    }
-                    sidecar.updateManagedSession(managedSessionStore.currentSession)
-                    sidecar.start()
-                }
-                .onChange(of: managedSessionStore.currentSession) { _, session in
-                    sidecar.updateManagedSession(session)
-                }
-                .onOpenURL { url in
-                    NSApp.activate(ignoringOtherApps: true)
-                    managedSessionStore.handleCallbackURL(url)
-                }
-                .background(MainWindowAccessor { window in
-                    appDelegate.registerMainWindow(window)
-                })
+        Settings {
+            EmptyView()
         }
-        .defaultSize(width: 1200, height: 750)
-        .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(replacing: .appSettings) { }
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updater: updater)
+                CheckForUpdatesView(updater: appDelegate.updater)
             }
             #if DEBUG
             CommandMenu("Debug") {
@@ -86,35 +31,15 @@ struct versoApp: App {
             #endif
         }
     }
-
-    private func scheduleLaunchUpdateCheck() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            guard updater.automaticallyChecksForUpdates,
-                  !updater.sessionInProgress else { return }
-            updater.checkForUpdatesInBackground()
-        }
-    }
 }
 
-private struct MainWindowAccessor: NSViewRepresentable {
-    let onResolve: (NSWindow) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            if let window = view.window {
-                onResolve(window)
-            }
-        }
-        return view
+private final class VersoMainWindow: NSWindow {
+    override var canBecomeKey: Bool {
+        true
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            if let window = nsView.window {
-                onResolve(window)
-            }
-        }
+    override var canBecomeMain: Bool {
+        true
     }
 }
 
@@ -157,43 +82,74 @@ private struct RootView: View {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+private struct MainWindowContentView: View {
+    @ObservedObject var sidecar: SidecarManager
+    @ObservedObject var managedSessionStore: ManagedSessionStore
+    @ObservedObject var updateUserDriver: VersoUpdateUserDriver
+
+    var body: some View {
+        RootView(sidecar: sidecar, managedSessionStore: managedSessionStore)
+            .overlay(alignment: .bottomTrailing) {
+                VersoUpdateToastOverlay(driver: updateUserDriver)
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 20)
+            }
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Shared reference for code that can't reach the delegate via
     /// `NSApp.delegate` — SwiftUI's `@NSApplicationDelegateAdaptor` wraps our
     /// instance inside an internal `SwiftUI.AppDelegate`, so the usual cast
     /// returns nil. ChatWebView's bridge handler uses this to call into us.
     static private(set) weak var shared: AppDelegate?
 
-    /// Set by versoApp once the sidecar manager is constructed. We grab a
-    /// reference here so applicationWillTerminate can stop it cleanly even
-    /// when the @StateObject's deinit doesn't run (which is most of the time
-    /// on macOS app shutdown).
-    weak var sidecar: SidecarManager?
+    let updater: SPUUpdater
+
+    private let sidecar = SidecarManager()
+    private let managedSessionStore = ManagedSessionStore()
+    private let updateUserDriver: VersoUpdateUserDriver
+    private var cancellables: Set<AnyCancellable> = []
+    private var didScheduleLaunchUpdateCheck = false
 
     /// Number of chat responses that completed while the app was in the
     /// background. Drives the dock badge; cleared whenever the user brings
     /// the app back to the foreground.
     private var pendingResponseCount = 0
     private weak var mainWindow: NSWindow?
+    private var mainWindowController: NSWindowController?
     var registeredMainWindow: NSWindow? { mainWindow }
 
     override init() {
+        Self.configureTelemetry()
+
+        let updateUserDriver = VersoUpdateUserDriver()
+        self.updateUserDriver = updateUserDriver
+        self.updater = SPUUpdater(
+            hostBundle: Bundle.main,
+            applicationBundle: Bundle.main,
+            userDriver: updateUserDriver,
+            delegate: nil
+        )
+
         super.init()
         AppDelegate.shared = self
+
+        do {
+            try updater.start()
+        } catch {
+            NSLog("Failed to start Sparkle updater: \(error.localizedDescription)")
+            Telemetry.reportError(error, context: "sparkle-start")
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidBecomeMain(_:)),
-            name: NSWindow.didBecomeMainNotification,
-            object: nil
-        )
-    }
-
-    func registerMainWindow(_ window: NSWindow) {
-        mainWindow = window
-        configureWindow(window)
+        installStateObservers()
+        createMainWindow()
+        sidecar.updateManagedSession(managedSessionStore.currentSession)
+        sidecar.start()
+        scheduleLaunchUpdateCheckIfReady()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -214,7 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Belt to the orchestrator's parent-pid watcher's suspenders: if the
         // app is quitting normally, kill the child outright instead of waiting
         // for the watcher's 2s polling cycle.
-        sidecar?.stop()
+        sidecar.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -222,21 +178,86 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    @objc func windowDidBecomeMain(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow,
-              window === mainWindow else { return }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard !urls.isEmpty else { return }
+
+        NSApp.activate(ignoringOtherApps: true)
+        createMainWindow()
+        mainWindow?.makeKeyAndOrderFront(nil)
+
+        for url in urls {
+            managedSessionStore.handleCallbackURL(url)
+        }
+    }
+
+    private static func configureTelemetry() {
+        guard let dsn = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String,
+              !dsn.isEmpty else { return }
+
+        SentrySDK.start { options in
+            options.dsn = dsn
+            #if DEBUG
+            options.environment = "development"
+            #else
+            options.environment = "production"
+            #endif
+        }
+    }
+
+    private func installStateObservers() {
+        sidecar.$state
+            .sink { [weak self] _ in
+                self?.scheduleLaunchUpdateCheckIfReady()
+            }
+            .store(in: &cancellables)
+
+        managedSessionStore.$currentSession
+            .removeDuplicates()
+            .sink { [weak self] session in
+                self?.sidecar.updateManagedSession(session)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func createMainWindow() {
+        if let mainWindow {
+            mainWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let contentRect = NSRect(x: 0, y: 0, width: 1200, height: 750)
+        let window = VersoMainWindow(
+            contentRect: contentRect,
+            styleMask: [.borderless, .resizable, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+
+        let rootView = MainWindowContentView(
+            sidecar: sidecar,
+            managedSessionStore: managedSessionStore,
+            updateUserDriver: updateUserDriver
+        )
+        let hostingView = NSHostingView(rootView: rootView)
+        hostingView.frame = NSRect(origin: .zero, size: contentRect.size)
+        hostingView.autoresizingMask = [.width, .height]
+        window.contentView = hostingView
+
         configureWindow(window)
+        window.center()
+        window.isReleasedWhenClosed = false
+
+        let windowController = NSWindowController(window: window)
+        mainWindow = window
+        mainWindowController = windowController
+        windowController.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func configureWindow(_ window: NSWindow) {
-        // Remove the title bar but keep window capabilities
-        window.styleMask.remove(.titled)
-        window.styleMask.insert(.fullSizeContentView)
         window.styleMask.insert(.resizable)
         window.styleMask.insert(.closable)
         window.styleMask.insert(.miniaturizable)
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isOpaque = false
         window.hasShadow = true
@@ -248,6 +269,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             contentView.layer?.cornerRadius = 10
             contentView.layer?.cornerCurve = .continuous
             contentView.layer?.masksToBounds = true
+        }
+    }
+
+    private func scheduleLaunchUpdateCheckIfReady() {
+        guard !didScheduleLaunchUpdateCheck else { return }
+        guard case .running = sidecar.state else { return }
+
+        didScheduleLaunchUpdateCheck = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
+            guard case .running = self.sidecar.state,
+                  self.updater.automaticallyChecksForUpdates,
+                  !self.updater.sessionInProgress else { return }
+            self.updater.checkForUpdatesInBackground()
         }
     }
 }

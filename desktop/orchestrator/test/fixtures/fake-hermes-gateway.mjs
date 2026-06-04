@@ -22,6 +22,8 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/v1/responses') {
+    if (rejectUnauthorized(req, res)) return;
+
     let body = '';
     req.on('data', (chunk) => {
       body += chunk.toString();
@@ -142,15 +144,7 @@ const server = http.createServer((req, res) => {
 function handleJobsRequest(req, res, url) {
   // Optional Bearer-token check — only enforced when API_SERVER_KEY is set
   // in the fixture's env, so existing tests without auth still pass.
-  const expectedKey = process.env.API_SERVER_KEY?.trim();
-  if (expectedKey) {
-    const auth = req.headers['authorization'] || '';
-    if (auth !== `Bearer ${expectedKey}`) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unauthorized' }));
-      return;
-    }
-  }
+  if (rejectUnauthorized(req, res)) return;
 
   const listMatch = url.pathname === '/api/jobs';
   const itemMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
@@ -260,6 +254,18 @@ function handleJobsRequest(req, res, url) {
 
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'not_found' }));
+}
+
+function rejectUnauthorized(req, res) {
+  const expectedKey = process.env.API_SERVER_KEY?.trim();
+  if (!expectedKey) return false;
+
+  const auth = req.headers['authorization'] || '';
+  if (auth === `Bearer ${expectedKey}`) return false;
+
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'unauthorized' }));
+  return true;
 }
 
 function readJsonBody(req, cb) {

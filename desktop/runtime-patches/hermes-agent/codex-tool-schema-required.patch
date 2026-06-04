@@ -8,7 +8,7 @@
  from types import SimpleNamespace
  from typing import Any, Dict, List, Optional
  
-@@ -192,11 +193,71 @@
+@@ -250,11 +251,71 @@
              "name": name,
              "description": fn.get("description", ""),
              "strict": False,
@@ -81,7 +81,7 @@
  # ---------------------------------------------------------------------------
  # Message format conversion
  # ---------------------------------------------------------------------------
-@@ -503,11 +564,9 @@
+@@ -799,11 +860,9 @@
                  raise ValueError(f"Codex Responses tools[{idx}] has unsupported type {tool.get('type')!r}.")
  
              name = tool.get("name")

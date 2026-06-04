@@ -5,13 +5,21 @@ import rehypeHighlight from 'rehype-highlight';
 import type { ChatMessage, ActivityStep, ConnectionRequestView, ConnectionView, ToolkitView } from './types';
 import {
   approveDraft,
+  discardDraft,
   draftIdForArgs,
   generateCronDescription,
+  NATIVE_DRAFT_CHANNELS,
   openExternalUrl,
   rejectDraft,
+  sendDraft,
 } from './chat';
 import { useIsSystemAsleep } from './useSystemSleep';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
+
+interface DraftOverlayItem {
+  step: Extract<ActivityStep, { type: 'tool' }>;
+  sessionId?: string;
+}
 
 interface Props {
   messages: ChatMessage[];
@@ -110,11 +118,11 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
   // floating overlay can stack them in one place. Pulling them out at the
   // list level (not per-message) lets the overlay survive scrolling and lets
   // drafts from different assistant turns share one anchored container.
-  const draftSteps: Extract<ActivityStep, { type: 'tool' }>[] = [];
+  const draftSteps: DraftOverlayItem[] = [];
   for (const msg of messages) {
     for (const step of msg.steps ?? []) {
       if (step.type === 'tool' && isProposeMessageDraftStep(step) && !isDraftFinalized(step)) {
-        draftSteps.push(step);
+        draftSteps.push({ step, sessionId: msg.sessionId });
       }
     }
   }
@@ -215,30 +223,11 @@ function MessageBubble({
           />
         )}
 
-        <div className="message-content">
+        <div className={`message-content ${isUser ? 'user-message-content' : 'assistant-message-content'}`}>
           {isUser ? (
             <UserMessageBody content={message.content} />
           ) : message.content ? (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeHighlight]}
-              components={{
-                a: ({ href, children, ...props }) => (
-                  <a
-                    {...props}
-                    href={href}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      if (href) openExternalUrl(href);
-                    }}
-                  >
-                    {children}
-                  </a>
-                ),
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
+            <MarkdownContent content={message.content} />
           ) : null}
         </div>
 
@@ -264,15 +253,16 @@ function DraftOverlay({
   drafts,
   toolkits,
 }: {
-  drafts: Extract<ActivityStep, { type: 'tool' }>[];
+  drafts: DraftOverlayItem[];
   toolkits: Map<string, ToolkitInfo>;
 }) {
   return (
     <div className="message-draft-overlay" role="region" aria-label="Pending message drafts">
-      {drafts.map((step, idx) => (
+      {drafts.map(({ step, sessionId }, idx) => (
         <MessageDraftCard
           key={step.id ?? `draft-${idx}`}
           step={step}
+          sessionId={sessionId}
           toolkits={toolkits}
         />
       ))}
@@ -316,9 +306,11 @@ function AssistantActivity({
   onConnect: (request: ConnectionRequestView) => void;
   toolkits: Map<string, ToolkitInfo>;
 }) {
-  const steps = message.steps ?? [];
-  const hasActivity = steps.length > 0;
-  const [expanded, setExpanded] = useState<boolean>(!!message.isStreaming);
+  const steps = activityStepsWithReasoningFallback(message.steps ?? [], message.reasoning);
+  const hasReasoning = steps.some((step) => step.type === 'reasoning');
+  const hasActivity = hasReasoning || steps.length > 0;
+  const hasFinalAnswerStarted = message.content.trim().length > 0;
+  const [expanded, setExpanded] = useState<boolean>(!!message.isStreaming && !hasFinalAnswerStarted);
 
   // When streaming stops, auto-collapse
   const wasStreaming = useRef<boolean>(!!message.isStreaming);
@@ -329,16 +321,33 @@ function AssistantActivity({
     wasStreaming.current = !!message.isStreaming;
   }, [message.isStreaming]);
 
+  const hadFinalAnswerStarted = useRef<boolean>(hasFinalAnswerStarted);
+  useEffect(() => {
+    if (!hadFinalAnswerStarted.current && hasFinalAnswerStarted) {
+      setExpanded(false);
+    }
+    hadFinalAnswerStarted.current = hasFinalAnswerStarted;
+  }, [hasFinalAnswerStarted]);
+
   if (!hasActivity) return null;
 
   const toolCount = steps.filter(s => s.type === 'tool').length;
-  const msgCount = steps.filter(s => s.type === 'text').length;
+  const msgCount = steps.filter(s => s.type === 'text').length + (hasFinalAnswerStarted ? 1 : 0);
+  const lastReasoningIndex = findLastReasoningIndex(steps);
 
-  if (message.isStreaming) {
+  if (message.isStreaming && !hasFinalAnswerStarted) {
     return (
       <div className="assistant-activity-wrap">
         <div className="assistant-activity-live">
-          {steps.map((step, i) => <StepView key={i} step={step} onConnect={onConnect} toolkits={toolkits} />)}
+          {steps.map((step, i) => (
+            <StepView
+              key={i}
+              step={step}
+              isActiveReasoning={i === lastReasoningIndex}
+              onConnect={onConnect}
+              toolkits={toolkits}
+            />
+          ))}
         </div>
       </div>
     );
@@ -350,16 +359,41 @@ function AssistantActivity({
         message={message}
         toolCount={toolCount}
         msgCount={msgCount}
+        hasReasoning={hasReasoning}
         expanded={expanded}
         onToggle={() => setExpanded(e => !e)}
       />
       {expanded && hasActivity && (
         <div className="assistant-activity-details">
-          {steps.map((step, i) => <StepView key={i} step={step} onConnect={onConnect} toolkits={toolkits} />)}
+          {steps.map((step, i) => (
+            <StepView
+              key={i}
+              step={step}
+              isActiveReasoning={message.isStreaming && i === lastReasoningIndex}
+              onConnect={onConnect}
+              toolkits={toolkits}
+            />
+          ))}
         </div>
       )}
     </div>
   );
+}
+
+function activityStepsWithReasoningFallback(
+  steps: ActivityStep[],
+  reasoning: string | null | undefined,
+): ActivityStep[] {
+  const text = reasoning?.trim();
+  if (!text || steps.some((step) => step.type === 'reasoning')) return steps;
+  return [{ type: 'reasoning', text }, ...steps];
+}
+
+function findLastReasoningIndex(steps: ActivityStep[]): number {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (steps[index].type === 'reasoning') return index;
+  }
+  return -1;
 }
 
 function AssistantMessageActions({ message }: { message: ChatMessage }) {
@@ -390,19 +424,20 @@ function ResponseTime({ message }: { message: ChatMessage }) {
 }
 
 function ActivityHeader({
-  message, toolCount, msgCount, expanded, onToggle,
+  message, toolCount, msgCount, hasReasoning, expanded, onToggle,
 }: {
   message: ChatMessage;
   toolCount: number;
   msgCount: number;
+  hasReasoning: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const hasActivity = toolCount > 0 || msgCount > 0;
+  const hasActivity = hasReasoning || toolCount > 0 || msgCount > 0;
   const summary = [
     toolCount ? `${toolCount} tool call${toolCount === 1 ? '' : 's'}` : '',
     msgCount ? `${msgCount} message${msgCount === 1 ? '' : 's'}` : '',
-  ].filter(Boolean).join(', ');
+  ].filter(Boolean).join(', ') || 'activity';
 
   return (
     <button
@@ -421,7 +456,7 @@ function ActivityHeader({
         userSelect: 'none',
       }}
     >
-      {hasActivity && !message.isStreaming && (
+      {hasActivity && (
         <svg
           width="10" height="10" viewBox="0 0 10 10"
           fill="none" stroke="currentColor" strokeWidth="1.75"
@@ -536,10 +571,12 @@ function MessageCheckIcon() {
 
 function StepView({
   step,
+  isActiveReasoning = false,
   onConnect,
   toolkits,
 }: {
   step: ActivityStep;
+  isActiveReasoning?: boolean;
   onConnect: (request: ConnectionRequestView) => void;
   toolkits: Map<string, ToolkitInfo>;
 }) {
@@ -558,6 +595,10 @@ function StepView({
     );
   }
 
+  if (step.type === 'reasoning') {
+    return <ReasoningStep text={step.text} isActive={isActiveReasoning} />;
+  }
+
   // Connection cards are pulled out of `steps` upstream and rendered next to
   // the assistant's response, not inside the activity collapsible. Anything
   // still tagged with a connection here is unexpected — fall through to the
@@ -569,6 +610,41 @@ function StepView({
   }
 
   return <ToolStep step={step} toolkits={toolkits} />;
+}
+
+function ReasoningStep({ text, isActive }: { text: string; isActive: boolean }) {
+  return (
+    <div className={`reasoning-step${isActive ? ' is-active' : ''}`}>
+      <div className="message-content reasoning-markdown">
+        <MarkdownContent content={text} />
+      </div>
+    </div>
+  );
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeHighlight]}
+      components={{
+        a: ({ href, children, ...props }) => (
+          <a
+            {...props}
+            href={href}
+            onClick={(event) => {
+              event.preventDefault();
+              if (href) openExternalUrl(href);
+            }}
+          >
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 interface CronToolCardProps {
@@ -731,10 +807,20 @@ function parseDraftInput(input: unknown): DraftFields {
   };
 }
 
-// True once the held tool call has resolved (either via our own approve/reject
-// or via timeout). We don't render the editor for finalized drafts.
+// True once a held (generic-channel) draft has resolved through some path we
+// didn't drive — timeout, session-end cleanup, a second tab. We hide the
+// editor then so the user isn't acting on a stale draft. Native channels
+// return `pending_review` immediately, which is NOT a finalized state — the
+// widget stays interactive until the user sends or discards locally.
 function isDraftFinalized(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
-  return typeof step.result === 'string' && step.result.length > 0;
+  if (typeof step.result !== 'string' || step.result.length === 0) return false;
+  try {
+    const parsed = JSON.parse(step.result) as { data?: { status?: unknown } } | null;
+    const status = parsed?.data?.status;
+    return typeof status === 'string' && status !== 'pending_review';
+  } catch {
+    return false;
+  }
 }
 
 function prettyChannelLabel(channel: string): string {
@@ -746,9 +832,11 @@ function prettyChannelLabel(channel: string): string {
 
 function MessageDraftCard({
   step,
+  sessionId,
   toolkits,
 }: {
   step: Extract<ActivityStep, { type: 'tool' }>;
+  sessionId?: string;
   toolkits: Map<string, ToolkitInfo>;
 }) {
   const initial = parseDraftInput(step.input);
@@ -800,6 +888,8 @@ function MessageDraftCard({
     if (status === 'error') setStatus('draft');
   };
 
+  const isNative = NATIVE_DRAFT_CHANNELS.has(fields.channel);
+
   const wasEdited = (): boolean => (
     fields.to !== initial.to
     || fields.body !== initial.body
@@ -812,16 +902,25 @@ function MessageDraftCard({
     if (sendDisabled) return;
     setStatus('sending');
     setErrorMessage(null);
+    const payload = {
+      channel: fields.channel,
+      to: fields.to.trim(),
+      cc: fields.cc.trim() || undefined,
+      subject: fields.subject.trim() || undefined,
+      body: fields.body,
+      threadId: fields.threadId.trim() || undefined,
+      wasEdited: wasEdited(),
+    };
     try {
-      await approveDraft(draftId, {
-        channel: fields.channel,
-        to: fields.to.trim(),
-        cc: fields.cc.trim() || undefined,
-        subject: fields.subject.trim() || undefined,
-        body: fields.body,
-        threadId: fields.threadId.trim() || undefined,
-        wasEdited: wasEdited(),
-      });
+      // Native (Slack/Gmail): Verso dispatches directly — the model already
+      // ended its turn, so this is instant and doesn't re-engage it.
+      // Generic: resolve the held tool call so the agent dispatches.
+      if (isNative) {
+        if (!sessionId) throw new Error('Cannot send draft before the session is ready.');
+        await sendDraft(draftId, sessionId, payload);
+      } else {
+        await approveDraft(draftId, payload);
+      }
       setStatus('sent');
     } catch (error: unknown) {
       setStatus('error');
@@ -831,8 +930,28 @@ function MessageDraftCard({
 
   const handleDiscard = async () => {
     if (status === 'sending') return;
-    setStatus('sending');
     setErrorMessage(null);
+    // Native drafts have no held call to resolve — the model already moved
+    // on, so discarding is purely local. Generic drafts must reject the held
+    // call so the agent stops waiting.
+    if (isNative) {
+      if (!sessionId) {
+        setStatus('error');
+        setErrorMessage('Cannot discard draft before the session is ready.');
+        return;
+      }
+      try {
+        await discardDraft(draftId, sessionId, fields.channel);
+      } catch (error: unknown) {
+        setStatus('error');
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      setIsDiscarded(true);
+      setStatus('sent');
+      return;
+    }
+    setStatus('sending');
     try {
       await rejectDraft(draftId);
       setIsDiscarded(true);
@@ -862,6 +981,8 @@ function MessageDraftCard({
     : fields.channel === 'slack'
       ? '#channel or @user'
       : 'Recipient';
+  const sizeClass = draftSizeClass(fields.body);
+  const bodyRows = draftBodyRows(fields.body);
 
   if (status === 'sent') {
     return (
@@ -898,7 +1019,7 @@ function MessageDraftCard({
   }
 
   return (
-    <div className="message-draft-card">
+    <div className={`message-draft-card ${sizeClass}`}>
       <div className="message-draft-card-head">
         <ToolkitLogo name={channelLabel} logoUrl={channelLogoUrl} />
         <div className="message-draft-card-meta">
@@ -982,7 +1103,7 @@ function MessageDraftCard({
           className="message-draft-card-body"
           value={fields.body}
           onChange={(e) => update('body', e.target.value)}
-          rows={Math.max(4, Math.min(10, fields.body.split('\n').length + 1))}
+          rows={bodyRows}
           disabled={status === 'sending'}
         />
       </div>
@@ -1011,6 +1132,32 @@ function MessageDraftCard({
       </div>
     </div>
   );
+}
+
+function draftSizeClass(body: string): 'is-compact' | 'is-medium' | 'is-large' {
+  const metrics = draftBodyMetrics(body);
+  if (metrics.characters > 720 || metrics.visualLines > 12) return 'is-large';
+  if (metrics.characters > 180 || metrics.visualLines > 4) return 'is-medium';
+  return 'is-compact';
+}
+
+function draftBodyRows(body: string): number {
+  const metrics = draftBodyMetrics(body);
+  if (metrics.characters > 720 || metrics.visualLines > 12) {
+    return Math.max(9, Math.min(18, metrics.visualLines + 1));
+  }
+  if (metrics.characters > 180 || metrics.visualLines > 4) {
+    return Math.max(6, Math.min(12, metrics.visualLines + 1));
+  }
+  return Math.max(4, Math.min(6, metrics.visualLines + 1));
+}
+
+function draftBodyMetrics(body: string): { characters: number; visualLines: number } {
+  const lines = body.split('\n');
+  const visualLines = lines.reduce((total, line) => (
+    total + Math.max(1, Math.ceil(line.length / 72))
+  ), 0);
+  return { characters: body.trim().length, visualLines };
 }
 
 function MinimizeIcon() {

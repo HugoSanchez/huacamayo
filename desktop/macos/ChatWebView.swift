@@ -2,6 +2,10 @@ import SwiftUI
 import WebKit
 import AppKit
 
+extension Notification.Name {
+    static let versoRestoreKeyboardFocus = Notification.Name("verso.restoreKeyboardFocus")
+}
+
 private final class FocusableWKWebView: WKWebView {
     override var acceptsFirstResponder: Bool {
         true
@@ -358,6 +362,24 @@ struct ChatWebView: NSViewRepresentable {
                 name: NSApplication.didBecomeActiveNotification,
                 object: nil
             )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleRestoreKeyboardFocus),
+                name: .versoRestoreKeyboardFocus,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleWindowDidBecomeKeyOrMain(_:)),
+                name: NSWindow.didBecomeKeyNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(handleWindowDidBecomeKeyOrMain(_:)),
+                name: NSWindow.didBecomeMainNotification,
+                object: nil
+            )
         }
 
         deinit {
@@ -378,6 +400,17 @@ struct ChatWebView: NSViewRepresentable {
             recoverKeyboardFocus()
         }
 
+        @objc private func handleRestoreKeyboardFocus() {
+            recoverKeyboardFocus(after: 0.05)
+        }
+
+        @objc private func handleWindowDidBecomeKeyOrMain(_ notification: Notification) {
+            guard let webView,
+                  let window = notification.object as? NSWindow,
+                  window === webView.window else { return }
+            recoverKeyboardFocus(after: 0.05)
+        }
+
         func injectSystemSleep() {
             guard let webView, pageLoaded else { return }
             webView.evaluateJavaScript(
@@ -394,8 +427,8 @@ struct ChatWebView: NSViewRepresentable {
             )
         }
 
-        private func recoverKeyboardFocus() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+        private func recoverKeyboardFocus(after delay: TimeInterval = 0.25) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self,
                       let webView = self.webView,
                       self.pageLoaded,
@@ -403,6 +436,9 @@ struct ChatWebView: NSViewRepresentable {
                       window.isVisible else { return }
 
                 if NSApp.isActive || window.isKeyWindow {
+                    if NSApp.isActive && !window.isKeyWindow {
+                        window.makeKey()
+                    }
                     window.makeFirstResponder(webView)
                 }
 

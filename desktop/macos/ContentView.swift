@@ -1072,6 +1072,7 @@ private struct SessionSidebar: View {
         renamingSessionId = nil
         // Hand focus back so the chat WebView can become first responder cleanly.
         NSApp.keyWindow?.makeFirstResponder(nil)
+        NotificationCenter.default.post(name: .versoRestoreKeyboardFocus, object: nil)
         guard !trimmed.isEmpty, trimmed != session.title else { return }
         onRenameSession(session.id, trimmed)
     }

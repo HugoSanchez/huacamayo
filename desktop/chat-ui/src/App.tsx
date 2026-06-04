@@ -806,6 +806,9 @@ export function App() {
         // adoptSession migrated PENDING → sessionId if the placeholder came
         // through there, so every SSE update from here on targets `sessionId`
         // — even if the user navigates away mid-stream.
+        updateSessionMessages(sessionId, (prev) => prev.map((message) =>
+          message.id === assistantId ? { ...message, sessionId } : message,
+        ));
 
         const abort = streamChatMessage(
           sessionId,
@@ -1365,6 +1368,23 @@ function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
     return { ...msg, content: msg.content + delta };
   }
 
+  if (event.type === 'reasoning_delta') {
+    const delta = typeof ev.delta === 'string' ? ev.delta : ev.delta?.text ?? ev.text ?? '';
+    if (!delta) return msg;
+    const reasoning = appendReasoningDelta(msg.reasoning, delta);
+    return { ...msg, reasoning, steps: appendReasoningStep(steps, delta) };
+  }
+
+  if (event.type === 'reasoning') {
+    const reasoning = typeof ev.reasoning === 'string' ? ev.reasoning.trim() : '';
+    if (!reasoning) return msg;
+    return {
+      ...msg,
+      reasoning: mergeFinalReasoning(msg.reasoning, reasoning),
+      steps: mergeFinalReasoningStep(steps, reasoning),
+    };
+  }
+
   if (event.type === 'result') {
     const text = ev.result ?? '';
     if (text) return { ...msg, content: text };
@@ -1384,12 +1404,55 @@ function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
 function toUiMessage(message: StoredChatMessage): ChatMessage {
   return {
     id: message.id,
+    sessionId: message.sessionId,
     role: message.role,
     content: message.content,
+    reasoning: message.reasoning,
     steps: message.steps,
     startedAt: message.startedAt,
     endedAt: message.endedAt,
   };
+}
+
+function appendReasoningDelta(existing: string | null | undefined, delta: string): string {
+  const current = typeof existing === 'string' ? existing : '';
+  return current + delta;
+}
+
+function mergeFinalReasoning(existing: string | null | undefined, next: string): string {
+  const current = typeof existing === 'string' ? existing.trim() : '';
+  if (!current) return next;
+  if (isSameReasoning(current, next)) return current;
+  return `${current}\n\n${next}`;
+}
+
+function appendReasoningStep(steps: ActivityStep[], delta: string): ActivityStep[] {
+  const items = [...steps];
+  const last = items[items.length - 1];
+  if (last?.type === 'reasoning') {
+    items[items.length - 1] = { ...last, text: last.text + delta };
+    return items;
+  }
+  return [...items, { type: 'reasoning', text: delta }];
+}
+
+function mergeFinalReasoningStep(steps: ActivityStep[], reasoning: string): ActivityStep[] {
+  const current = steps
+    .filter((step): step is Extract<ActivityStep, { type: 'reasoning' }> => step.type === 'reasoning')
+    .map((step) => step.text)
+    .join('\n\n');
+  if (current && isSameReasoning(current, reasoning)) return steps;
+  return [...steps, { type: 'reasoning', text: reasoning }];
+}
+
+function isSameReasoning(a: string, b: string): boolean {
+  const left = normalizeReasoningForCompare(a);
+  const right = normalizeReasoningForCompare(b);
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function normalizeReasoningForCompare(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 function stringifyToolResult(content: unknown): string {

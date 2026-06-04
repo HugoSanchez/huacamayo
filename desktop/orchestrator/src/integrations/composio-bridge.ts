@@ -52,18 +52,19 @@ export interface ToolUsageMetadata {
 // resources on a forgotten widget.
 const DRAFT_HOLD_TIMEOUT_MS = 10 * 60 * 1000;
 
-// Outcome of the held draft call, fed back to Hermes as the tool result.
-// - "sent": Verso already dispatched the message (Gmail, Slack). Agent does nothing further.
-// - "approved": user confirmed but agent must dispatch the send itself using the final_* values.
+// Channels where Verso dispatches the send itself (cleanest UX). For these the
+// draft tool returns immediately with `pending_review` — the model ends its
+// turn and the widget's Send button fires an independent /drafts/send call, so
+// the model never re-engages on send. Every other channel uses the held
+// pattern below, where the agent dispatches the send after approval.
+export const NATIVE_DRAFT_CHANNELS = new Set(['gmail', 'slack']);
+
+// Outcome of a HELD (generic-channel) draft call, fed back to Hermes as the
+// tool result. Native channels never produce one of these — they return
+// `pending_review` immediately instead.
+// - "approved": user confirmed; agent must dispatch the send itself using final_*.
 // - "rejected": user discarded the draft.
 export type DraftResolution =
-  | {
-      status: 'sent';
-      channel: string;
-      sent_via: string;
-      was_edited: boolean;
-      result: unknown;
-    }
   | {
       status: 'approved';
       was_edited: boolean;
@@ -186,11 +187,30 @@ export class ComposioBridgeService {
       throw new ComposioBridgeHttpError(400, 'Missing required object "arguments".');
     }
 
-    // propose_message_draft is held until the user approves or rejects via
-    // the inline widget. We don't call the remote bridge — we just wait. The
-    // resolution carries the (possibly edited) final values that the agent
-    // should use for the actual send tool call it makes next.
+    // propose_message_draft never reaches the remote bridge.
     if (slug.toUpperCase() === PROPOSE_MESSAGE_DRAFT_SLUG) {
+      const channel = typeof argumentRecord.channel === 'string'
+        ? argumentRecord.channel.trim().toLowerCase()
+        : '';
+
+      // Native channels (Slack/Gmail): return immediately so the model wraps
+      // up its turn ("I've prepared it for review"). Verso dispatches the
+      // actual send when the user clicks Send in the widget — the model is
+      // not involved, which is what makes that flow feel instant.
+      if (NATIVE_DRAFT_CHANNELS.has(channel)) {
+        return {
+          data: {
+            status: 'pending_review',
+            channel,
+            note: 'Draft surfaced to the user for review in Verso. The user will edit and send (or discard) it themselves, and Verso handles the actual send for this channel. Do NOT call any send tool. Reply in one short sentence that you have prepared it for review.',
+          },
+          error: null,
+          logId: null,
+        };
+      }
+
+      // Generic channels: hold the call open until the user approves/rejects,
+      // then hand the final values back so the agent dispatches the send.
       const resolution = await holdDraftForReview(argumentRecord);
       return {
         data: resolution,
