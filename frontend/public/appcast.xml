@@ -9,7 +9,7 @@
             <sparkle:shortVersionString>1.0.11</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.11/verso-1.0.11.dmg" length="173644926" type="application/octet-stream" sparkle:edSignature="GvHL5qEjn+0QBBZGn8pSsJzSUEpSBIJ/DOhBFC9FWJosTbbQ9Q21fTYRRDWvtB95NdkohewRudeL9aF+rDPCBg=="/>
+            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.11/verso-1.0.11.dmg" length="173504546" type="application/octet-stream" sparkle:edSignature="ZGDH6YW5aHhfDrSDcFMkG4StvU4Q0pQFuqINyJWEqF96pcYg28XNXW9fkgKDX6FnvfmnZWiM6kBWftNSDs9eCw=="/>
         </item>
         <item>
             <title>1.0.10</title>
