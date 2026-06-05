@@ -3,6 +3,15 @@
     <channel>
         <title>verso</title>
         <item>
+            <title>1.0.12</title>
+            <pubDate>Fri, 05 Jun 2026 17:14:47 +0200</pubDate>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>1.0.12</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.12/verso-1.0.12.dmg" length="173504441" type="application/octet-stream" sparkle:edSignature="TXPQYRuPNvi0j86HBFjGp9YgIbMRCFPqyluzMIb9NSd9WVKY8+ahVvlhL9Kmy+q0cEx3FAUVvuVn5U92/OQGBg=="/>
+        </item>
+        <item>
             <title>1.0.11</title>
             <pubDate>Mon, 01 Jun 2026 16:20:57 +0200</pubDate>
             <sparkle:version>12</sparkle:version>
@@ -19,15 +28,6 @@
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.10/verso-1.0.10.dmg" length="173642147" type="application/octet-stream" sparkle:edSignature="mqmO5Djw1dcdBfEUlAxh8XB+bJnTE2vtfrEJUDO1nlpsm0BE+TSLokf/IcRZn+BjUdA7JbHLpdAmRGXIZNI0AQ=="/>
-        </item>
-        <item>
-            <title>1.0.9</title>
-            <pubDate>Mon, 01 Jun 2026 12:23:29 +0200</pubDate>
-            <sparkle:version>10</sparkle:version>
-            <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.9/verso-1.0.9.dmg" length="172710613" type="application/octet-stream" sparkle:edSignature="P8X03FHvEkZwguG76ySY590EqwrleoP8OeFKsy/READt0FrH9SKzOfQlePBSpVHVoEnGTTULjHG4HhVAYButDQ=="/>
         </item>
     </channel>
 </rss>
