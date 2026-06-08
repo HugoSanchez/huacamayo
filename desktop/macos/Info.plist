@@ -23,7 +23,7 @@
 			<string>xyz.itsverso.app.auth</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>verso</string>
+				<string>$(VERSO_CALLBACK_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
