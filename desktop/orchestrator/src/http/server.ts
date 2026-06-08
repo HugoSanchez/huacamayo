@@ -22,8 +22,14 @@ import { ManagedBackendClient } from '../integrations/managed-backend-client.ts'
 import { readRuntimeMode } from '../integrations/runtime-mode.ts';
 import { buildManagedAccountRoutes } from './managed-account.ts';
 import { CodexAuthService, buildModelAuthRoutes } from './model-auth.ts';
+import { applyLocalStateIsolation, type LocalStateSnapshot } from './local-state.ts';
 
-function buildRoutes(store: ChatStore, hermes: HermesSupervisor, managedBackend: ManagedBackendClient): Route[] {
+function buildRoutes(
+  store: ChatStore,
+  hermes: HermesSupervisor,
+  managedBackend: ManagedBackendClient,
+  localState: LocalStateSnapshot,
+): Route[] {
   return [
     route('GET', '/health', async (_req, res) => {
       json(res, 200, { status: 'ok', timestamp: Date.now() });
@@ -41,6 +47,7 @@ function buildRoutes(store: ChatStore, hermes: HermesSupervisor, managedBackend:
         chat: buildChatDiagnostics(store),
         hermes: await hermes.getStatus(500),
         managed: await managedBackend.getAccount(),
+        localState,
       });
     }),
   ];
@@ -51,6 +58,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
+  const localState = applyLocalStateIsolation();
   const store = new ChatStore();
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
@@ -84,7 +92,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const cronDescriptions = new CronDescriptionsStore();
   const codexAuth = new CodexAuthService(hermes);
   const routes = [
-    ...buildRoutes(store, hermes, managedBackend),
+    ...buildRoutes(store, hermes, managedBackend, localState),
     ...buildComposioBridgeRoutes(composioBridge),
     ...buildDraftsRoutes(composioBridge, store),
     ...buildManagedAccountRoutes(managedBackend),

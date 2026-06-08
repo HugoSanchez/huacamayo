@@ -21,6 +21,7 @@ final class SidecarManager: ObservableObject {
     private var stdoutTailHandle: FileHandle?
     private var activityToken: NSObjectProtocol?
     private var stopRequested = false
+    private var launchGeneration = 0
     private var restartAttempts = 0
     private let maxRestartAttempts = 8
     private let logger = Logger(subsystem: "com.verso.app", category: "Sidecar")
@@ -107,6 +108,7 @@ final class SidecarManager: ObservableObject {
     }
 
     func updateManagedSession(_ session: ManagedAppSession?) {
+        let previousUserId = managedSession?.userId
         managedSession = session
         if let session {
             logger.info("Managed backend session updated for user \(session.userId, privacy: .public)")
@@ -115,11 +117,18 @@ final class SidecarManager: ObservableObject {
         }
         if port != nil {
             Task {
-                await pushManagedSession(session)
-                await refreshManagedAccount()
+                if shouldRestartForManagedSessionChange(previousUserId: previousUserId, nextUserId: session?.userId) {
+                    await clearManagedSessionBeforeRestart()
+                    restart()
+                } else {
+                    await pushManagedSession(session)
+                    await refreshManagedAccount()
+                }
             }
         } else if session == nil {
             managedAccount = nil
+        } else {
+            start()
         }
     }
 
@@ -130,17 +139,21 @@ final class SidecarManager: ObservableObject {
         }() else { return }
 
         stopRequested = false
+        launchGeneration += 1
+        let generation = launchGeneration
         beginActivityIfNeeded()
         state = .starting
 
         Task {
             do {
                 let detectedPort = try await launchProcess()
+                guard generation == launchGeneration, !stopRequested else { return }
                 state = .running(port: detectedPort)
                 restartAttempts = 0
                 logger.info("Sidecar running on port \(detectedPort)")
                 await refreshManagedAccount()
             } catch {
+                guard generation == launchGeneration, !stopRequested else { return }
                 state = .failed(error.localizedDescription)
                 logger.error("Sidecar failed: \(error.localizedDescription)")
                 Telemetry.reportError(error, context: "sidecar-launch")
@@ -151,6 +164,7 @@ final class SidecarManager: ObservableObject {
 
     func stop() {
         stopRequested = true
+        launchGeneration += 1
         if let process, process.isRunning {
             process.terminate()
             logger.info("Sidecar stopped")
@@ -165,6 +179,15 @@ final class SidecarManager: ObservableObject {
         endActivityIfNeeded()
         managedAccount = nil
         state = .idle
+    }
+
+    private func restart() {
+        stop()
+        start()
+    }
+
+    private func shouldRestartForManagedSessionChange(previousUserId: String?, nextUserId: String?) -> Bool {
+        previousUserId != nextUserId
     }
 
     func refreshManagedAccount() async {
@@ -225,6 +248,11 @@ final class SidecarManager: ObservableObject {
             logger.error("Managed session push failed: \(error.localizedDescription, privacy: .public)")
             Telemetry.reportError(error, context: "managed-session-push")
         }
+    }
+
+    private func clearManagedSessionBeforeRestart() async {
+        guard baseURL != nil else { return }
+        await pushManagedSession(nil)
     }
 
     deinit {
@@ -392,6 +420,41 @@ final class SidecarManager: ObservableObject {
             let resolver = StartupResolver(continuation: continuation)
             let stdoutAccumulator = StdoutAccumulator()
 
+            process.terminationHandler = { [weak self, weak logHandle] terminatedProcess in
+                let reason = Self.describeTermination(terminatedProcess)
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let logHandle {
+                        Self.appendToLog(handle: logHandle, text: "\n[verso] sidecar exited: \(reason) at \(Self.timestamp())\n")
+                    }
+
+                    let isCurrentProcess = self.process.map { $0 === terminatedProcess } ?? false
+                    if isCurrentProcess {
+                        self.stderrTailHandle?.readabilityHandler = nil
+                        self.stdoutTailHandle?.readabilityHandler = nil
+                        self.stderrTailHandle = nil
+                        self.stdoutTailHandle = nil
+                    }
+
+                    if !resolver.isResolved() {
+                        let stderrText = stderrBuffer.text()
+                        if let startup = Self.parseStartupError(stderrText) {
+                            resolver.resume(.failure(SidecarError.startupFailed(startup)))
+                        } else {
+                            resolver.resume(.failure(SidecarError.unexpectedExit))
+                        }
+                        return
+                    }
+
+                    guard isCurrentProcess else { return }
+                    if case .running = self.state {
+                        self.state = .failed("Sidecar exited: \(reason)")
+                        self.logger.error("Sidecar exited unexpectedly: \(reason, privacy: .public). Log: \(Self.logFileURL.path, privacy: .public)")
+                        self.scheduleRestart()
+                    }
+                }
+            }
+
             let stdoutReader = stdoutPipe.fileHandleForReading
             stdoutReader.readabilityHandler = { [weak self, weak logHandle] handle in
                 let chunk = handle.availableData
@@ -435,25 +498,6 @@ final class SidecarManager: ObservableObject {
                         resolver.resume(.failure(SidecarError.startupFailed(failure)))
                         return
                     }
-                }
-            }
-        }
-
-        process.terminationHandler = { [weak self] process in
-            let reason = Self.describeTermination(process)
-            Task { @MainActor in
-                guard let self else { return }
-                if let handle = self.logFileHandle {
-                    Self.appendToLog(handle: handle, text: "\n[verso] sidecar exited: \(reason) at \(Self.timestamp())\n")
-                }
-                self.stderrTailHandle?.readabilityHandler = nil
-                self.stdoutTailHandle?.readabilityHandler = nil
-                self.stderrTailHandle = nil
-                self.stdoutTailHandle = nil
-                if case .running = self.state {
-                    self.state = .failed("Sidecar exited: \(reason)")
-                    self.logger.error("Sidecar exited unexpectedly: \(reason, privacy: .public). Log: \(Self.logFileURL.path, privacy: .public)")
-                    self.scheduleRestart()
                 }
             }
         }

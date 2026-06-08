@@ -378,6 +378,10 @@ struct ContentView: View {
             guard let event = managedSessionStore.latestEvent else { return }
             showSidebarToast(event.message)
         }
+        .onChange(of: managedSessionStore.currentSession?.userId) { oldUserId, newUserId in
+            guard oldUserId != newUserId else { return }
+            clearShellStateForAccountChange()
+        }
     }
 
     @MainActor
@@ -709,6 +713,23 @@ struct ContentView: View {
     private func setSelectedSession(_ sessionId: String?) {
         selectedSessionId = sessionId
         persistedSelectedSessionId = sessionId ?? ""
+    }
+
+    @MainActor
+    private func clearShellStateForAccountChange() {
+        sessions = []
+        selectedSessionId = nil
+        persistedSelectedSessionId = ""
+        streamingSessionIds = []
+        unreadSessionIds = []
+        isLoadingSessions = false
+        sessionError = nil
+        connections = []
+        skills = []
+        crons = []
+        pendingCronOpen = nil
+        pendingSettingsOpen = nil
+        hasCompletedInitialSelection = false
     }
 
     private func resolveSelectedSessionId(

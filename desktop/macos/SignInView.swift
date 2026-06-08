@@ -86,7 +86,7 @@ struct SignInView: View {
         let configured = ProcessInfo.processInfo.environment["VERSO_FRONTEND_URL"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let raw = (configured?.isEmpty == false ? configured! : Self.defaultFrontendURL)
-        guard let url = URL(string: raw) else {
+        guard let url = Self.freshPrivySessionURL(from: raw) else {
             errorMessage = "Sign-in URL is not configured."
             return
         }
@@ -103,6 +103,25 @@ struct SignInView: View {
         return "http://127.0.0.1:3000/login"
         #else
         return "https://www.itsverso.xyz/login"
+        #endif
+    }
+
+    private static func freshPrivySessionURL(from raw: String) -> URL? {
+        guard var components = URLComponents(string: raw) else { return nil }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "fresh_privy_session" }
+        queryItems.removeAll { $0.name == "redirect_uri" }
+        queryItems.append(URLQueryItem(name: "fresh_privy_session", value: "1"))
+        queryItems.append(URLQueryItem(name: "redirect_uri", value: Self.callbackRedirectURI))
+        components.queryItems = queryItems
+        return components.url
+    }
+
+    private static var callbackRedirectURI: String {
+        #if DEBUG
+        return "verso-dev://auth/callback"
+        #else
+        return "verso://auth/callback"
         #endif
     }
 }

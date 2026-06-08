@@ -46,6 +46,7 @@ struct ManagedSessionEvent: Equatable {
 final class ManagedSessionStore: ObservableObject {
     private static let keychainService = "com.verso.managed-session"
     private static let keychainAccount = "current"
+    private static let supportedCallbackSchemes: Set<String> = ["verso", "verso-dev"]
 
     @Published private(set) var currentSession: ManagedAppSession?
     @Published private(set) var latestEvent: ManagedSessionEvent?
@@ -58,7 +59,7 @@ final class ManagedSessionStore: ObservableObject {
     }
 
     func handleCallbackURL(_ url: URL) {
-        guard url.scheme?.lowercased() == "verso" else { return }
+        guard Self.supportedCallbackSchemes.contains(url.scheme?.lowercased() ?? "") else { return }
         guard url.host?.lowercased() == "auth", url.path == "/callback" else {
             latestEvent = ManagedSessionEvent(id: UUID(), message: "Ignored unsupported auth callback URL.", isError: true)
             return
