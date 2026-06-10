@@ -14,6 +14,7 @@ import {
   seedHermesHomeFromBundle,
 } from './runtime-bootstrap.ts';
 import {
+  applyGBrainSoulSection,
   ensureGBrainInitialized,
   gbrainMcpServerConfig,
   type GBrainMcpToolMode,
@@ -848,11 +849,13 @@ export class HermesSupervisor {
     delete mcpServers.composio;
 
     const gbrain = resolveGBrainRuntimeConfig(this.managedHermesHome);
+    let gbrainToolsActive = false;
     if (gbrain.enabled && this.gbrainMcpMode !== 'none') {
       ensureGBrainInitialized(gbrain);
       const serverConfig = gbrainMcpServerConfig(gbrain, this.gbrainMcpMode);
       if (serverConfig) {
         mcpServers.gbrain = serverConfig;
+        gbrainToolsActive = true;
       } else {
         delete mcpServers.gbrain;
         console.warn(`[gbrain] enabled but unavailable: ${gbrain.reason ?? 'unknown reason'}`);
@@ -861,8 +864,28 @@ export class HermesSupervisor {
       delete mcpServers.gbrain;
     }
 
+    // Teach the visible agent that the gbrain tools ARE its memory —
+    // without this it pattern-matches "what do you know about X" to web
+    // search. Managed via marker comments so user SOUL edits survive, and
+    // removed again when the feature is off. The hidden worker profile is
+    // driven by an explicit extraction prompt and doesn't need it.
+    this.syncGBrainSoulSection(gbrainToolsActive && this.gbrainMcpMode === 'read');
+
     config.mcp_servers = mcpServers;
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
+  }
+
+  private syncGBrainSoulSection(enabled: boolean): void {
+    const soulPath = join(this.managedHermesHome, 'SOUL.md');
+    try {
+      const current = existsSync(soulPath) ? readFileSync(soulPath, 'utf8') : '';
+      const next = applyGBrainSoulSection(current, enabled);
+      if (next !== current) {
+        writeFileSync(soulPath, next, 'utf8');
+      }
+    } catch (error: unknown) {
+      console.warn(`[gbrain] SOUL.md memory section sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private captureLog(stream: 'stdout' | 'stderr', chunk: string): void {

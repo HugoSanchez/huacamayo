@@ -240,6 +240,65 @@ describe('HermesSupervisor: managed config override', () => {
     });
   });
 
+  it('adds the memory section to the visible profile SOUL.md when GBrain is enabled', () => {
+    const gbrainHome = path.join(tempRoot, 'gbrain-home');
+    mkdirSync(path.join(gbrainHome, '.gbrain'), { recursive: true });
+    writeFileSync(path.join(gbrainHome, '.gbrain', 'config.json'), '{}', 'utf8');
+    process.env.VERSO_GBRAIN_ENABLED = '1';
+    process.env.VERSO_GBRAIN_HOME = gbrainHome;
+    process.env.VERSO_GBRAIN_COMMAND = '/bin/echo';
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
+    expect(soul).toContain('<!-- verso:gbrain-memory:start -->');
+    expect(soul).toContain('## Your memory');
+    expect(soul).toContain('Check memory FIRST');
+  });
+
+  it('removes the memory section when GBrain is disabled', () => {
+    const gbrainHome = path.join(tempRoot, 'gbrain-home');
+    mkdirSync(path.join(gbrainHome, '.gbrain'), { recursive: true });
+    writeFileSync(path.join(gbrainHome, '.gbrain', 'config.json'), '{}', 'utf8');
+    process.env.VERSO_GBRAIN_ENABLED = '1';
+    process.env.VERSO_GBRAIN_HOME = gbrainHome;
+    process.env.VERSO_GBRAIN_COMMAND = '/bin/echo';
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+    expect(readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8')).toContain('## Your memory');
+
+    delete process.env.VERSO_GBRAIN_ENABLED;
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
+    expect(soul).not.toContain('## Your memory');
+    expect(soul).not.toContain('verso:gbrain-memory');
+  });
+
+  it('does not add the memory section to the hidden worker profile', () => {
+    const gbrainHome = path.join(tempRoot, 'gbrain-home');
+    const workerHome = path.join(tempRoot, 'profiles', 'verso-gbrain-worker');
+    mkdirSync(path.join(gbrainHome, '.gbrain'), { recursive: true });
+    writeFileSync(path.join(gbrainHome, '.gbrain', 'config.json'), '{}', 'utf8');
+    process.env.VERSO_GBRAIN_ENABLED = '1';
+    process.env.VERSO_GBRAIN_HOME = gbrainHome;
+    process.env.VERSO_GBRAIN_COMMAND = '/bin/echo';
+
+    const supervisor = new HermesSupervisor({
+      runtimeMode: 'managed',
+      managedProfileName: 'verso-gbrain-worker',
+      gbrainMcpMode: 'write',
+    });
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const soul = readFileSync(path.join(workerHome, 'SOUL.md'), 'utf8');
+    expect(soul).not.toContain('verso:gbrain-memory');
+  });
+
   it('adds full GBrain MCP config for the hidden worker profile', () => {
     const gbrainHome = path.join(tempRoot, 'gbrain-home');
     const workerHome = path.join(tempRoot, 'profiles', 'verso-gbrain-worker');

@@ -42,64 +42,64 @@ export type GBrainMcpToolMode = 'read' | 'write';
 const DEFAULT_SIGNAL_TIMEOUT_MS = 5 * 60_000;
 const EMBED_BACKFILL_TIMEOUT_MS = 15 * 60_000;
 
+/**
+ * Deliberately small: the visible agent only needs the recall surface.
+ * GBrain's full read scope (~60 tools: code intelligence, schema packs,
+ * takes, jobs, files, …) drowns out the memory tools during tool selection
+ * — the agent reached for web search instead of memory — and every exposed
+ * schema is re-sent to the model on each request.
+ */
 export const GBRAIN_READ_ONLY_TOOLS: readonly string[] = [
+  'search',
+  'recall',
   'get_page',
   'list_pages',
-  'search',
-  'query',
-  'search_by_image',
-  'get_tags',
   'get_links',
   'get_backlinks',
   'traverse_graph',
   'get_timeline',
-  'get_stats',
-  'get_health',
-  'get_versions',
-  'get_brain_identity',
-  'list_skills',
-  'get_skill',
-  'get_status_snapshot',
-  'get_raw_data',
   'resolve_slugs',
-  'get_chunks',
-  'get_ingest_log',
-  'file_list',
-  'file_url',
-  'get_job',
-  'list_jobs',
-  'get_job_progress',
-  'find_orphans',
-  'get_calibration_profile',
-  'takes_list',
-  'takes_search',
-  'think',
-  'takes_scorecard',
-  'takes_calibration',
-  'whoami',
-  'sources_list',
-  'sources_status',
-  'get_recent_salience',
-  'find_anomalies',
-  'get_recent_transcripts',
-  'recall',
-  'find_contradictions',
-  'find_experts',
-  'find_trajectory',
-  'code_callers',
-  'code_callees',
-  'code_def',
-  'code_refs',
-  'code_blast',
-  'code_flow',
-  'get_active_schema_pack',
-  'list_schema_packs',
-  'schema_stats',
-  'schema_lint',
-  'schema_graph',
-  'schema_explain_type',
-  'schema_review_orphans',
+  'get_stats',
 ];
+
+const GBRAIN_SOUL_START = '<!-- verso:gbrain-memory:start -->';
+const GBRAIN_SOUL_END = '<!-- verso:gbrain-memory:end -->';
+
+const GBRAIN_SOUL_SECTION = [
+  '## Your memory',
+  '',
+  'You have a persistent, private memory of your past conversations with this user, stored locally on their machine and accessed through the gbrain tools (search, recall, get_page, get_timeline, get_links, traverse_graph, ...).',
+  '',
+  '- Check memory FIRST — before web search and before answering from general knowledge — whenever the user asks about, or your answer could depend on: people, companies, projects, deals, decisions, preferences, or anything they may have discussed with you before.',
+  '- Questions like "what do you know about X?" or "what did we say about X?" are usually about YOUR memory of X, not the public internet. Search memory first; use the web only for fresh public information, and combine both when useful.',
+  '- When memory informs an answer, weave it in naturally ("From our earlier conversations, ...").',
+  '- If memory has nothing relevant, just proceed normally — do not mention the empty lookup.',
+].join('\n');
+
+/**
+ * Adds/removes the marker-delimited memory section in a SOUL.md document.
+ * Idempotent: re-applying replaces the managed block in place, and anything
+ * the user wrote outside the markers is preserved verbatim.
+ */
+export function applyGBrainSoulSection(soul: string, enabled: boolean): string {
+  const startIdx = soul.indexOf(GBRAIN_SOUL_START);
+  const endIdx = soul.indexOf(GBRAIN_SOUL_END);
+  let stripped = soul;
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    stripped = soul.slice(0, startIdx).trimEnd() + soul.slice(endIdx + GBRAIN_SOUL_END.length);
+  }
+  if (!enabled) {
+    return stripped.trimEnd() ? `${stripped.trimEnd()}\n` : stripped;
+  }
+  return [
+    stripped.trimEnd(),
+    '',
+    GBRAIN_SOUL_START,
+    GBRAIN_SOUL_SECTION,
+    GBRAIN_SOUL_END,
+    '',
+  ].join('\n');
+}
 
 export function isGBrainEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.VERSO_GBRAIN_ENABLED?.trim().toLowerCase();

@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSyn
 import os from 'node:os';
 import path from 'node:path';
 import {
+  applyGBrainSoulSection,
   ensureGBrainInitialized,
   gbrainMcpServerConfig,
   gbrainWantsEmbeddings,
@@ -282,6 +283,65 @@ describe('gbrainMcpServerConfig', () => {
 
     expect((serverConfig.env as Record<string, string>).OLLAMA_BASE_URL).toBe('http://127.0.0.1:17872/v1');
     expect(serverConfig.tools).toBeUndefined();
+  });
+});
+
+describe('applyGBrainSoulSection', () => {
+  const SOUL = '# Verso\n\nYou are a helpful assistant.\n';
+
+  it('appends the memory section when enabled', () => {
+    const result = applyGBrainSoulSection(SOUL, true);
+
+    expect(result).toContain('# Verso');
+    expect(result).toContain('<!-- verso:gbrain-memory:start -->');
+    expect(result).toContain('## Your memory');
+    expect(result).toContain('Check memory FIRST');
+    expect(result).toContain('<!-- verso:gbrain-memory:end -->');
+  });
+
+  it('is idempotent', () => {
+    const once = applyGBrainSoulSection(SOUL, true);
+    const twice = applyGBrainSoulSection(once, true);
+
+    expect(twice).toBe(once);
+    expect(twice.match(/## Your memory/g)).toHaveLength(1);
+  });
+
+  it('removes the section when disabled, restoring the original content', () => {
+    const withSection = applyGBrainSoulSection(SOUL, true);
+    const removed = applyGBrainSoulSection(withSection, false);
+
+    expect(removed).toBe(SOUL);
+  });
+
+  it('preserves user customizations outside the markers', () => {
+    const custom = '# Custom identity\n\nAlways answer in Spanish.\n';
+    const withSection = applyGBrainSoulSection(custom, true);
+
+    expect(withSection).toContain('Always answer in Spanish.');
+    expect(applyGBrainSoulSection(withSection, false)).toBe(custom);
+  });
+
+  it('replaces a stale managed block instead of stacking a new one', () => {
+    const stale = [
+      SOUL.trimEnd(),
+      '',
+      '<!-- verso:gbrain-memory:start -->',
+      'old instructions from a previous version',
+      '<!-- verso:gbrain-memory:end -->',
+      '',
+    ].join('\n');
+
+    const result = applyGBrainSoulSection(stale, true);
+
+    expect(result).not.toContain('old instructions');
+    expect(result.match(/verso:gbrain-memory:start/g)).toHaveLength(1);
+    expect(result).toContain('## Your memory');
+  });
+
+  it('leaves a section-free document untouched when disabled', () => {
+    expect(applyGBrainSoulSection(SOUL, false)).toBe(SOUL);
+    expect(applyGBrainSoulSection('', false)).toBe('');
   });
 });
 
