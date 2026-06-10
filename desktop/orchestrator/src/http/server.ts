@@ -9,6 +9,7 @@ import { ComposioToolUsageStore } from './composio-tool-usage-store.ts';
 import { buildConnectionsRoutes } from './connections.ts';
 import { ConnectionsStore } from './connections-store.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
+import { MemoryExtractionScheduler } from './memory-extraction.ts';
 import { dispatch, json, route, type Route } from './router.ts';
 import { buildSkillsRoutes, setSkillsDir } from './skills.ts';
 import { buildSkillsHubRoutes } from './skills-hub.ts';
@@ -16,6 +17,13 @@ import { HermesSkillsConfig } from './skills-store.ts';
 import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
 import { CronDescriptionsStore } from './cron-descriptions-store.ts';
+import {
+  getGBrainDiagnostics,
+  gbrainWantsEmbeddings,
+  resolveGBrainRuntimeConfig,
+  runGBrainEmbedBackfill,
+} from './gbrain.ts';
+import { EmbeddingRuntime } from './embeddings.ts';
 import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
 import { ConnectionsService } from '../integrations/composio.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
@@ -27,8 +35,10 @@ import { applyLocalStateIsolation, type LocalStateSnapshot } from './local-state
 function buildRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
+  memoryExtraction: MemoryExtractionScheduler,
   managedBackend: ManagedBackendClient,
   localState: LocalStateSnapshot,
+  embeddingRuntime: EmbeddingRuntime,
 ): Route[] {
   return [
     route('GET', '/health', async (_req, res) => {
@@ -44,8 +54,12 @@ function buildRoutes(
           cwd: process.cwd(),
           node: process.version,
         },
-        chat: buildChatDiagnostics(store),
+        chat: buildChatDiagnostics(store, memoryExtraction),
         hermes: await hermes.getStatus(500),
+        gbrain: {
+          ...getGBrainDiagnostics(hermes.hermesHome),
+          embeddingRuntime: embeddingRuntime.diagnostics(),
+        },
         managed: await managedBackend.getAccount(),
         localState,
       });
@@ -62,7 +76,20 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const store = new ChatStore();
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
-  const hermes = new HermesSupervisor({ runtimeMode });
+  const hermes = new HermesSupervisor({ runtimeMode, gbrainMcpMode: 'read' });
+  const gbrainWorkerHermes = new HermesSupervisor({
+    runtimeMode,
+    managedProfileName: 'verso-gbrain-worker',
+    gbrainMcpMode: 'write',
+  });
+  const gbrainRuntime = resolveGBrainRuntimeConfig(hermes.hermesHome);
+  const embeddingRuntime = new EmbeddingRuntime(gbrainRuntime.embedding);
+  const memoryExtraction = new MemoryExtractionScheduler(store, gbrainWorkerHermes, {
+    // Defer extraction (don't fail it) while the brain expects embeddings but
+    // the local server isn't up yet — e.g. the one-time model download on
+    // first run. Brains initialized without embeddings are never gated.
+    extractionGate: () => !gbrainWantsEmbeddings(gbrainRuntime.home) || embeddingRuntime.isReady(),
+  });
   const connectionsStore = new ConnectionsStore();
   const composioToolUsage = new ComposioToolUsageStore();
   const refreshComposioToolsManifest = () => {
@@ -92,7 +119,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const cronDescriptions = new CronDescriptionsStore();
   const codexAuth = new CodexAuthService(hermes);
   const routes = [
-    ...buildRoutes(store, hermes, managedBackend, localState),
+    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, localState, embeddingRuntime),
     ...buildComposioBridgeRoutes(composioBridge),
     ...buildDraftsRoutes(composioBridge, store),
     ...buildManagedAccountRoutes(managedBackend),
@@ -101,7 +128,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
     ...buildModelAuthRoutes(codexAuth),
-    ...buildChatRoutes(store, hermes, managedBackend),
+    ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction),
   ];
 
   const server = http.createServer((req, res) => {
@@ -109,6 +136,9 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   });
   server.on('close', () => {
     void hermes.shutdown();
+    memoryExtraction.stop();
+    void gbrainWorkerHermes.shutdown();
+    void embeddingRuntime.stop();
   });
 
   const port = opts.port ?? parseInt(process.env.PORT || '0', 10);
@@ -117,13 +147,38 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       server.close(() => resolve());
     });
     await hermes.shutdown();
+    memoryExtraction.stop();
+    await gbrainWorkerHermes.shutdown();
+    await embeddingRuntime.stop();
   };
+
+  // After every transition into 'ready' (first boot or a crash recovery),
+  // sweep up any pages that were written while the embedding server was
+  // unavailable. `embed --stale` is a cheap no-op when nothing is missing.
+  let backfillRunning = false;
+  embeddingRuntime.onReady(() => {
+    if (backfillRunning) return;
+    backfillRunning = true;
+    void runGBrainEmbedBackfill(gbrainRuntime)
+      .then((result) => {
+        if (result.ok) {
+          console.log(`[gbrain] embed backfill complete: ${result.detail}`);
+        } else {
+          console.warn(`[gbrain] embed backfill skipped/failed: ${result.detail}`);
+        }
+      })
+      .finally(() => {
+        backfillRunning = false;
+      });
+  });
 
   return new Promise((resolve) => {
     server.listen(port, '127.0.0.1', async () => {
       const addr = server.address() as { port: number };
       hermes.setOrchestratorBaseUrl(`http://127.0.0.1:${addr.port}`);
       hermes.prepare();
+      memoryExtraction.start();
+      void embeddingRuntime.start();
       resolve({ server, port: addr.port, close });
     });
   });

@@ -13,6 +13,12 @@ import {
   isBundledRuntime,
   seedHermesHomeFromBundle,
 } from './runtime-bootstrap.ts';
+import {
+  ensureGBrainInitialized,
+  gbrainMcpServerConfig,
+  type GBrainMcpToolMode,
+  resolveGBrainRuntimeConfig,
+} from './gbrain.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -174,6 +180,8 @@ export interface HermesSupervisorOptions {
   config?: HermesGatewayConfig;
   launch?: HermesLaunchConfig;
   runtimeMode?: RuntimeMode;
+  managedProfileName?: string;
+  gbrainMcpMode?: GBrainMcpToolMode | 'none';
 }
 
 // Skills the user must never be able to enable. They overlap with — and
@@ -210,7 +218,10 @@ export class HermesSupervisor {
   private readonly manualMode: boolean;
   private readonly managedHermesHome: string;
   private readonly templateHermesHome: string;
+  private readonly seedHermesHome: string;
   private readonly runtimeMode: RuntimeMode;
+  private readonly managedProfileName: string;
+  private readonly gbrainMcpMode: GBrainMcpToolMode | 'none';
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
@@ -227,10 +238,13 @@ export class HermesSupervisor {
     this.config = options.config ?? getHermesGatewayConfig();
     this.launch = options.launch ?? getHermesLaunchConfig();
     this.runtimeMode = options.runtimeMode ?? 'managed';
+    this.managedProfileName = options.managedProfileName ?? 'verso';
+    this.gbrainMcpMode = options.gbrainMcpMode ?? 'read';
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
-    this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
+    this.managedHermesHome = getManagedHermesHome(this.templateHermesHome, this.managedProfileName);
+    this.seedHermesHome = getManagedProfileSeedHome(this.templateHermesHome, this.managedProfileName);
     this.baseUrlResolved = this.hasExplicitBaseUrl;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
@@ -584,13 +598,13 @@ export class HermesSupervisor {
     this.migrateLegacyVervoProfile();
     mkdirSync(this.managedHermesHome, { recursive: true });
     const configExistedBeforeSeed = existsSync(join(this.managedHermesHome, 'config.yaml'));
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'auth.json');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'config.yaml');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, '.env');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'auth.json');
     this.syncManagedAuthStore();
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'SOUL.md');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'SOUL.md');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
     this.restoreManagedModelConfigIfProxyOwned();
@@ -629,7 +643,7 @@ export class HermesSupervisor {
   }
 
   private syncManagedAuthStore(): void {
-    const sourcePath = join(this.templateHermesHome, 'auth.json');
+    const sourcePath = join(this.seedHermesHome, 'auth.json');
     const targetPath = join(this.managedHermesHome, 'auth.json');
     if (sourcePath === targetPath || !existsSync(sourcePath)) return;
 
@@ -774,7 +788,7 @@ export class HermesSupervisor {
     const provider = typeof currentModel?.provider === 'string' ? currentModel.provider : '';
     if (provider !== 'custom' || !baseUrl.endsWith('/llm/v1')) return;
 
-    const templateModel = asRecord(readYamlRecord(join(this.templateHermesHome, 'config.yaml'))?.model);
+    const templateModel = asRecord(readYamlRecord(join(this.seedHermesHome, 'config.yaml'))?.model);
     if (templateModel) {
       config.model = templateModel;
     } else {
@@ -832,6 +846,20 @@ export class HermesSupervisor {
     // Do not register Composio's hosted MCP server directly with Hermes; raw
     // provider tool schemas are too unstable for the primary product path.
     delete mcpServers.composio;
+
+    const gbrain = resolveGBrainRuntimeConfig(this.managedHermesHome);
+    if (gbrain.enabled && this.gbrainMcpMode !== 'none') {
+      ensureGBrainInitialized(gbrain);
+      const serverConfig = gbrainMcpServerConfig(gbrain, this.gbrainMcpMode);
+      if (serverConfig) {
+        mcpServers.gbrain = serverConfig;
+      } else {
+        delete mcpServers.gbrain;
+        console.warn(`[gbrain] enabled but unavailable: ${gbrain.reason ?? 'unknown reason'}`);
+      }
+    } else {
+      delete mcpServers.gbrain;
+    }
 
     config.mcp_servers = mcpServers;
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
@@ -994,10 +1022,21 @@ function getTemplateHermesHome(): string {
     || join(os.homedir(), '.hermes');
 }
 
-function getManagedHermesHome(templateHome: string): string {
+function getManagedHermesHome(templateHome: string, profileName: string): string {
   const override = process.env.VERSO_HERMES_HOME?.trim();
-  if (override) return override;
-  return join(resolveHermesRoot(templateHome), 'profiles', 'verso');
+  if (override) {
+    return profileName === 'verso' ? override : `${override}-${profileName}`;
+  }
+  return join(resolveHermesRoot(templateHome), 'profiles', profileName);
+}
+
+function getManagedProfileSeedHome(templateHome: string, profileName: string): string {
+  if (profileName === 'verso') return templateHome;
+
+  const canonicalManagedHome = getManagedHermesHome(templateHome, 'verso');
+  return existsSync(join(canonicalManagedHome, 'config.yaml'))
+    ? canonicalManagedHome
+    : templateHome;
 }
 
 function resolveHermesRoot(home: string): string {

@@ -57,6 +57,32 @@ export interface DraftResolutionRecord {
   updatedAt: string;
 }
 
+export type MemoryExtractionStatus = 'idle' | 'pending' | 'running' | 'failed';
+
+export interface MemoryExtractionState {
+  sessionId: string;
+  status: MemoryExtractionStatus;
+  lastExtractedMessageId: string | null;
+  pendingSince: string | null;
+  runningStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface MemoryExtractionClaim {
+  session: ChatSessionRecord;
+  state: MemoryExtractionState;
+}
+
+export interface MemoryExtractionDiagnostics {
+  enabled: boolean;
+  idleThresholdMs: number;
+  counts: Record<MemoryExtractionStatus, number>;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+}
+
 function defaultStorePath(): string {
   return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'chat-sessions.sqlite');
 }
@@ -103,6 +129,20 @@ export class ChatStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (session_id, draft_id)
       );
+
+      CREATE TABLE IF NOT EXISTS memory_extraction_state (
+        session_id TEXT PRIMARY KEY REFERENCES chat_sessions(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK(status IN ('idle', 'pending', 'running', 'failed')),
+        last_extracted_message_id TEXT REFERENCES local_messages(id) ON DELETE SET NULL,
+        pending_since TEXT,
+        running_started_at TEXT,
+        last_completed_at TEXT,
+        last_error TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memory_extraction_status
+        ON memory_extraction_state(status, pending_since);
     `);
   }
 
@@ -199,6 +239,183 @@ export class ChatStore {
     };
   }
 
+  markMemoryExtractionPending(sessionId: string): MemoryExtractionState | null {
+    const session = this.getSessionRecord(sessionId);
+    if (!session) return null;
+
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO memory_extraction_state (
+        session_id, status, last_extracted_message_id, pending_since,
+        running_started_at, last_completed_at, last_error, updated_at
+      )
+      VALUES (?, 'pending', NULL, ?, NULL, NULL, NULL, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        status = 'pending',
+        pending_since = COALESCE(memory_extraction_state.pending_since, excluded.pending_since),
+        running_started_at = NULL,
+        last_error = NULL,
+        updated_at = excluded.updated_at
+    `).run(sessionId, now, now);
+
+    return this.getMemoryExtractionState(sessionId);
+  }
+
+  claimDueMemoryExtraction(idleThresholdMs: number, now = new Date()): MemoryExtractionClaim | null {
+    const cutoff = new Date(now.getTime() - idleThresholdMs).toISOString();
+    const row = this.db.prepare(`
+      SELECT
+        s.id, s.title, s.created_at, s.updated_at, s.hermes_session_id, s.archived_at,
+        m.status, m.last_extracted_message_id, m.pending_since, m.running_started_at,
+        m.last_completed_at, m.last_error, m.updated_at AS memory_updated_at
+      FROM memory_extraction_state m
+      JOIN chat_sessions s ON s.id = m.session_id
+      WHERE m.status = 'pending'
+        AND s.archived_at IS NULL
+        AND s.updated_at <= ?
+        AND EXISTS (
+          SELECT 1
+          FROM local_messages lm
+          WHERE lm.session_id = s.id
+            AND (m.last_extracted_message_id IS NULL OR lm.created_at > (
+              SELECT created_at FROM local_messages WHERE id = m.last_extracted_message_id
+            ))
+        )
+      ORDER BY s.updated_at ASC
+      LIMIT 1
+    `).get(cutoff) as (SessionRow & MemoryExtractionStateRow) | undefined;
+
+    if (!row) return null;
+
+    const startedAt = now.toISOString();
+    const result = this.db.prepare(`
+      UPDATE memory_extraction_state
+      SET status = 'running',
+          running_started_at = ?,
+          updated_at = ?
+      WHERE session_id = ?
+        AND status = 'pending'
+    `).run(startedAt, startedAt, row.id);
+
+    if (result.changes !== 1) return null;
+
+    return {
+      session: rowToSessionRecord(row),
+      state: rowToMemoryExtractionState({
+        session_id: row.id,
+        status: 'running',
+        last_extracted_message_id: row.last_extracted_message_id,
+        pending_since: row.pending_since,
+        running_started_at: startedAt,
+        last_completed_at: row.last_completed_at,
+        last_error: row.last_error,
+        updated_at: startedAt,
+      }),
+    };
+  }
+
+  completeMemoryExtraction(sessionId: string, lastExtractedMessageId: string): MemoryExtractionState | null {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE memory_extraction_state
+      SET status = 'idle',
+          last_extracted_message_id = ?,
+          pending_since = NULL,
+          running_started_at = NULL,
+          last_completed_at = ?,
+          last_error = NULL,
+          updated_at = ?
+      WHERE session_id = ?
+    `).run(lastExtractedMessageId, now, now, sessionId);
+    return this.getMemoryExtractionState(sessionId);
+  }
+
+  failMemoryExtraction(sessionId: string, error: string): MemoryExtractionState | null {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE memory_extraction_state
+      SET status = 'failed',
+          running_started_at = NULL,
+          last_error = ?,
+          updated_at = ?
+      WHERE session_id = ?
+    `).run(error.slice(0, 2000), now, sessionId);
+    return this.getMemoryExtractionState(sessionId);
+  }
+
+  resetStaleRunningMemoryExtractions(staleAfterMs: number, now = new Date()): number {
+    const cutoff = new Date(now.getTime() - staleAfterMs).toISOString();
+    const result = this.db.prepare(`
+      UPDATE memory_extraction_state
+      SET status = 'pending',
+          running_started_at = NULL,
+          updated_at = ?
+      WHERE status = 'running'
+        AND running_started_at <= ?
+    `).run(now.toISOString(), cutoff);
+    return Number(result.changes);
+  }
+
+  getMemoryExtractionState(sessionId: string): MemoryExtractionState | null {
+    const row = this.db.prepare(`
+      SELECT session_id, status, last_extracted_message_id, pending_since,
+             running_started_at, last_completed_at, last_error, updated_at
+      FROM memory_extraction_state
+      WHERE session_id = ?
+    `).get(sessionId) as MemoryExtractionStateRow | undefined;
+    return row ? rowToMemoryExtractionState(row) : null;
+  }
+
+  getMessagesForMemoryExtraction(
+    sessionId: string,
+    lastExtractedMessageId: string | null,
+  ): ChatMessageRecord[] {
+    const rows = this.db.prepare(`
+      SELECT id, session_id, role, content, created_at
+      FROM local_messages
+      WHERE session_id = ?
+        AND (? IS NULL OR created_at > (
+          SELECT created_at FROM local_messages WHERE id = ?
+        ))
+      ORDER BY created_at ASC, id ASC
+    `).all(sessionId, lastExtractedMessageId, lastExtractedMessageId) as unknown as MessageRow[];
+
+    return rows.map(rowToMessageRecord);
+  }
+
+  getMemoryExtractionDiagnostics(
+    enabled: boolean,
+    idleThresholdMs: number,
+  ): MemoryExtractionDiagnostics {
+    const counts: Record<MemoryExtractionStatus, number> = {
+      idle: 0,
+      pending: 0,
+      running: 0,
+      failed: 0,
+    };
+    const rows = this.db.prepare(`
+      SELECT status, COUNT(*) AS count
+      FROM memory_extraction_state
+      GROUP BY status
+    `).all() as Array<{ status: MemoryExtractionStatus; count: number }>;
+    for (const row of rows) {
+      if (row.status in counts) counts[row.status] = row.count;
+    }
+    const latest = this.db.prepare(`
+      SELECT last_completed_at, last_error
+      FROM memory_extraction_state
+      ORDER BY COALESCE(last_completed_at, updated_at) DESC
+      LIMIT 1
+    `).get() as { last_completed_at: string | null; last_error: string | null } | undefined;
+    return {
+      enabled,
+      idleThresholdMs,
+      counts,
+      lastCompletedAt: latest?.last_completed_at ?? null,
+      lastError: latest?.last_error ?? null,
+    };
+  }
+
   getMessages(sessionId: string): ChatMessageRecord[] | null {
     const exists = this.db.prepare(`
       SELECT 1
@@ -214,13 +431,7 @@ export class ChatStore {
       ORDER BY created_at ASC, id ASC
     `).all(sessionId) as unknown as MessageRow[];
 
-    return rows.map((row) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      role: row.role,
-      content: row.content,
-      createdAt: row.created_at,
-    }));
+    return rows.map(rowToMessageRecord);
   }
 
   linkHermesSession(sessionId: string, hermesSessionId: string): void {
@@ -364,6 +575,17 @@ interface DraftResolutionRow {
   updated_at: string;
 }
 
+interface MemoryExtractionStateRow {
+  session_id: string;
+  status: MemoryExtractionStatus;
+  last_extracted_message_id: string | null;
+  pending_since: string | null;
+  running_started_at: string | null;
+  last_completed_at: string | null;
+  last_error: string | null;
+  updated_at: string;
+}
+
 function rowToSessionRecord(row: SessionRow): ChatSessionRecord {
   return {
     id: row.id,
@@ -375,12 +597,35 @@ function rowToSessionRecord(row: SessionRow): ChatSessionRecord {
   };
 }
 
+function rowToMessageRecord(row: MessageRow): ChatMessageRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    role: row.role,
+    content: row.content,
+    createdAt: row.created_at,
+  };
+}
+
 function rowToDraftResolutionRecord(row: DraftResolutionRow): DraftResolutionRecord {
   return {
     sessionId: row.session_id,
     draftId: row.draft_id,
     status: row.status,
     channel: row.channel,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToMemoryExtractionState(row: MemoryExtractionStateRow): MemoryExtractionState {
+  return {
+    sessionId: row.session_id,
+    status: row.status,
+    lastExtractedMessageId: row.last_extracted_message_id,
+    pendingSince: row.pending_since,
+    runningStartedAt: row.running_started_at,
+    lastCompletedAt: row.last_completed_at,
+    lastError: row.last_error,
     updatedAt: row.updated_at,
   };
 }

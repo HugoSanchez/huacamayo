@@ -16,6 +16,7 @@ import {
   findSkillBySlug,
 } from './skills.ts';
 import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts';
+import { type MemoryExtractionScheduler } from './memory-extraction.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 
 type ChatStatus = 'idle' | 'running';
@@ -52,6 +53,7 @@ export function buildChatRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
   managedBackend: ManagedBackendClient,
+  memoryExtraction?: MemoryExtractionScheduler,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
@@ -201,7 +203,7 @@ export function buildChatRoutes(
           isFirstUserMessage,
           res,
           requestBaseUrl: requestBaseUrl(req),
-        }, store, hermes, managedBackend);
+        }, store, hermes, managedBackend, memoryExtraction);
       } catch (error: unknown) {
         if (isAbortError(error)) {
           sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
@@ -233,11 +235,15 @@ export function buildChatRoutes(
   ];
 }
 
-export function buildChatDiagnostics(store: ChatStore): {
+export function buildChatDiagnostics(
+  store: ChatStore,
+  memoryExtraction?: MemoryExtractionScheduler,
+): {
   status: ChatStatus;
   activeRequests: Array<Omit<ActiveChatRequest, 'close'>>;
   sessionCount: number;
   storePath: string;
+  memoryExtraction?: ReturnType<MemoryExtractionScheduler['diagnostics']>;
 } {
   return {
     status: activeRequests.size > 0 ? 'running' : 'idle',
@@ -249,6 +255,7 @@ export function buildChatDiagnostics(store: ChatStore): {
     })),
     sessionCount: store.listSessions().length,
     storePath: store.path,
+    ...(memoryExtraction ? { memoryExtraction: memoryExtraction.diagnostics() } : {}),
   };
 }
 
@@ -397,6 +404,7 @@ async function runHermesMessage(
   store: ChatStore,
   hermes: HermesSupervisor,
   managedBackend: ManagedBackendClient,
+  memoryExtraction?: MemoryExtractionScheduler,
 ): Promise<void> {
   let toolCallCount = 0;
   const controller = new AbortController();
@@ -585,6 +593,7 @@ async function runHermesMessage(
   }
 
   store.touchSession(opts.session.id);
+  memoryExtraction?.markPending(opts.session.id);
 
   managedBackend.recordAnalyticsEvent({
     eventType: 'message_completed',
