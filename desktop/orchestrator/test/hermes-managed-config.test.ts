@@ -255,7 +255,7 @@ describe('HermesSupervisor: managed config override', () => {
     const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
     expect(soul).toContain('<!-- verso:gbrain-memory:start -->');
     expect(soul).toContain('## Your memory');
-    expect(soul).toContain('Check memory FIRST');
+    expect(soul).toContain('Check memory first');
   });
 
   it('removes the memory section when GBrain is disabled', () => {

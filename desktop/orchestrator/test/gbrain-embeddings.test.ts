@@ -295,7 +295,7 @@ describe('applyGBrainSoulSection', () => {
     expect(result).toContain('# Verso');
     expect(result).toContain('<!-- verso:gbrain-memory:start -->');
     expect(result).toContain('## Your memory');
-    expect(result).toContain('Check memory FIRST');
+    expect(result).toContain('Check memory first');
     expect(result).toContain('<!-- verso:gbrain-memory:end -->');
   });
 
