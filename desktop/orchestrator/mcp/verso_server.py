@@ -26,6 +26,10 @@ from mcp.server.stdio import stdio_server
 SERVER_NAME = "verso"
 ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
 COMPOSIO_TOOLS_MANIFEST = os.environ.get("VERSO_COMPOSIO_TOOLS_MANIFEST", "").strip()
+# Memory tool surface for this Hermes profile: "read" (visible assistant),
+# "write" (hidden extraction worker), or unset/anything else for none. The
+# orchestrator owns the single GBrain process; these tools proxy to it.
+MEMORY_TOOLS_MODE = os.environ.get("VERSO_MEMORY_TOOLS", "").strip().lower()
 
 mcp = FastMCP(
     SERVER_NAME,
@@ -389,6 +393,112 @@ def _sanitize_connection_request(request: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
+def search_memory(query: str, limit: int | None = None) -> types.CallToolResult:
+    """Search your persistent memory of past conversations with this user.
+
+    The memory holds what the user has previously discussed: people,
+    companies, projects, deals, decisions, preferences, and commitments.
+    Use it before web search whenever the answer may involve anything the
+    user has talked about before. Returns matching memory pages with slugs,
+    scores, and snippets; fetch full pages with get_memory_page.
+    """
+
+    body: dict[str, Any] = {"query": query}
+    if isinstance(limit, int):
+        body["limit"] = limit
+    return _structured_result(_request("POST", "/memory/search", body))
+
+
+def get_memory_page(slug: str) -> types.CallToolResult:
+    """Read one full memory page by slug, as returned by search_memory."""
+
+    return _structured_result(_request("POST", "/memory/page", {"slug": slug}))
+
+
+def write_memory_page(slug: str, content: str) -> types.CallToolResult:
+    """Create or update a memory page.
+
+    Use slugs like people/jane-doe, companies/acme, deals/acme-renewal, or
+    wiki/concepts/some-topic. Content is full markdown, optionally with YAML
+    frontmatter. Writing a page does NOT create links or timeline entries —
+    call add_memory_link and add_memory_timeline explicitly.
+    """
+
+    return _structured_result(
+        _request("POST", "/memory/write-page", {"slug": slug, "content": content})
+    )
+
+
+def add_memory_link(
+    from_slug: str,
+    to_slug: str,
+    link_type: str | None = None,
+    context: str | None = None,
+) -> types.CallToolResult:
+    """Link two memory pages (e.g. a meeting page mentions a person page).
+
+    link_type is a short verb-like label such as mentions, works_at,
+    affiliated_with, negotiating_with.
+    """
+
+    body: dict[str, Any] = {"from": from_slug, "to": to_slug}
+    if link_type:
+        body["link_type"] = link_type
+    if context:
+        body["context"] = context
+    return _structured_result(_request("POST", "/memory/link", body))
+
+
+def add_memory_timeline(
+    slug: str,
+    date: str,
+    summary: str,
+    detail: str | None = None,
+) -> types.CallToolResult:
+    """Append a dated timeline entry to a memory page (date as YYYY-MM-DD)."""
+
+    body: dict[str, Any] = {"slug": slug, "date": date, "summary": summary}
+    if detail:
+        body["detail"] = detail
+    return _structured_result(_request("POST", "/memory/timeline", body))
+
+
+def log_memory_ingest(
+    source_ref: str,
+    summary: str,
+    pages_updated: list[str] | None = None,
+) -> types.CallToolResult:
+    """Record one extraction-run summary in the memory ingest log.
+
+    Call this exactly once at the end of a memory extraction pass — also for
+    zero-signal passes (with an empty pages_updated list).
+    """
+
+    return _structured_result(
+        _request(
+            "POST",
+            "/memory/ingest-log",
+            {
+                "source_ref": source_ref,
+                "summary": summary,
+                "pages_updated": pages_updated or [],
+            },
+        )
+    )
+
+
+def _register_memory_tools() -> None:
+    if MEMORY_TOOLS_MODE not in ("read", "write"):
+        return
+    mcp.tool()(search_memory)
+    mcp.tool()(get_memory_page)
+    if MEMORY_TOOLS_MODE == "write":
+        mcp.tool()(write_memory_page)
+        mcp.tool()(add_memory_link)
+        mcp.tool()(add_memory_timeline)
+        mcp.tool()(log_memory_ingest)
+
+
 async def _run_stdio_async() -> None:
     async with stdio_server() as (read_stream, write_stream):
         await mcp._mcp_server.run(  # noqa: SLF001
@@ -400,6 +510,7 @@ async def _run_stdio_async() -> None:
 
 def main() -> None:
     _register_manifest_tools()
+    _register_memory_tools()
     anyio.run(_run_stdio_async)
 
 

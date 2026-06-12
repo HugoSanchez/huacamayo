@@ -15,8 +15,6 @@ import {
 } from './runtime-bootstrap.ts';
 import {
   applyGBrainSoulSection,
-  ensureGBrainInitialized,
-  gbrainMcpServerConfig,
   type GBrainMcpToolMode,
   resolveGBrainRuntimeConfig,
 } from './gbrain.ts';
@@ -816,6 +814,9 @@ export class HermesSupervisor {
     const mcpServers = asRecord(config.mcp_servers) ?? {};
     delete mcpServers.vervo;
 
+    const gbrain = resolveGBrainRuntimeConfig(this.managedHermesHome);
+    const memoryToolsActive = gbrain.enabled && gbrain.command !== null && this.gbrainMcpMode !== 'none';
+
     if (this.orchestratorBaseUrl) {
       const pythonPath = resolveHermesPython(this.templateHermesHome);
       const serverPath = resolveversoMcpServerPath();
@@ -833,6 +834,13 @@ export class HermesSupervisor {
         if (bundled) {
           env.PYTHONPATH = bundled.sitePackages;
         }
+        // Memory tools are part of the verso bridge: the orchestrator owns
+        // the single GBrain process and the bridge proxies to it, so the
+        // per-profile surface is just an env switch ("read" for the visible
+        // agent, "write" for the hidden extraction worker).
+        if (memoryToolsActive) {
+          env.VERSO_MEMORY_TOOLS = this.gbrainMcpMode;
+        }
         mcpServers.verso = {
           command: pythonPath,
           args: [serverPath],
@@ -848,28 +856,18 @@ export class HermesSupervisor {
     // provider tool schemas are too unstable for the primary product path.
     delete mcpServers.composio;
 
-    const gbrain = resolveGBrainRuntimeConfig(this.managedHermesHome);
-    let gbrainToolsActive = false;
-    if (gbrain.enabled && this.gbrainMcpMode !== 'none') {
-      ensureGBrainInitialized(gbrain);
-      const serverConfig = gbrainMcpServerConfig(gbrain, this.gbrainMcpMode);
-      if (serverConfig) {
-        mcpServers.gbrain = serverConfig;
-        gbrainToolsActive = true;
-      } else {
-        delete mcpServers.gbrain;
-        console.warn(`[gbrain] enabled but unavailable: ${gbrain.reason ?? 'unknown reason'}`);
-      }
-    } else {
-      delete mcpServers.gbrain;
-    }
+    // GBrain must never be wired as a per-profile MCP server: PGLite is a
+    // single-process embedded DB and concurrent `gbrain serve` children
+    // corrupted it. The orchestrator owns the only GBrain process; agents
+    // reach memory through the verso bridge tools configured above.
+    delete mcpServers.gbrain;
 
-    // Teach the visible agent that the gbrain tools ARE its memory —
+    // Teach the visible agent that the memory tools ARE its memory —
     // without this it pattern-matches "what do you know about X" to web
     // search. Managed via marker comments so user SOUL edits survive, and
     // removed again when the feature is off. The hidden worker profile is
     // driven by an explicit extraction prompt and doesn't need it.
-    this.syncGBrainSoulSection(gbrainToolsActive && this.gbrainMcpMode === 'read');
+    this.syncGBrainSoulSection(memoryToolsActive && this.gbrainMcpMode === 'read');
 
     config.mcp_servers = mcpServers;
     writeFileSync(configPath, YAML.stringify(config), 'utf8');

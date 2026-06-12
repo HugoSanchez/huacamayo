@@ -42,25 +42,11 @@ export type GBrainMcpToolMode = 'read' | 'write';
 const DEFAULT_SIGNAL_TIMEOUT_MS = 5 * 60_000;
 const EMBED_BACKFILL_TIMEOUT_MS = 15 * 60_000;
 
-/**
- * Deliberately small: the visible agent only needs the recall surface.
- * GBrain's full read scope (~60 tools: code intelligence, schema packs,
- * takes, jobs, files, …) drowns out the memory tools during tool selection
- * — the agent reached for web search instead of memory — and every exposed
- * schema is re-sent to the model on each request.
- */
-export const GBRAIN_READ_ONLY_TOOLS: readonly string[] = [
-  'search',
-  'recall',
-  'get_page',
-  'list_pages',
-  'get_links',
-  'get_backlinks',
-  'traverse_graph',
-  'get_timeline',
-  'resolve_slugs',
-  'get_stats',
-];
+// Hermes profiles no longer talk to GBrain directly — PGLite is a
+// single-process embedded DB, and per-profile `gbrain serve` children
+// corrupted it (see memory.ts). The agent-facing surface is now the narrow
+// verso bridge tools (search_memory / write_memory_page / …), proxied
+// through the orchestrator's single owner process.
 
 const GBRAIN_SOUL_START = '<!-- verso:gbrain-memory:start -->';
 const GBRAIN_SOUL_END = '<!-- verso:gbrain-memory:end -->';
@@ -68,7 +54,7 @@ const GBRAIN_SOUL_END = '<!-- verso:gbrain-memory:end -->';
 const GBRAIN_SOUL_SECTION = [
   '## Your memory',
   '',
-  'You have a persistent, private memory of your past conversations with this user, stored locally on their machine and accessed through the gbrain tools (search, recall, get_page, get_timeline, get_links, traverse_graph, ...).',
+  'You have a persistent, private memory of your past conversations with this user, stored locally on their machine. Search it with the search_memory tool and read full entries with get_memory_page.',
   '',
   '- Check memory first — before web search and before answering from general knowledge — whenever your answer could depend on people, companies, projects, decisions, preferences, or anything the user may have discussed with you before.',
   '- When memory informs an answer, weave it in naturally ("From our earlier conversations, ...").',
@@ -292,29 +278,18 @@ function readGBrainConfig(home: string): { embedding_model?: string; embedding_d
   }
 }
 
-export function gbrainMcpServerConfig(
-  config: GBrainRuntimeConfig,
-  mode: GBrainMcpToolMode = 'read',
-): Record<string, unknown> | null {
-  if (!config.enabled || !config.command) return null;
-  const serverConfig: Record<string, unknown> = {
-    command: config.command,
-    args: [...config.argsPrefix, 'serve'],
-    env: {
-      GBRAIN_HOME: config.home,
-      MCP_STDIO: '1',
-      // Point the `ollama` embedding recipe at Verso's supervised local
-      // llama-server. Harmless when the brain was initialized without
-      // embeddings — nothing reads it then.
-      OLLAMA_BASE_URL: config.embedding.baseUrl,
-    },
-    timeout: 120,
-    connect_timeout: 60,
+/**
+ * Env for any process that owns the brain (the serve child, init/backfill
+ * CLI calls). OLLAMA_BASE_URL points the `ollama` embedding recipe at
+ * Verso's supervised local llama-server; harmless when the brain was
+ * initialized without embeddings.
+ */
+export function gbrainEnv(config: GBrainRuntimeConfig): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GBRAIN_HOME: config.home,
+    OLLAMA_BASE_URL: config.embedding.baseUrl,
   };
-  if (mode === 'read') {
-    serverConfig.tools = { include: [...GBRAIN_READ_ONLY_TOOLS] };
-  }
-  return serverConfig;
 }
 
 export function getGBrainDiagnostics(hermesHome: string): GBrainDiagnostics {
@@ -414,10 +389,10 @@ function buildSignalDetectionPrompt(opts: {
     message.content,
   ].join('\n')).join('\n\n');
   return [
-    'You are running the GBrain signal-detector skill silently for Verso.',
+    'You are running the Verso memory signal-detector silently in the background.',
     '',
     'Scan this idle conversation segment for original thinking, durable facts, decisions, preferences, commitments, and notable entity mentions.',
-    'Use the available GBrain MCP tools. Do not answer the user.',
+    'Use the verso memory tools (search_memory, get_memory_page, write_memory_page, add_memory_link, add_memory_timeline, log_memory_ingest). Do not answer the user.',
     '',
     'Session context:',
     `- Verso session id: ${sessionId}`,
@@ -425,13 +400,13 @@ function buildSignalDetectionPrompt(opts: {
     `- Extraction date: ${isoDate}`,
     '',
     'Required behavior:',
-    '- First call search for each notable person/company/concept before creating pages.',
-    '- Create or update useful pages with put_page only when the segment contains durable information worth remembering.',
-    '- Because remote put_page skips auto links and auto timeline, explicitly call add_link and add_timeline_entry where applicable.',
+    '- First call search_memory for each notable person/company/concept before creating pages.',
+    '- Create or update useful pages with write_memory_page only when the segment contains durable information worth remembering.',
+    '- Page writes do not create links or timeline entries automatically; explicitly call add_memory_link and add_memory_timeline where applicable.',
     '- Add citations for every fact using this source format:',
     `  [Source: User, Verso chat, ${isoDate}]`,
-    '- Log the ingest with one concise signal summary.',
-    '- If there is nothing to capture, do not write pages; just log a zero-signal summary if log_ingest is available.',
+    '- Log the ingest with one concise signal summary via log_memory_ingest.',
+    '- If there is nothing to capture, do not write pages; just log a zero-signal summary.',
     '',
     'Conversation segment:',
     transcript,
@@ -448,14 +423,6 @@ function runGBrain(config: GBrainRuntimeConfig, args: string[]): ReturnType<type
     encoding: 'utf8',
     timeout: 60_000,
   });
-}
-
-function gbrainEnv(config: GBrainRuntimeConfig): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    GBRAIN_HOME: config.home,
-    OLLAMA_BASE_URL: config.embedding.baseUrl,
-  };
 }
 
 function formatSpawnFailure(result: ReturnType<typeof spawnSync>): string {

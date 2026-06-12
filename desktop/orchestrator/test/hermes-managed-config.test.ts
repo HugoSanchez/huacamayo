@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
 import { HermesSupervisor } from '../src/http/hermes-supervisor.ts';
-import { GBRAIN_READ_ONLY_TOOLS } from '../src/http/gbrain.ts';
 
 /**
  * Verifies that HermesSupervisor's managed-mode seeding preserves Hermes'
@@ -206,7 +205,9 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.mcp_servers?.composio).toBeUndefined();
   });
 
-  it('adds GBrain MCP config when the feature flag is enabled', () => {
+  it('never wires GBrain as a per-profile MCP server, even with the flag on', () => {
+    // PGLite is a single-process embedded DB: per-profile `gbrain serve`
+    // children corrupted it. Memory access goes through the verso bridge.
     const gbrainHome = path.join(tempRoot, 'gbrain-home');
     mkdirSync(path.join(gbrainHome, '.gbrain'), { recursive: true });
     writeFileSync(path.join(gbrainHome, '.gbrain', 'config.json'), '{}', 'utf8');
@@ -220,24 +221,93 @@ describe('HermesSupervisor: managed config override', () => {
     (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
 
     const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
-      mcp_servers?: Record<string, {
-        command?: string;
-        args?: string[];
-        env?: Record<string, string>;
-      }>;
+      mcp_servers?: Record<string, unknown>;
     };
-    expect(parsed.mcp_servers?.gbrain).toEqual({
-      command: '/bin/echo',
-      args: ['/tmp/gbrain/src/cli.ts', 'serve'],
-      env: {
-        GBRAIN_HOME: gbrainHome,
-        MCP_STDIO: '1',
-        OLLAMA_BASE_URL: 'http://127.0.0.1:17872/v1',
-      },
-      timeout: 120,
-      connect_timeout: 60,
-      tools: { include: [...GBRAIN_READ_ONLY_TOOLS] },
+    expect(parsed.mcp_servers?.gbrain).toBeUndefined();
+  });
+
+  it('removes a stale per-profile GBrain MCP entry from an older install', () => {
+    const gbrainHome = path.join(tempRoot, 'gbrain-home');
+    mkdirSync(path.join(gbrainHome, '.gbrain'), { recursive: true });
+    writeFileSync(path.join(gbrainHome, '.gbrain', 'config.json'), '{}', 'utf8');
+    process.env.VERSO_GBRAIN_ENABLED = '1';
+    process.env.VERSO_GBRAIN_HOME = gbrainHome;
+    process.env.VERSO_GBRAIN_COMMAND = '/bin/echo';
+
+    mkdirSync(managedHome, { recursive: true });
+    writeFileSync(path.join(managedHome, 'config.yaml'), [
+      'model:',
+      '  provider: openai-codex',
+      'mcp_servers:',
+      '  gbrain:',
+      '    command: /Users/someone/.bun/bin/bun',
+      '    args:',
+      '      - /tmp/gbrain/src/cli.ts',
+      '      - serve',
+    ].join('\n'), 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, unknown>;
+    };
+    expect(parsed.mcp_servers?.gbrain).toBeUndefined();
+  });
+
+  it('exposes memory tools through the verso bridge env per profile', () => {
+    const gbrainHome = path.join(tempRoot, 'gbrain-home');
+    mkdirSync(path.join(gbrainHome, '.gbrain'), { recursive: true });
+    writeFileSync(path.join(gbrainHome, '.gbrain', 'config.json'), '{}', 'utf8');
+    process.env.VERSO_GBRAIN_ENABLED = '1';
+    process.env.VERSO_GBRAIN_HOME = gbrainHome;
+    process.env.VERSO_GBRAIN_COMMAND = '/bin/echo';
+    // Make resolveHermesPython resolve inside the temp template home so the
+    // verso bridge block is generated in this test environment.
+    const fakePython = path.join(tempRoot, 'hermes-agent', 'venv', 'bin', 'python');
+    mkdirSync(path.dirname(fakePython), { recursive: true });
+    writeFileSync(fakePython, '#!/bin/sh\n', 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(parsed.mcp_servers?.verso?.env?.VERSO_MEMORY_TOOLS).toBe('read');
+
+    // Worker profile gets the write surface.
+    const workerSupervisor = new HermesSupervisor({
+      runtimeMode: 'managed',
+      managedProfileName: 'verso-gbrain-worker',
+      gbrainMcpMode: 'write',
     });
+    workerSupervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (workerSupervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const workerHome = path.join(tempRoot, 'profiles', 'verso-gbrain-worker');
+    const workerParsed = YAML.parse(readFileSync(path.join(workerHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(workerParsed.mcp_servers?.verso?.env?.VERSO_MEMORY_TOOLS).toBe('write');
+    expect(workerParsed.mcp_servers?.gbrain).toBeUndefined();
+  });
+
+  it('omits the memory tools env when GBrain is disabled', () => {
+    const fakePython = path.join(tempRoot, 'hermes-agent', 'venv', 'bin', 'python');
+    mkdirSync(path.dirname(fakePython), { recursive: true });
+    writeFileSync(fakePython, '#!/bin/sh\n', 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(parsed.mcp_servers?.verso?.env?.VERSO_MEMORY_TOOLS).toBeUndefined();
   });
 
   it('adds the memory section to the visible profile SOUL.md when GBrain is enabled', () => {
@@ -299,7 +369,7 @@ describe('HermesSupervisor: managed config override', () => {
     expect(soul).not.toContain('verso:gbrain-memory');
   });
 
-  it('adds full GBrain MCP config for the hidden worker profile', () => {
+  it('seeds the hidden worker profile from the visible profile without direct GBrain access', () => {
     const gbrainHome = path.join(tempRoot, 'gbrain-home');
     const workerHome = path.join(tempRoot, 'profiles', 'verso-gbrain-worker');
     writeFileSync(path.join(tempRoot, 'config.yaml'), [
@@ -344,12 +414,7 @@ describe('HermesSupervisor: managed config override', () => {
     const parsed = YAML.parse(readFileSync(path.join(workerHome, 'config.yaml'), 'utf8')) as {
       model?: Record<string, unknown>;
       agent?: Record<string, unknown>;
-      mcp_servers?: Record<string, {
-        command?: string;
-        args?: string[];
-        env?: Record<string, string>;
-        tools?: unknown;
-      }>;
+      mcp_servers?: Record<string, unknown>;
     };
     expect(parsed.model).toEqual({
       provider: 'openai-codex',
@@ -357,18 +422,7 @@ describe('HermesSupervisor: managed config override', () => {
       base_url: 'https://chatgpt.com/backend-api/codex',
     });
     expect(parsed.agent).toEqual({ max_turns: 45 });
-    expect(parsed.mcp_servers?.gbrain).toMatchObject({
-      command: '/bin/echo',
-      args: ['/tmp/gbrain/src/cli.ts', 'serve'],
-      env: {
-        GBRAIN_HOME: gbrainHome,
-        MCP_STDIO: '1',
-        OLLAMA_BASE_URL: 'http://127.0.0.1:17872/v1',
-      },
-      timeout: 120,
-      connect_timeout: 60,
-    });
-    expect(parsed.mcp_servers?.gbrain.tools).toBeUndefined();
+    expect(parsed.mcp_servers?.gbrain).toBeUndefined();
     const auth = JSON.parse(readFileSync(path.join(workerHome, 'auth.json'), 'utf8')) as Record<string, unknown>;
     expect(auth.active_provider).toBe('openai-codex');
   });

@@ -5,11 +5,10 @@ import path from 'node:path';
 import {
   applyGBrainSoulSection,
   ensureGBrainInitialized,
-  gbrainMcpServerConfig,
+  gbrainEnv,
   gbrainWantsEmbeddings,
   resolveGBrainRuntimeConfig,
   runGBrainEmbedBackfill,
-  GBRAIN_READ_ONLY_TOOLS,
 } from '../src/http/gbrain.ts';
 
 const ENV_KEYS = [
@@ -257,32 +256,15 @@ describe('gbrainWantsEmbeddings', () => {
   });
 });
 
-describe('gbrainMcpServerConfig', () => {
-  it('injects the local embedding endpoint for the read-only profile', () => {
+describe('gbrainEnv', () => {
+  it('carries the brain home and local embedding endpoint', () => {
     process.env.VERSO_GBRAIN_COMMAND = writeFakeGBrain();
     process.env.VERSO_EMBEDDINGS_PORT = '19500';
 
-    const config = resolveGBrainRuntimeConfig(hermesHome());
-    const serverConfig = gbrainMcpServerConfig(config, 'read');
+    const env = gbrainEnv(resolveGBrainRuntimeConfig(hermesHome()));
 
-    expect(serverConfig).toMatchObject({
-      env: {
-        GBRAIN_HOME: gbrainHome(),
-        MCP_STDIO: '1',
-        OLLAMA_BASE_URL: 'http://127.0.0.1:19500/v1',
-      },
-      tools: { include: [...GBRAIN_READ_ONLY_TOOLS] },
-    });
-  });
-
-  it('injects the endpoint for the write profile without a tool allowlist', () => {
-    process.env.VERSO_GBRAIN_COMMAND = writeFakeGBrain();
-
-    const config = resolveGBrainRuntimeConfig(hermesHome());
-    const serverConfig = gbrainMcpServerConfig(config, 'write') as Record<string, unknown>;
-
-    expect((serverConfig.env as Record<string, string>).OLLAMA_BASE_URL).toBe('http://127.0.0.1:17872/v1');
-    expect(serverConfig.tools).toBeUndefined();
+    expect(env.GBRAIN_HOME).toBe(gbrainHome());
+    expect(env.OLLAMA_BASE_URL).toBe('http://127.0.0.1:19500/v1');
   });
 });
 
@@ -296,6 +278,8 @@ describe('applyGBrainSoulSection', () => {
     expect(result).toContain('<!-- verso:gbrain-memory:start -->');
     expect(result).toContain('## Your memory');
     expect(result).toContain('Check memory first');
+    expect(result).toContain('search_memory');
+    expect(result).toContain('get_memory_page');
     expect(result).toContain('<!-- verso:gbrain-memory:end -->');
   });
 

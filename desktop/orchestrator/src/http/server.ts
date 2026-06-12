@@ -18,12 +18,14 @@ import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
 import { CronDescriptionsStore } from './cron-descriptions-store.ts';
 import {
+  ensureGBrainInitialized,
   getGBrainDiagnostics,
   gbrainWantsEmbeddings,
   resolveGBrainRuntimeConfig,
   runGBrainEmbedBackfill,
 } from './gbrain.ts';
 import { EmbeddingRuntime } from './embeddings.ts';
+import { buildMemoryRoutes, GBrainMemoryRuntime } from './memory.ts';
 import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
 import { ConnectionsService } from '../integrations/composio.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
@@ -39,6 +41,7 @@ function buildRoutes(
   managedBackend: ManagedBackendClient,
   localState: LocalStateSnapshot,
   embeddingRuntime: EmbeddingRuntime,
+  memoryRuntime: GBrainMemoryRuntime,
 ): Route[] {
   return [
     route('GET', '/health', async (_req, res) => {
@@ -59,6 +62,7 @@ function buildRoutes(
         gbrain: {
           ...getGBrainDiagnostics(hermes.hermesHome),
           embeddingRuntime: embeddingRuntime.diagnostics(),
+          memoryRuntime: memoryRuntime.diagnostics(),
         },
         managed: await managedBackend.getAccount(),
         localState,
@@ -84,11 +88,35 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   });
   const gbrainRuntime = resolveGBrainRuntimeConfig(hermes.hermesHome);
   const embeddingRuntime = new EmbeddingRuntime(gbrainRuntime.embedding);
+  let embeddingStart: Promise<void> = Promise.resolve();
+  const memoryRuntime = new GBrainMemoryRuntime(gbrainRuntime, {
+    // PGLite is single-process: CLI work against the brain (init, embed
+    // backfill) is only safe before the long-lived serve child spawns. The
+    // backfill waits briefly for the local embedding server; on a first run
+    // (model still downloading) it skips — pages written later are embedded
+    // inline at write time anyway.
+    prepare: async () => {
+      ensureGBrainInitialized(gbrainRuntime);
+      await Promise.race([embeddingStart, delay(15_000)]);
+      if (gbrainWantsEmbeddings(gbrainRuntime.home) && embeddingRuntime.isReady()) {
+        const result = await runGBrainEmbedBackfill(gbrainRuntime);
+        if (result.ok) {
+          console.log(`[gbrain] embed backfill complete: ${result.detail}`);
+        } else {
+          console.warn(`[gbrain] embed backfill skipped/failed: ${result.detail}`);
+        }
+      }
+    },
+  });
   const memoryExtraction = new MemoryExtractionScheduler(store, gbrainWorkerHermes, {
-    // Defer extraction (don't fail it) while the brain expects embeddings but
-    // the local server isn't up yet — e.g. the one-time model download on
-    // first run. Brains initialized without embeddings are never gated.
-    extractionGate: () => !gbrainWantsEmbeddings(gbrainRuntime.home) || embeddingRuntime.isReady(),
+    // Defer extraction (don't fail it) until the memory stack can actually
+    // accept writes: the single GBrain owner process must be up, and when
+    // the brain expects embeddings the local embedding server must be ready
+    // too (e.g. not mid model-download on first run) because page writes
+    // embed inline and propagate failures.
+    extractionGate: () =>
+      memoryRuntime.isReady()
+      && (!gbrainWantsEmbeddings(gbrainRuntime.home) || embeddingRuntime.isReady()),
   });
   const connectionsStore = new ConnectionsStore();
   const composioToolUsage = new ComposioToolUsageStore();
@@ -119,7 +147,8 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const cronDescriptions = new CronDescriptionsStore();
   const codexAuth = new CodexAuthService(hermes);
   const routes = [
-    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, localState, embeddingRuntime),
+    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, localState, embeddingRuntime, memoryRuntime),
+    ...buildMemoryRoutes(memoryRuntime),
     ...buildComposioBridgeRoutes(composioBridge),
     ...buildDraftsRoutes(composioBridge, store),
     ...buildManagedAccountRoutes(managedBackend),
@@ -138,6 +167,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     void hermes.shutdown();
     memoryExtraction.stop();
     void gbrainWorkerHermes.shutdown();
+    void memoryRuntime.stop();
     void embeddingRuntime.stop();
   });
 
@@ -149,38 +179,30 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     await hermes.shutdown();
     memoryExtraction.stop();
     await gbrainWorkerHermes.shutdown();
+    await memoryRuntime.stop();
     await embeddingRuntime.stop();
   };
-
-  // After every transition into 'ready' (first boot or a crash recovery),
-  // sweep up any pages that were written while the embedding server was
-  // unavailable. `embed --stale` is a cheap no-op when nothing is missing.
-  let backfillRunning = false;
-  embeddingRuntime.onReady(() => {
-    if (backfillRunning) return;
-    backfillRunning = true;
-    void runGBrainEmbedBackfill(gbrainRuntime)
-      .then((result) => {
-        if (result.ok) {
-          console.log(`[gbrain] embed backfill complete: ${result.detail}`);
-        } else {
-          console.warn(`[gbrain] embed backfill skipped/failed: ${result.detail}`);
-        }
-      })
-      .finally(() => {
-        backfillRunning = false;
-      });
-  });
 
   return new Promise((resolve) => {
     server.listen(port, '127.0.0.1', async () => {
       const addr = server.address() as { port: number };
-      hermes.setOrchestratorBaseUrl(`http://127.0.0.1:${addr.port}`);
+      const baseUrl = `http://127.0.0.1:${addr.port}`;
+      hermes.setOrchestratorBaseUrl(baseUrl);
+      // The hidden worker reaches memory through the verso bridge too, so it
+      // needs the orchestrator URL just like the visible profile.
+      gbrainWorkerHermes.setOrchestratorBaseUrl(baseUrl);
       hermes.prepare();
       memoryExtraction.start();
-      void embeddingRuntime.start();
+      embeddingStart = embeddingRuntime.start();
+      void memoryRuntime.start();
       resolve({ server, port: addr.port, close });
     });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref();
   });
 }
 
