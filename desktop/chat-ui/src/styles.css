@@ -20,6 +20,9 @@
   --scrollbar: rgba(255, 255, 255, 0.12);
   --card-bg: rgba(255, 255, 255, 0.05);
   --card-border: rgba(255, 255, 255, 0.12);
+  /* Shared cap so the response, the activity (thinking/tools), and the footer
+     all line up at the same width inside an assistant turn. */
+  --assistant-content-max-width: 820px;
 }
 
 html, body, #root {
@@ -537,7 +540,7 @@ textarea {
 /* Markdown content */
 .assistant-message-content {
   width: 100%;
-  max-width: 820px;
+  max-width: var(--assistant-content-max-width);
 }
 
 .message-content h1,
@@ -709,10 +712,12 @@ textarea {
 
 .assistant-activity-wrap {
   margin-bottom: 8px;
+  max-width: var(--assistant-content-max-width);
 }
 
 .assistant-message-footer-wrap {
   margin-top: 7px;
+  max-width: var(--assistant-content-max-width);
 }
 
 .assistant-message-footer {
