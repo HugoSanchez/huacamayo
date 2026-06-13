@@ -43,7 +43,7 @@ PYTHON_VERSION="3.11.15"
 # NousResearch/hermes-agent commit to snapshot. Pin to a specific SHA so
 # Release builds don't drift with upstream main. Bump intentionally.
 HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
-HERMES_REF="edff2fbe7efd7d1798b6f6116d2e4b55b3ce69f9"
+HERMES_REF="3c231eb3979ab9c57d5cd6d02f1d577a3b718b43"
 
 # Optional extras to install with Hermes. Keep lean — voice/messaging are huge
 # and not needed for the macOS UI flow.
@@ -55,7 +55,7 @@ HERMES_EXTRAS="mcp,cli,cron"
 # cron-only mode and the orchestrator can't reach it. Not in mcp/cli/cron
 # extras (only listed under messaging/homeassistant/sms), so we pin it
 # directly. Without this, hermes logs "API Server: aiohttp not installed".
-HERMES_EXTRA_PINS=("aiohttp>=3.9,<4")
+HERMES_EXTRA_PINS=("aiohttp==3.13.3")
 
 # Target architecture(s) we ship. arm64-only for v1 — add "x86_64" back here
 # (and to the per-arch loops below) when we have Intel-Mac friends to support.
