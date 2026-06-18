@@ -179,6 +179,7 @@ export class ComposioBridgeService {
   async executeTool(
     toolSlug: string,
     arguments_: Record<string, unknown>,
+    opts: { recordUsage?: boolean } = {},
   ): Promise<ComposioBridgeToolExecutionView> {
     const slug = toolSlug.trim();
     if (!slug) throw new ComposioBridgeHttpError(400, 'Missing "toolSlug"');
@@ -222,7 +223,9 @@ export class ComposioBridgeService {
     this.assertConfigured();
     try {
       const result = await this.bridgeClient.executeTool(slug, argumentRecord);
-      if (!result.error) {
+      if (!result.error && opts.recordUsage !== false) {
+        // Background ingestion fetches pass recordUsage:false so read/list
+        // tools are not surfaced/ranked in the visible agent's tool manifest.
         await this.recordSuccessfulToolUse(slug).catch(() => undefined);
       }
       return result;

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveEmbeddingRuntimeConfig, type EmbeddingRuntimeConfig } from './embeddings.ts';
 
-interface HermesGatewayConfig {
+export interface HermesGatewayConfig {
   baseUrl: string;
   apiKey: string | null;
 }
@@ -410,6 +410,114 @@ function buildSignalDetectionPrompt(opts: {
     '',
     'Conversation segment:',
     transcript,
+  ].join('\n');
+}
+
+export function runGBrainSourceIngestion(
+  config: HermesGatewayConfig,
+  opts: {
+    source: string;
+    stream: string;
+    items: Array<{ sourceRef: string; occurredAt: string; content: string }>;
+    timestamp?: Date;
+  },
+): Promise<void> {
+  if (!isGBrainEnabled()) return Promise.resolve();
+  if (opts.items.length === 0) return Promise.resolve();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), signalDetectionTimeoutMs());
+  const timestamp = opts.timestamp ?? new Date();
+  const streamSuffix = opts.stream ? `-${opts.stream}` : '';
+  const conversation = `verso-ingest-${opts.source}${streamSuffix}-${timestamp.getTime()}`;
+
+  return fetch(`${config.baseUrl}/v1/responses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...hermesGatewayAuthHeaders(config) },
+    body: JSON.stringify({
+      conversation,
+      input: buildSourceIngestionPrompt({
+        source: opts.source,
+        stream: opts.stream,
+        items: opts.items,
+        timestamp,
+      }),
+      truncation: 'auto',
+      stream: false,
+      store: false,
+    }),
+    signal: controller.signal,
+  }).then(async (res) => {
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`GBrain source ingestion failed HTTP ${res.status}${body ? `: ${body}` : ''}`);
+    }
+    await res.arrayBuffer().catch(() => undefined);
+    console.log(`[gbrain] source ingestion completed for ${opts.source}${streamSuffix} (${opts.items.length} items)`);
+  }).catch((error: unknown) => {
+    if ((error as Error)?.name === 'AbortError') {
+      throw new Error(`GBrain source ingestion timed out for ${opts.source}${streamSuffix}`);
+    }
+    throw error;
+  }).finally(() => {
+    clearTimeout(timeout);
+  });
+}
+
+function sourceDisplayName(source: string): string {
+  const known: Record<string, string> = {
+    gmail: 'Gmail',
+    slack: 'Slack',
+    granola: 'Granola',
+    granola_mcp: 'Granola',
+  };
+  return known[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
+}
+
+// Source ingestion is PAGES-ONLY in v1: every write is an idempotent put_page,
+// so a re-run after a mid-batch timeout produces no duplicates. add_timeline_entry
+// appends and is not idempotent, so the prompt forbids it until the timeline tool
+// accepts an idempotency key (v2). Dated info is preserved inside the page body.
+export function buildSourceIngestionPrompt(opts: {
+  source: string;
+  stream: string;
+  items: Array<{ sourceRef: string; occurredAt: string; content: string }>;
+  timestamp: Date;
+}): string {
+  const { source, stream, items, timestamp } = opts;
+  const isoDate = timestamp.toISOString().slice(0, 10);
+  const display = sourceDisplayName(source);
+  const sourceType = `verso_${source}_ingest`;
+  const body = items.map((item, index) => [
+    `### Item ${index + 1}`,
+    `source_ref: ${item.sourceRef}`,
+    item.occurredAt ? `occurred_at: ${item.occurredAt}` : '',
+    '',
+    item.content,
+  ].filter((line) => line !== '').join('\n')).join('\n\n');
+
+  return [
+    `You are running the Verso memory signal-detector silently in the background, ingesting new items from ${display}${stream ? ` (${stream})` : ''}.`,
+    '',
+    'Scan these items for original thinking, durable facts, decisions, preferences, commitments, and notable entity mentions worth remembering long-term. Most items will have little or nothing durable — that is expected.',
+    'Use the verso memory tools: search_memory, get_memory_page, write_memory_page, add_memory_link, log_memory_ingest. Do not answer or reply to anyone.',
+    '',
+    'Source context:',
+    `- Source: ${display}${stream ? ` / ${stream}` : ''}`,
+    `- Ingestion date: ${isoDate}`,
+    '',
+    'Required behavior:',
+    '- First call search_memory for each notable person/company/concept before creating pages.',
+    '- Create or update useful pages with write_memory_page only when an item contains durable information worth remembering.',
+    '- Page writes do not create links automatically; explicitly call add_memory_link where applicable.',
+    '- Do NOT call add_memory_timeline: timeline writes are disabled for source ingestion (append-only, not idempotent on retry). Put any dated detail inside the page body instead.',
+    '- Add citations for every fact using this source format:',
+    `  [Source: ${display}, <item occurred_at date>]`,
+    `- Log exactly one ingest summary via log_memory_ingest with source_type "${sourceType}", referencing the source_refs you processed.`,
+    '- If there is nothing durable to capture, do not write pages; just log a zero-signal summary.',
+    '',
+    `${display} items:`,
+    body,
   ].join('\n');
 }
 

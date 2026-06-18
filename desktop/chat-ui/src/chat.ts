@@ -296,6 +296,80 @@ export async function toggleSkill(slug: string, enabled: boolean): Promise<Skill
   return body.skill;
 }
 
+export interface IngestionSourceView {
+  source: string;
+  displayName: string;
+  stream: string;
+  connected: boolean;
+  enabled: boolean;
+  status: 'idle' | 'running' | 'failed';
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  nextDueAt: string | null;
+  multiStream?: boolean;
+  enabledStreamCount?: number;
+}
+
+export interface SlackChannelView {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  enabled: boolean;
+}
+
+export async function getIngestionSources(): Promise<IngestionSourceView[]> {
+  const res = await fetch(`${baseURL()}/ingestion/sources`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load ingestion sources'));
+  }
+  const body = await res.json() as { sources: IngestionSourceView[] };
+  return body.sources;
+}
+
+export async function toggleIngestionSource(slug: string, enabled: boolean): Promise<IngestionSourceView> {
+  const res = await fetch(`${baseURL()}/ingestion/sources/${encodeURIComponent(slug)}/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to toggle ingestion source'));
+  }
+  const body = await res.json() as { source: IngestionSourceView };
+  return body.source;
+}
+
+export async function getSlackChannels(): Promise<{ channels: SlackChannelView[]; dmsEnabled: boolean }> {
+  const res = await fetch(`${baseURL()}/ingestion/slack/channels`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load Slack channels'));
+  }
+  return await res.json() as { channels: SlackChannelView[]; dmsEnabled: boolean };
+}
+
+export async function toggleSlackChannel(id: string, enabled: boolean): Promise<void> {
+  const res = await fetch(`${baseURL()}/ingestion/slack/channels/${encodeURIComponent(id)}/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to toggle channel'));
+  }
+}
+
+export async function toggleSlackDms(enabled: boolean): Promise<{ dmsEnabled: boolean }> {
+  const res = await fetch(`${baseURL()}/ingestion/slack/dms/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to toggle direct messages'));
+  }
+  return await res.json() as { dmsEnabled: boolean };
+}
+
 export async function getCronDetail(id: string): Promise<import('./types').CronDetailView> {
   const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}`);
   if (!res.ok) {

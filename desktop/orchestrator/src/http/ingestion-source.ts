@@ -1,0 +1,62 @@
+// Source-agnostic adapter seam for automated ingestion. The scheduler talks
+// only to this interface, so new sources (and a future v2 of agent-assisted
+// "source recipes") drop in without touching the scheduler, the store, or the
+// detector. An adapter owns two source-specific concerns: cursor semantics and
+// turning provider payloads into detector-ready items.
+
+/** The narrow slice of ComposioBridgeService an adapter needs. Keeps adapters testable with a fake. */
+export interface IngestionBridge {
+  executeTool(
+    toolSlug: string,
+    arguments_: Record<string, unknown>,
+    opts?: { recordUsage?: boolean },
+  ): Promise<{ data: unknown; error: string | null; logId: string | null }>;
+}
+
+export interface IngestionItem {
+  /** Stable unique id for dedup (e.g. Gmail messageId). */
+  sourceRef: string;
+  /** Monotonic position used to advance the cursor and to sort a page (e.g. epoch ms). */
+  cursorValue: number;
+  /** ISO timestamp of the item, for citations. Empty string if unknown. */
+  occurredAt: string;
+  /** Detector-ready text for this item. */
+  content: string;
+}
+
+export interface IngestionFetchResult {
+  items: IngestionItem[];
+  /** Cursor to commit after this batch. Advances past the whole fetched page, even items deduped away. */
+  nextCursor: string;
+  /** True when more items remain past this page → the scheduler should drain again immediately. */
+  hasMore: boolean;
+}
+
+export interface SourceAdapter {
+  readonly source: string;
+  /** Human-readable name for the UI (e.g. "Gmail"). */
+  readonly displayName: string;
+  /** '' for single-stream sources (gmail, granola); a channel id for slack. */
+  readonly defaultStream: string;
+  /**
+   * True for sources with many user-selected streams (Slack channels/DMs). The
+   * UI shows these as one "Configure…" entry rather than a single toggle, and
+   * listSources aggregates their streams into one row.
+   */
+  readonly multiStream?: boolean;
+  /**
+   * Items fetched (and fed to one detector run) per tick. Omit to use the
+   * scheduler default. Sources with large, self-contained items (e.g. Granola
+   * meeting transcripts) set this to 1 so each item gets its own focused
+   * extraction pass instead of being batched.
+   */
+  readonly maxItemsPerBatch?: number;
+  /** Initial cursor for the disabled→enabled transition (the lookback floor). */
+  seedCursor(now: Date, lookbackMs: number): string;
+  /** Fetch up to `maxItems` items strictly after `cursor`. Throws on a provider error. */
+  fetchSince(stream: string, cursor: string, opts: { maxItems: number }): Promise<IngestionFetchResult>;
+}
+
+export function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}

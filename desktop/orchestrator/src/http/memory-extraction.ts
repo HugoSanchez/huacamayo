@@ -4,6 +4,7 @@ import {
   type MemoryExtractionDiagnostics,
 } from './chat-store.ts';
 import { isGBrainEnabled, runGBrainSignalDetection } from './gbrain.ts';
+import { GBrainExtractionQueue } from './gbrain-extraction-queue.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
 
 const DEFAULT_IDLE_THRESHOLD_MS = 2 * 60 * 1000;
@@ -18,6 +19,7 @@ export class MemoryExtractionScheduler {
   private readonly pollIntervalMs: number;
   private readonly staleRunningMs: number;
   private readonly extractionGate: () => boolean;
+  private readonly extractionQueue: GBrainExtractionQueue;
   private interval: NodeJS.Timeout | null = null;
   private running = false;
 
@@ -35,11 +37,20 @@ export class MemoryExtractionScheduler {
        * during that window would burn the attempt instead of just waiting.
        */
       extractionGate?: () => boolean;
+      /**
+       * Shared write gate. Both chat extraction and source ingestion run their
+       * worker invocation through this queue so two logical extraction runs
+       * never interleave writes to the single GBrain owner. Defaults to a
+       * private queue (chat is the only producer until source ingestion is
+       * wired in); server.ts passes the shared instance.
+       */
+      extractionQueue?: GBrainExtractionQueue;
     } = {},
   ) {
     this.store = store;
     this.workerHermes = workerHermes;
     this.extractionGate = opts.extractionGate ?? (() => true);
+    this.extractionQueue = opts.extractionQueue ?? new GBrainExtractionQueue();
     this.idleThresholdMs = opts.idleThresholdMs ?? readDurationEnv(
       'VERSO_GBRAIN_SIGNAL_IDLE_MS',
       DEFAULT_IDLE_THRESHOLD_MS,
@@ -105,11 +116,11 @@ export class MemoryExtractionScheduler {
 
       try {
         const config = await this.workerHermes.ensureReady();
-        await runGBrainSignalDetection(config, {
+        await this.extractionQueue.run('chat', () => runGBrainSignalDetection(config, {
           sessionId: claim.session.id,
           title: claim.session.title,
           messages: toSignalMessages(segment),
-        });
+        }));
         this.store.completeMemoryExtraction(claim.session.id, lastMessage.id);
       } catch (error: unknown) {
         this.store.failMemoryExtraction(claim.session.id, formatError(error));

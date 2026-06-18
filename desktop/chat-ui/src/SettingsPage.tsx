@@ -2,10 +2,14 @@ import { useEffect, useState } from 'react';
 import {
   disconnectCodex,
   getCodexStatus,
+  getIngestionSources,
   getSidecarPort,
+  toggleIngestionSource,
   type CodexStatus,
+  type IngestionSourceView,
 } from './chat';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
+import { SlackChannelsDialog } from './SlackChannelsDialog';
 
 interface ManagedAccountView {
   backend: {
@@ -148,6 +152,8 @@ export function SettingsPage({ onBack }: Props) {
 
           <CodexSection />
 
+          <IngestionSection />
+
           <section className="settings-section settings-section-signout">
             <div className="settings-row">
               <span className="settings-label">Session</span>
@@ -170,6 +176,88 @@ export function SettingsPage({ onBack }: Props) {
 function titleCase(value: string): string {
   if (!value) return value;
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function IngestionSection() {
+  const [sources, setSources] = useState<IngestionSourceView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const [slackOpen, setSlackOpen] = useState(false);
+
+  useEffect(() => { void refresh(); }, []);
+
+  async function refresh() {
+    try {
+      setSources(await getIngestionSources());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleToggle(source: IngestionSourceView) {
+    if (pending) return;
+    if (!source.enabled && !source.connected) {
+      setError(`${source.displayName} is not connected. Connect it first.`);
+      return;
+    }
+    setPending(source.source);
+    try {
+      const updated = await toggleIngestionSource(source.source, !source.enabled);
+      setSources((prev) => (prev ? prev.map((s) => (s.source === updated.source ? updated : s)) : prev));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  // Still loading and nothing to report yet — don't flash an empty section.
+  if (sources === null && !error) return null;
+  if (sources !== null && sources.length === 0) return null;
+
+  return (
+    <section className="settings-section">
+      <h2>Ingestion</h2>
+      <p className="settings-footnote">Let Verso automatically remember from your connected apps.</p>
+      {error ? <p className="settings-footnote codex-error">{error}</p> : null}
+      {sources?.map((source) => (
+        <div className="settings-row" key={source.source}>
+          <span className="settings-label">
+            {source.displayName}
+            {!source.connected ? <span className="settings-value"> · not connected</span> : null}
+          </span>
+          {source.multiStream ? (
+            <button
+              type="button"
+              className="settings-button"
+              disabled={!source.connected}
+              onClick={() => setSlackOpen(true)}
+            >
+              {source.enabledStreamCount ? `Configure (${source.enabledStreamCount})` : 'Configure'}
+            </button>
+          ) : (
+            <span
+              className={`skill-row-toggle is-${source.enabled ? 'on' : 'off'}`}
+              role="switch"
+              aria-checked={source.enabled}
+              aria-disabled={pending === source.source || (!source.enabled && !source.connected)}
+              onClick={() => handleToggle(source)}
+            >
+              <span className="skill-row-toggle-thumb" />
+            </span>
+          )}
+        </div>
+      ))}
+
+      <SlackChannelsDialog
+        isOpen={slackOpen}
+        onClose={() => { setSlackOpen(false); void refresh(); }}
+        onChanged={() => { void refresh(); }}
+      />
+    </section>
+  );
 }
 
 function CodexSection() {

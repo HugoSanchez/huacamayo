@@ -9,7 +9,15 @@ import { ComposioToolUsageStore } from './composio-tool-usage-store.ts';
 import { buildConnectionsRoutes } from './connections.ts';
 import { ConnectionsStore } from './connections-store.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
+import { GBrainExtractionQueue } from './gbrain-extraction-queue.ts';
 import { MemoryExtractionScheduler } from './memory-extraction.ts';
+import { IngestionStore } from './ingestion-store.ts';
+import { GmailSource } from './gmail-source.ts';
+import { GranolaSource } from './granola-source.ts';
+import { SlackSource } from './slack-source.ts';
+import { SourceIngestionScheduler } from './source-ingestion.ts';
+import { SlackSelectionService } from './slack-selection.ts';
+import { buildIngestionRoutes, buildSlackIngestionRoutes } from './ingestion.ts';
 import { dispatch, json, route, type Route } from './router.ts';
 import { buildSkillsRoutes, setSkillsDir } from './skills.ts';
 import { buildSkillsHubRoutes } from './skills-hub.ts';
@@ -108,15 +116,22 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       }
     },
   });
+  // Single shared write gate: chat extraction and (soon) source ingestion both
+  // run their worker through this queue so two logical GBrain extraction runs
+  // never interleave writes. Chat takes priority over source drains.
+  const extractionQueue = new GBrainExtractionQueue();
+  // Defer extraction (don't fail it) until the memory stack can actually
+  // accept writes: the single GBrain owner process must be up, and when
+  // the brain expects embeddings the local embedding server must be ready
+  // too (e.g. not mid model-download on first run) because page writes
+  // embed inline and propagate failures. Shared by chat extraction and
+  // source ingestion.
+  const extractionGate = () =>
+    memoryRuntime.isReady()
+    && (!gbrainWantsEmbeddings(gbrainRuntime.home) || embeddingRuntime.isReady());
   const memoryExtraction = new MemoryExtractionScheduler(store, gbrainWorkerHermes, {
-    // Defer extraction (don't fail it) until the memory stack can actually
-    // accept writes: the single GBrain owner process must be up, and when
-    // the brain expects embeddings the local embedding server must be ready
-    // too (e.g. not mid model-download on first run) because page writes
-    // embed inline and propagate failures.
-    extractionGate: () =>
-      memoryRuntime.isReady()
-      && (!gbrainWantsEmbeddings(gbrainRuntime.home) || embeddingRuntime.isReady()),
+    extractionQueue,
+    extractionGate,
   });
   const connectionsStore = new ConnectionsStore();
   const composioToolUsage = new ComposioToolUsageStore();
@@ -133,6 +148,30 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     manifestPath: hermes.composioToolsManifestPath,
     getActiveToolkitSlugs: () => activeToolkitSlugs(connectionsStore),
   });
+  // Automated source ingestion (Gmail first; Granola/Slack later). Off by
+  // default — VERSO_INGESTION_ENABLED gates the scheduler, so start() is a
+  // no-op until the flag is set and wiring it here activates nothing on its
+  // own. Shares the write gate so its drains never interleave with chat
+  // extraction (and yield to it).
+  const ingestionStore = new IngestionStore();
+  const slackSource = new SlackSource(composioBridge);
+  const sourceIngestion = new SourceIngestionScheduler(
+    ingestionStore,
+    gbrainWorkerHermes,
+    [new GmailSource(composioBridge), new GranolaSource(composioBridge), slackSource],
+    {
+      extractionQueue,
+      extractionGate,
+      // Cheap, local connection check — never a remote listConnections() call.
+      connectionGate: (source) => {
+        const toolkit = source === 'granola' ? 'granola_mcp' : source;
+        return activeToolkitSlugs(connectionsStore).includes(toolkit);
+      },
+    },
+  );
+  // Slack channel/DM selection (DMs default off). Manages per-channel streams
+  // and a periodic DM-discovery refresh.
+  const slackSelection = new SlackSelectionService(slackSource, ingestionStore, sourceIngestion);
   // Point the skills scanner at the same Hermes home Hermes itself uses
   // (profile-aware, e.g. ~/.hermes/profiles/verso/skills). Without this it
   // falls back to the legacy ~/.hermes/skills path and misses any skills
@@ -153,6 +192,8 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     ...buildDraftsRoutes(composioBridge, store),
     ...buildManagedAccountRoutes(managedBackend),
     ...buildConnectionsRoutes(connections),
+    ...buildIngestionRoutes(sourceIngestion),
+    ...buildSlackIngestionRoutes(slackSelection),
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
@@ -166,6 +207,8 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   server.on('close', () => {
     void hermes.shutdown();
     memoryExtraction.stop();
+    sourceIngestion.stop();
+    slackSelection.stop();
     void gbrainWorkerHermes.shutdown();
     void memoryRuntime.stop();
     void embeddingRuntime.stop();
@@ -178,6 +221,8 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     });
     await hermes.shutdown();
     memoryExtraction.stop();
+    sourceIngestion.stop();
+    slackSelection.stop();
     await gbrainWorkerHermes.shutdown();
     await memoryRuntime.stop();
     await embeddingRuntime.stop();
@@ -193,6 +238,8 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       gbrainWorkerHermes.setOrchestratorBaseUrl(baseUrl);
       hermes.prepare();
       memoryExtraction.start();
+      sourceIngestion.start();
+      slackSelection.start();
       embeddingStart = embeddingRuntime.start();
       void memoryRuntime.start();
       resolve({ server, port: addr.port, close });

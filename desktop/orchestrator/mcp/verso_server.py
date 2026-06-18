@@ -467,24 +467,23 @@ def log_memory_ingest(
     source_ref: str,
     summary: str,
     pages_updated: list[str] | None = None,
+    source_type: str | None = None,
 ) -> types.CallToolResult:
     """Record one extraction-run summary in the memory ingest log.
 
     Call this exactly once at the end of a memory extraction pass — also for
-    zero-signal passes (with an empty pages_updated list).
+    zero-signal passes (with an empty pages_updated list). Pass source_type to
+    label the origin (e.g. 'verso_gmail_ingest'); it defaults to chat extraction.
     """
 
-    return _structured_result(
-        _request(
-            "POST",
-            "/memory/ingest-log",
-            {
-                "source_ref": source_ref,
-                "summary": summary,
-                "pages_updated": pages_updated or [],
-            },
-        )
-    )
+    body: dict[str, Any] = {
+        "source_ref": source_ref,
+        "summary": summary,
+        "pages_updated": pages_updated or [],
+    }
+    if source_type:
+        body["source_type"] = source_type
+    return _structured_result(_request("POST", "/memory/ingest-log", body))
 
 
 def _register_memory_tools() -> None:
