@@ -299,6 +299,7 @@ export async function toggleSkill(slug: string, enabled: boolean): Promise<Skill
 export interface IngestionSourceView {
   source: string;
   displayName: string;
+  logoUrl: string | null;
   stream: string;
   connected: boolean;
   enabled: boolean;
@@ -306,6 +307,7 @@ export interface IngestionSourceView {
   lastCompletedAt: string | null;
   lastError: string | null;
   nextDueAt: string | null;
+  itemCount: number;
   multiStream?: boolean;
   enabledStreamCount?: number;
 }
@@ -314,6 +316,7 @@ export interface SlackChannelView {
   id: string;
   name: string;
   isPrivate: boolean;
+  isExternal: boolean;
   enabled: boolean;
 }
 
@@ -368,6 +371,13 @@ export async function toggleSlackDms(enabled: boolean): Promise<{ dmsEnabled: bo
     throw new Error(await readError(res, 'Failed to toggle direct messages'));
   }
   return await res.json() as { dmsEnabled: boolean };
+}
+
+export async function disableAllSlack(): Promise<void> {
+  const res = await fetch(`${baseURL()}/ingestion/slack/disable-all`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to turn off Slack'));
+  }
 }
 
 export async function getCronDetail(id: string): Promise<import('./types').CronDetailView> {

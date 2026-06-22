@@ -36,6 +36,8 @@ export interface SourceAdapter {
   readonly source: string;
   /** Human-readable name for the UI (e.g. "Gmail"). */
   readonly displayName: string;
+  /** App logo for the UI. */
+  readonly logoUrl?: string;
   /** '' for single-stream sources (gmail, granola); a channel id for slack. */
   readonly defaultStream: string;
   /**

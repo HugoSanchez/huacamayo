@@ -57,7 +57,7 @@ describe('Slack ingestion routes', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.dmsEnabled).toBe(false);
-    expect(body.channels).toEqual([{ id: 'C1', name: 'general', isPrivate: false, enabled: false }]);
+    expect(body.channels).toEqual([{ id: 'C1', name: 'general', isPrivate: false, isExternal: false, enabled: false }]);
   });
 
   it('toggling a channel enables its stream', async () => {
@@ -89,6 +89,14 @@ describe('Slack ingestion routes', () => {
     const res = await post(port, '/ingestion/slack/dms/toggle', { enabled: true });
     expect(res.status).toBe(502);
     expect(store.getConfig('slack.dmsEnabled')).toBe('false'); // rolled back, not left on
+  });
+
+  it('disable-all turns off every enabled Slack stream', async () => {
+    const { port, store } = await serve({ channels: [rawChan('C1', 'general')] });
+    await post(port, '/ingestion/slack/channels/C1/toggle', { enabled: true });
+    const res = await post(port, '/ingestion/slack/disable-all', {});
+    expect(res.status).toBe(200);
+    expect(store.getSource('slack', 'C1')?.enabled).toBe(false);
   });
 
   it('surfaces a Slack list error as 502', async () => {

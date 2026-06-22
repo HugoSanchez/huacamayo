@@ -78,5 +78,10 @@ export function buildSlackIngestionRoutes(service: SlackSelectionService): Route
         json(res, 502, { error: 'slack_error', message: errorMessage(error) });
       }
     }),
+
+    route('POST', '/ingestion/slack/disable-all', async (_req, res) => {
+      service.disableAll();
+      json(res, 200, { ok: true });
+    }),
   ];
 }

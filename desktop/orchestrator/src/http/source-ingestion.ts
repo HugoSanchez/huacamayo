@@ -20,6 +20,7 @@ const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 export interface IngestionSourceView {
   source: string;
   displayName: string;
+  logoUrl: string | null;
   stream: string;
   connected: boolean;
   enabled: boolean;
@@ -27,6 +28,8 @@ export interface IngestionSourceView {
   lastCompletedAt: string | null;
   lastError: string | null;
   nextDueAt: string | null;
+  /** Processed items ingested so far for this source (across streams). */
+  itemCount: number;
   /** True for sources configured via a picker (Slack); the UI shows "Configure…" not a toggle. */
   multiStream?: boolean;
   /** For multi-stream sources: how many streams (channels/DMs) are enabled. */
@@ -48,8 +51,12 @@ interface WorkerLike {
 }
 
 export function isSourceIngestionEnabled(): boolean {
+  // Default ON: enabling a source in Settings is all it takes. The per-source
+  // toggles control what actually gets ingested; an explicit falsy
+  // VERSO_INGESTION_ENABLED still works as a kill switch.
   const raw = process.env.VERSO_INGESTION_ENABLED?.trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  if (!raw) return true;
+  return !(raw === '0' || raw === 'false' || raw === 'no' || raw === 'off');
 }
 
 /**
@@ -164,6 +171,7 @@ export class SourceIngestionScheduler {
       return {
         source: adapter.source,
         displayName: adapter.displayName,
+        logoUrl: adapter.logoUrl ?? null,
         stream: '',
         connected: this.connectionGate(adapter.source),
         enabled: enabledStreams.length > 0 || dmsEnabled,
@@ -171,6 +179,7 @@ export class SourceIngestionScheduler {
         lastCompletedAt: completed.length > 0 ? completed[completed.length - 1] : null,
         lastError: streams.map((s) => s.lastError).find((v) => Boolean(v)) ?? null,
         nextDueAt: null,
+        itemCount: this.store.countProcessedItems(adapter.source),
         multiStream: true,
         enabledStreamCount: enabledStreams.length,
       };
@@ -185,6 +194,7 @@ export class SourceIngestionScheduler {
     return {
       source: state.source,
       displayName: adapter?.displayName ?? state.source,
+      logoUrl: adapter?.logoUrl ?? null,
       stream: state.stream,
       connected: this.connectionGate(state.source),
       enabled: state.enabled,
@@ -192,6 +202,7 @@ export class SourceIngestionScheduler {
       lastCompletedAt: state.lastCompletedAt,
       lastError: state.lastError,
       nextDueAt: state.nextDueAt,
+      itemCount: this.store.countProcessedItems(state.source),
     };
   }
 

@@ -304,6 +304,14 @@ export class IngestionStore {
     return rows.map(rowToIngestionState);
   }
 
+  /** Number of processed items for a source, across all its streams. */
+  countProcessedItems(source: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM ingestion_items WHERE source = ? AND status = 'processed'
+    `).get(source) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
   getConfig(key: string): string | null {
     const row = this.db.prepare(`SELECT value FROM ingestion_config WHERE key = ?`).get(key) as { value: string } | undefined;
     return row ? row.value : null;

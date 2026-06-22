@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  disableAllSlack,
   disconnectCodex,
   getCodexStatus,
   getIngestionSources,
@@ -178,13 +179,40 @@ function titleCase(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function sourceStatus(source: IngestionSourceView): string | null {
+  if (!source.enabled) return null;
+  if (source.status === 'running') return 'syncing…';
+  if (source.lastError) return 'last sync failed';
+  if (source.lastCompletedAt) {
+    return `synced ${timeAgo(source.lastCompletedAt)} · ${source.itemCount} ${source.itemCount === 1 ? 'item' : 'items'}`;
+  }
+  return 'waiting to sync…';
+}
+
+function timeAgo(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return 'recently';
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 45) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 function IngestionSection() {
   const [sources, setSources] = useState<IngestionSourceView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [slackOpen, setSlackOpen] = useState(false);
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    void refresh();
+    // Poll while Settings is open so the per-source status updates live.
+    const id = window.setInterval(() => { void refresh(); }, 5000);
+    return () => window.clearInterval(id);
+  }, []);
 
   async function refresh() {
     try {
@@ -213,46 +241,80 @@ function IngestionSection() {
     }
   }
 
+  // Slack is multi-stream: turning it ON opens the channel picker; turning it
+  // OFF disables every channel + DMs. Closing the picker without selecting
+  // anything leaves it off (the toggle reflects whether anything is enabled).
+  async function handleSlackToggle(source: IngestionSourceView) {
+    if (pending) return;
+    if (source.enabled) {
+      setPending(source.source);
+      try {
+        await disableAllSlack();
+        await refresh();
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setPending(null);
+      }
+      return;
+    }
+    if (!source.connected) {
+      setError(`${source.displayName} is not connected. Connect it first.`);
+      return;
+    }
+    setSlackOpen(true);
+  }
+
   // Still loading and nothing to report yet — don't flash an empty section.
   if (sources === null && !error) return null;
   if (sources !== null && sources.length === 0) return null;
 
   return (
     <section className="settings-section">
-      <h2>Ingestion</h2>
-      <p className="settings-footnote">Let Verso automatically remember from your connected apps.</p>
+      <div className="ingestion-header">
+        <h2>Ingestion</h2>
+        <p className="settings-footnote">Let Verso automatically remember from your connected apps.</p>
+      </div>
       {error ? <p className="settings-footnote codex-error">{error}</p> : null}
-      {sources?.map((source) => (
-        <div className="settings-row" key={source.source}>
-          <span className="settings-label">
-            {source.displayName}
-            {!source.connected ? <span className="settings-value"> · not connected</span> : null}
-          </span>
-          {source.multiStream ? (
-            <button
-              type="button"
-              className="settings-button"
-              disabled={!source.connected}
-              onClick={() => setSlackOpen(true)}
-            >
-              {source.enabledStreamCount ? `Configure (${source.enabledStreamCount})` : 'Configure'}
-            </button>
-          ) : (
+      {sources?.map((source) => {
+        // Slack shows on while the picker is open (optimistic), so cancelling
+        // without a selection visibly flips it back off.
+        const on = source.multiStream ? source.enabled || slackOpen : source.enabled;
+        return (
+          <div className="settings-row" key={source.source}>
+            <span className="settings-label ingestion-source">
+              {source.logoUrl ? (
+                <img className="catalog-row-logo" src={source.logoUrl} alt="" aria-hidden="true" />
+              ) : (
+                <span className="catalog-row-logo-fallback" aria-hidden="true">{source.displayName.charAt(0)}</span>
+              )}
+              <span className="ingestion-source-text">
+                <span>
+                  {source.displayName}
+                  {!source.connected ? <span className="settings-value"> · not connected</span> : null}
+                </span>
+                {sourceStatus(source) ? (
+                  <span className="ingestion-source-status">{sourceStatus(source)}</span>
+                ) : null}
+              </span>
+            </span>
             <span
-              className={`skill-row-toggle is-${source.enabled ? 'on' : 'off'}`}
+              className={`skill-row-toggle is-${on ? 'on' : 'off'}`}
               role="switch"
-              aria-checked={source.enabled}
+              aria-checked={on}
               aria-disabled={pending === source.source || (!source.enabled && !source.connected)}
-              onClick={() => handleToggle(source)}
+              onClick={() => (source.multiStream ? handleSlackToggle(source) : handleToggle(source))}
             >
               <span className="skill-row-toggle-thumb" />
             </span>
-          )}
-        </div>
-      ))}
+          </div>
+        );
+      })}
 
       <SlackChannelsDialog
         isOpen={slackOpen}
+        logoUrl={sources?.find((s) => s.source === 'slack')?.logoUrl ?? null}
         onClose={() => { setSlackOpen(false); void refresh(); }}
         onChanged={() => { void refresh(); }}
       />

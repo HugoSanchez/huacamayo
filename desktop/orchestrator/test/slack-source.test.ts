@@ -100,12 +100,13 @@ describe('SlackSource.listConversations', () => {
     const { bridge, calls } = bridgeWith({
       list: (args) => (args.cursor === 'PG2'
         ? listResp([chan('D9', '', { is_im: true })])
-        : listResp([chan('C1', 'general'), chan('G2', 'private-chat', { is_private: true })], 'PG2')),
+        : listResp([chan('C1', 'general'), chan('G2', 'private-chat', { is_private: true }), chan('C3', 'ext-partner', { is_ext_shared: true })], 'PG2')),
     });
     const result = await new SlackSource(bridge).listConversations('public_channel,private_channel,im');
-    expect(result.map((c) => c.id)).toEqual(['C1', 'G2', 'D9']);
-    expect(result[1]).toMatchObject({ id: 'G2', isPrivate: true });
-    expect(result[2]).toMatchObject({ id: 'D9', isIm: true });
+    expect(result.map((c) => c.id)).toEqual(['C1', 'G2', 'C3', 'D9']);
+    expect(result[1]).toMatchObject({ id: 'G2', isPrivate: true, isExternal: false });
+    expect(result[2]).toMatchObject({ id: 'C3', isExternal: true });
+    expect(result.find((c) => c.id === 'D9')).toMatchObject({ isIm: true });
     expect(calls.every((c) => c.opts?.recordUsage === false)).toBe(true);
     expect(calls).toHaveLength(2); // followed the next_cursor
   });

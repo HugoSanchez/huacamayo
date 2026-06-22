@@ -206,6 +206,16 @@ describe('IngestionStore', () => {
     });
   });
 
+  it('counts processed items per source across streams', () => {
+    const store = tempStore();
+    store.markItemsProcessed('slack', 'C1', ['a', 'b'], t0);
+    store.markItemsProcessed('slack', 'C2', ['c'], t0);
+    store.markItemPoisoned('slack', 'C1', 'd', 'bad', t0);
+    store.recordPendingItems('slack', 'C1', ['e'], t0);
+    expect(store.countProcessedItems('slack')).toBe(3); // a, b, c — poisoned/pending excluded
+    expect(store.countProcessedItems('gmail')).toBe(0);
+  });
+
   it('reports diagnostics counts', () => {
     const store = tempStore();
     store.enableSource('gmail', '', { seedCursor: 'c1' }, t0);

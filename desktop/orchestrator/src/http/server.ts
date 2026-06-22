@@ -148,11 +148,11 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     manifestPath: hermes.composioToolsManifestPath,
     getActiveToolkitSlugs: () => activeToolkitSlugs(connectionsStore),
   });
-  // Automated source ingestion (Gmail first; Granola/Slack later). Off by
-  // default — VERSO_INGESTION_ENABLED gates the scheduler, so start() is a
-  // no-op until the flag is set and wiring it here activates nothing on its
-  // own. Shares the write gate so its drains never interleave with chat
-  // extraction (and yield to it).
+  // Automated source ingestion (Gmail, Granola, Slack). Runs whenever GBrain is
+  // enabled; the per-source toggles in Settings decide what actually gets
+  // ingested (an explicit falsy VERSO_INGESTION_ENABLED is a kill switch).
+  // Shares the write gate so its drains never interleave with chat extraction
+  // (and yield to it).
   const ingestionStore = new IngestionStore();
   const slackSource = new SlackSource(composioBridge);
   const sourceIngestion = new SourceIngestionScheduler(

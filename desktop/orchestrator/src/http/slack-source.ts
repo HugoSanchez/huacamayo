@@ -17,6 +17,8 @@ export interface SlackConversation {
   isPrivate: boolean;
   isIm: boolean;
   isMpim: boolean;
+  /** Shared with an external org (Slack Connect). */
+  isExternal: boolean;
 }
 
 // Slack's conversations.history is newest-first with an `oldest` filter and a
@@ -57,6 +59,7 @@ function messageTs(raw: unknown): string {
 export class SlackSource implements SourceAdapter {
   readonly source = 'slack';
   readonly displayName = 'Slack';
+  readonly logoUrl = 'https://logos.composio.dev/api/slack';
   readonly defaultStream = '';
   readonly multiStream = true;
 
@@ -159,6 +162,7 @@ export class SlackSource implements SourceAdapter {
           isPrivate: Boolean(c.is_private),
           isIm: Boolean(c.is_im),
           isMpim: Boolean(c.is_mpim),
+          isExternal: Boolean(c.is_ext_shared) || Boolean(c.is_pending_ext_shared),
         });
       }
       const next = asString(data.response_metadata?.next_cursor);

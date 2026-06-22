@@ -44,8 +44,8 @@ describe('SlackSelectionService', () => {
     service.setChannelEnabled('C1', true);
     const channels = await service.listChannels();
     expect(channels).toEqual([
-      { id: 'C1', name: 'general', isPrivate: false, enabled: true },
-      { id: 'G2', name: 'priv', isPrivate: true, enabled: false },
+      { id: 'C1', name: 'general', isPrivate: false, isExternal: false, enabled: true },
+      { id: 'G2', name: 'priv', isPrivate: true, isExternal: false, enabled: false },
     ]);
   });
 
@@ -99,6 +99,17 @@ describe('SlackSelectionService', () => {
     await expect(service.setDmsEnabled(true)).rejects.toThrow(/rate_limited/);
     expect(service.getDmsEnabled()).toBe(false); // not left flipped on
     expect(store.getConfig('slack.dmsEnabled')).toBe('false');
+  });
+
+  it('disableAll turns off every channel + DM and the DM flag', async () => {
+    const { store, service } = setup({ channels: [rawChan('C1', 'general')], dms: [rawChan('D1', '', { isIm: true })] });
+    service.setChannelEnabled('C1', true);
+    await service.setDmsEnabled(true);
+    service.disableAll();
+    expect(store.getSource('slack', 'C1')?.enabled).toBe(false);
+    expect(store.getSource('slack', 'D1')?.enabled).toBe(false);
+    expect(service.getDmsEnabled()).toBe(false);
+    expect(JSON.parse(store.getConfig('slack.dmStreams') ?? '[]')).toEqual([]);
   });
 
   it('propagates a Slack list error from listChannels', async () => {

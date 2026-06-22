@@ -49,6 +49,7 @@ export interface MeetingDetail {
 export class GranolaSource implements SourceAdapter {
   readonly source = 'granola';
   readonly displayName = 'Granola';
+  readonly logoUrl = 'https://logos.composio.dev/api/granola_mcp';
   readonly defaultStream = '';
   // One meeting per extraction run — meetings are coherent, self-contained
   // units (and transcripts are too big to batch).

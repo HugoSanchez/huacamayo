@@ -10,6 +10,7 @@ export interface SlackChannelView {
   id: string;
   name: string;
   isPrivate: boolean;
+  isExternal: boolean;
   enabled: boolean;
 }
 
@@ -37,6 +38,7 @@ export class SlackSelectionService {
         id: c.id,
         name: c.name,
         isPrivate: c.isPrivate,
+        isExternal: c.isExternal,
         enabled: Boolean(this.store.getSource('slack', c.id)?.enabled),
       }));
   }
@@ -77,6 +79,15 @@ export class SlackSelectionService {
       }
     }
     this.store.setConfig(DM_STREAMS_KEY, JSON.stringify([...tracked]));
+  }
+
+  /** Turn Slack ingestion fully off: disable every enabled channel/DM stream and the DM category. */
+  disableAll(): void {
+    for (const stream of this.store.listSourceStreams('slack')) {
+      if (stream.enabled) this.scheduler.setStreamEnabled('slack', stream.stream, false);
+    }
+    this.store.setConfig(DMS_ENABLED_KEY, 'false');
+    this.store.setConfig(DM_STREAMS_KEY, '[]');
   }
 
   /** Periodic DM refresh so newly-created DMs start getting ingested. */

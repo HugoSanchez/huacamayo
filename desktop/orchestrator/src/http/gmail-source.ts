@@ -52,6 +52,7 @@ export function parseGmailCursor(cursor: string): GmailCursor {
 export class GmailSource implements SourceAdapter {
   readonly source = 'gmail';
   readonly displayName = 'Gmail';
+  readonly logoUrl = 'https://logos.composio.dev/api/gmail';
   readonly defaultStream = '';
 
   constructor(

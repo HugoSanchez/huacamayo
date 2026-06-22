@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { IngestionStore } from '../src/http/ingestion-store.ts';
-import { SourceIngestionScheduler, type IngestionRunner } from '../src/http/source-ingestion.ts';
+import { SourceIngestionScheduler, isSourceIngestionEnabled, type IngestionRunner } from '../src/http/source-ingestion.ts';
 import type { IngestionFetchResult, IngestionItem, SourceAdapter } from '../src/http/ingestion-source.ts';
 
 const t0 = new Date('2026-06-17T10:00:00.000Z');
@@ -186,6 +186,21 @@ describe('SourceIngestionScheduler', () => {
     def.store.enableSource('gmail', '', { seedCursor: '0' }, t0);
     await def.scheduler.tick(at(MIN));
     expect(def.adapter.lastMaxItems).toBe(20); // DEFAULT_MAX_ITEMS_PER_BATCH
+  });
+
+  it('source ingestion defaults on, with an explicit falsy env as kill switch', () => {
+    const prev = process.env.VERSO_INGESTION_ENABLED;
+    try {
+      delete process.env.VERSO_INGESTION_ENABLED;
+      expect(isSourceIngestionEnabled()).toBe(true); // toggle a source = enabled, no flag needed
+      process.env.VERSO_INGESTION_ENABLED = '0';
+      expect(isSourceIngestionEnabled()).toBe(false); // kill switch
+      process.env.VERSO_INGESTION_ENABLED = 'yes';
+      expect(isSourceIngestionEnabled()).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.VERSO_INGESTION_ENABLED;
+      else process.env.VERSO_INGESTION_ENABLED = prev;
+    }
   });
 
   it('does nothing when disabled or while the gate is closed', async () => {
