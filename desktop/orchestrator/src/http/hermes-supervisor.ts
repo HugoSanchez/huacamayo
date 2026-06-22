@@ -862,6 +862,13 @@ export class HermesSupervisor {
     // reach memory through the verso bridge tools configured above.
     delete mcpServers.gbrain;
 
+    const tools = asRecord(config.tools) ?? {};
+    const toolSearch = asRecord(tools.tool_search) ?? {};
+    tools.tool_search = {
+      ...toolSearch,
+      enabled: 'on',
+    };
+
     // Teach the visible agent that the memory tools ARE its memory —
     // without this it pattern-matches "what do you know about X" to web
     // search. Managed via marker comments so user SOUL edits survive, and
@@ -870,6 +877,7 @@ export class HermesSupervisor {
     this.syncGBrainSoulSection(memoryToolsActive && this.gbrainMcpMode === 'read');
 
     config.mcp_servers = mcpServers;
+    config.tools = tools;
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 

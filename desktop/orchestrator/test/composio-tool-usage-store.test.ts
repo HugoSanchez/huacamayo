@@ -81,6 +81,40 @@ describe('ComposioToolUsageStore', () => {
     expect(manifest.tools).toHaveLength(26);
   });
 
+  test('includes materialized connected-app tools beyond the learned limit', () => {
+    const { store, manifestPath } = setup();
+    for (let index = 0; index < 30; index += 1) {
+      store.recordSuccessfulUse(tool(`GMAIL_LEARNED_${index}`, 'gmail'), `2026-05-28T10:${String(index).padStart(2, '0')}:00.000Z`);
+    }
+
+    const materialized = [
+      materializedTool('GMAIL_SEND_EMAIL', 'gmail'),
+      materializedTool('GMAIL_CREATE_DRAFT', 'gmail'),
+      materializedTool('SLACK_SEARCH_MESSAGES', 'slack'),
+    ];
+    const manifest = store.writeManifest(manifestPath, ['gmail'], undefined, materialized);
+
+    expect(manifest.tools.map((item) => item.toolSlug)).toContain('GMAIL_SEND_EMAIL');
+    expect(manifest.tools.map((item) => item.toolSlug)).toContain('GMAIL_CREATE_DRAFT');
+    expect(manifest.tools.map((item) => item.toolSlug)).not.toContain('SLACK_SEARCH_MESSAGES');
+    // 25 learned Gmail tools + 2 materialized Gmail tools + 1 synthetic verso tool
+    expect(manifest.tools).toHaveLength(28);
+  });
+
+  test('dedupes materialized tools against learned tools', () => {
+    const { store, manifestPath } = setup();
+    store.recordSuccessfulUse(tool('GMAIL_SEND_EMAIL', 'gmail'), '2026-05-28T10:00:00.000Z');
+
+    const manifest = store.writeManifest(
+      manifestPath,
+      ['gmail'],
+      undefined,
+      [materializedTool('GMAIL_SEND_EMAIL', 'gmail')],
+    );
+
+    expect(manifest.tools.filter((item) => item.toolSlug === 'GMAIL_SEND_EMAIL')).toHaveLength(1);
+  });
+
   test('generates safe native names', () => {
     expect(nativeNameForComposioToolSlug('GMAIL_SEND_EMAIL')).toBe('gmail_send_email');
     expect(nativeNameForComposioToolSlug('123_BAD-SLUG')).toBe('tool_123_bad_slug');
@@ -100,6 +134,20 @@ function tool(slug: string, toolkitSlug: string) {
       properties: {
         query: { type: 'string' },
       },
+    },
+  };
+}
+
+function materializedTool(slug: string, toolkitSlug: string) {
+  return {
+    nativeName: nativeNameForComposioToolSlug(slug),
+    toolSlug: slug,
+    toolkitSlug,
+    name: slug,
+    description: null,
+    inputParameters: {
+      type: 'object',
+      properties: {},
     },
   };
 }

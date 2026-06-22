@@ -135,19 +135,23 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   });
   const connectionsStore = new ConnectionsStore();
   const composioToolUsage = new ComposioToolUsageStore();
-  const refreshComposioToolsManifest = () => {
-    composioToolUsage.writeManifest(
-      hermes.composioToolsManifestPath,
-      activeToolkitSlugs(connectionsStore),
-    );
-  };
-  refreshComposioToolsManifest();
-  const connections = new ConnectionsService(managedBackend, connectionsStore, refreshComposioToolsManifest);
   const composioBridge = new ComposioBridgeService(managedBackend, {
     store: composioToolUsage,
     manifestPath: hermes.composioToolsManifestPath,
     getActiveToolkitSlugs: () => activeToolkitSlugs(connectionsStore),
   });
+  const refreshComposioToolsManifest = () => {
+    void composioBridge
+      .refreshNativeToolManifest(activeToolkitSlugs(connectionsStore))
+      .catch(() => {
+        composioToolUsage.writeManifest(
+          hermes.composioToolsManifestPath,
+          activeToolkitSlugs(connectionsStore),
+        );
+      });
+  };
+  refreshComposioToolsManifest();
+  const connections = new ConnectionsService(managedBackend, connectionsStore, refreshComposioToolsManifest);
   // Automated source ingestion (Gmail, Granola, Slack). Runs whenever GBrain is
   // enabled; the per-source toggles in Settings decide what actually gets
   // ingested (an explicit falsy VERSO_INGESTION_ENABLED is a kill switch).

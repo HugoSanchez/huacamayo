@@ -83,6 +83,18 @@ export async function registerComposioRoutes(app: FastifyInstance, deps: Composi
     }
   });
 
+  app.post('/v1/composio/tools/list', async (request, reply) => {
+    try {
+      const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const toolkits = requiredStringArray(body, 'toolkits');
+      const tools = await deps.composioService.listTools(auth.user.id, toolkits);
+      return reply.code(200).send({ tools });
+    } catch (error) {
+      return handleError(reply, error);
+    }
+  });
+
   app.post('/v1/composio/tools/schemas', async (request, reply) => {
     try {
       const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));

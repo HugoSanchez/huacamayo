@@ -43,7 +43,7 @@ PYTHON_VERSION="3.11.15"
 # NousResearch/hermes-agent commit to snapshot. Pin to a specific SHA so
 # Release builds don't drift with upstream main. Bump intentionally.
 HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
-HERMES_REF="3c231eb3979ab9c57d5cd6d02f1d577a3b718b43"
+HERMES_REF="2bd1977d8fad185c9b4be47884f7e87f1add0ce3"
 
 # Optional extras to install with Hermes. Keep lean — voice/messaging are huge
 # and not needed for the macOS UI flow.

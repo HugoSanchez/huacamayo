@@ -213,14 +213,21 @@ export class ComposioToolUsageStore {
     manifestPath: string,
     activeToolkitSlugs: Iterable<string>,
     limit = DEFAULT_MANIFEST_LIMIT,
+    materializedTools: ComposioNativeToolManifestTool[] = [],
   ): ComposioNativeToolManifest {
+    const active = normalizeToolkitSet(activeToolkitSlugs);
+    const connectedMaterializedTools = materializedTools
+      .filter((tool) => active.has(tool.toolkitSlug.trim().toLowerCase()))
+      .map(normalizeManifestTool);
+
     // Synthetic verso tools always lead so Hermes can register them even
     // when no Composio toolkit is connected yet. The propose-message-draft
     // tool is the first of these.
-    const tools: ComposioNativeToolManifestTool[] = [
+    const tools = dedupeManifestTools([
       PROPOSE_MESSAGE_DRAFT_TOOL,
-      ...this.listManifestTools(activeToolkitSlugs, limit),
-    ];
+      ...this.listManifestTools(active, limit),
+      ...connectedMaterializedTools,
+    ]);
     const manifest: ComposioNativeToolManifest = {
       version: 1,
       generatedAt: new Date().toISOString(),
@@ -243,6 +250,20 @@ export function nativeNameForComposioToolSlug(toolSlug: string): string {
   return /^[a-z]/.test(normalized) ? normalized : `tool_${normalized}`;
 }
 
+export function manifestToolFromComposioUsageInput(tool: ComposioToolUsageInput): ComposioNativeToolManifestTool | null {
+  const slug = tool.slug.trim();
+  const toolkitSlug = tool.toolkitSlug.trim().toLowerCase();
+  if (!slug || !toolkitSlug) return null;
+  return normalizeManifestTool({
+    nativeName: nativeNameForComposioToolSlug(slug),
+    toolSlug: slug,
+    toolkitSlug,
+    name: tool.name.trim() || slug,
+    description: tool.description,
+    inputParameters: normalizeInputParameters(tool.inputParameters),
+  });
+}
+
 function rowToManifestTool(row: UsageRow): ComposioNativeToolManifestTool | null {
   const parsedInputParameters = parseJsonRecord(row.input_parameters);
   if (!parsedInputParameters) return null;
@@ -255,6 +276,34 @@ function rowToManifestTool(row: UsageRow): ComposioNativeToolManifestTool | null
     description: row.description,
     inputParameters: normalizeInputParameters(parsedInputParameters),
   };
+}
+
+function normalizeManifestTool(tool: ComposioNativeToolManifestTool): ComposioNativeToolManifestTool {
+  return {
+    nativeName: nativeNameForComposioToolSlug(tool.toolSlug || tool.nativeName),
+    toolSlug: tool.toolSlug.trim(),
+    toolkitSlug: tool.toolkitSlug.trim().toLowerCase(),
+    name: tool.name.trim() || tool.toolSlug.trim(),
+    description: tool.description,
+    inputParameters: normalizeInputParameters(tool.inputParameters),
+  };
+}
+
+function dedupeManifestTools(tools: ComposioNativeToolManifestTool[]): ComposioNativeToolManifestTool[] {
+  const seenSlugs = new Set<string>();
+  const seenNativeNames = new Set<string>();
+  const deduped: ComposioNativeToolManifestTool[] = [];
+  for (const tool of tools) {
+    const slugKey = tool.toolSlug.trim().toUpperCase();
+    const nativeNameKey = tool.nativeName.trim().toLowerCase();
+    if (!slugKey || !nativeNameKey || seenSlugs.has(slugKey) || seenNativeNames.has(nativeNameKey)) {
+      continue;
+    }
+    seenSlugs.add(slugKey);
+    seenNativeNames.add(nativeNameKey);
+    deduped.push(tool);
+  }
+  return deduped;
 }
 
 function normalizeInputParameters(value: Record<string, unknown>): Record<string, unknown> {

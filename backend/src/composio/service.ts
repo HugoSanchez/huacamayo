@@ -289,6 +289,35 @@ export class ComposioService {
     };
   }
 
+  async listTools(userId: string, toolkits: string[]): Promise<BridgeSearchToolResult[]> {
+    this.assertConfigured();
+    normalizeUserId(userId);
+    const normalizedToolkits = normalizeToolkits(toolkits);
+    if (!normalizedToolkits || normalizedToolkits.length === 0) {
+      throw new ComposioServiceError(400, 'Missing "toolkits"');
+    }
+
+    const results: BridgeSearchToolResult[] = [];
+    for (const toolkitInput of normalizedToolkits) {
+      const toolkit = await this.resolveToolkit(toolkitInput);
+      const items = await this.listToolkitTools(toolkit.slug);
+      results.push(...items
+        .filter((tool) => {
+          const toolkitSlug = tool.toolkit?.slug ?? toolkit.slug;
+          return !toolkitSlug || this.isAllowedToolkit(toolkitSlug);
+        })
+        .map((tool) => ({
+          slug: tool.slug,
+          name: tool.name,
+          description: tool.description ?? null,
+          toolkitSlug: tool.toolkit?.slug ?? toolkit.slug,
+          toolkitName: tool.toolkit?.name ?? toolkit.name,
+        } satisfies BridgeSearchToolResult)));
+    }
+
+    return dedupeSearchToolResults(results);
+  }
+
   async searchTools(userId: string, query: string, toolkits?: string[]): Promise<BridgeSearchToolResult[]> {
     this.assertConfigured();
     const normalizedUserId = normalizeUserId(userId);

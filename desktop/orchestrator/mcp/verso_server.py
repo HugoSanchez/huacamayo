@@ -36,9 +36,12 @@ mcp = FastMCP(
     instructions=(
         "verso app bridge. Use search_toolkits to find the right app first when needed, "
         "then request_connection/list_connections/get_connection_status for auth and connection state. "
-        "For Composio-backed app actions, use search_composio_tools to find the right "
-        "tool slug, get_composio_tool_schemas to inspect its arguments, then "
-        "execute_composio_tool to run it.\n\n"
+        "For Composio-backed app actions, prefer the native mcp_verso_* connected-app "
+        "tools that Hermes exposes from this server. If the right native tool is not "
+        "visible, use Hermes native tool search/describe/call to discover it. Use "
+        "search_composio_tools, get_composio_tool_schemas, and execute_composio_tool "
+        "only as a fallback when no native connected-app tool is available or the "
+        "manifest has not materialized yet.\n\n"
         "Connection management for ALL apps goes through verso, not Composio. "
         "If tool discovery or execution reports that no active connection exists, "
         "call verso.request_connection({toolkit: <slug>}) instead. After it "
@@ -140,8 +143,9 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 def search_composio_tools(query: str, toolkits: list[str] | None = None) -> types.CallToolResult:
     """Search Composio tools by use case.
 
-    Use this before attempting a third-party app action when you do not yet know
-    the best tool slug. Optionally narrow results to toolkit slugs like
+    Fallback only: native connected-app tools plus Hermes tool search are the
+    preferred path. Use this when the right native mcp_verso_* tool is missing
+    or not yet materialized. Optionally narrow results to toolkit slugs like
     ["gmail"] or ["slack"].
     """
 
@@ -160,8 +164,9 @@ def search_composio_tools(query: str, toolkits: list[str] | None = None) -> type
 def get_composio_tool_schemas(tool_slugs: list[str]) -> types.CallToolResult:
     """Fetch input schemas for Composio tools by slug.
 
-    Call this after search_composio_tools and before execute_composio_tool when
-    you need the exact parameter schema for one or more tool slugs.
+    Fallback only: native connected-app tools already expose their schemas. Call
+    this after search_composio_tools and before execute_composio_tool when you
+    need the exact parameter schema for one or more fallback tool slugs.
     """
 
     payload = _request(
@@ -181,9 +186,10 @@ def execute_composio_tool(
 ) -> types.CallToolResult:
     """Execute a Composio-backed tool through verso's bridge.
 
-    Use this only after identifying the right tool slug and argument schema.
-    arguments must be a JSON object matching the schema from
-    get_composio_tool_schemas. Do not pass null or omit it.
+    Fallback only: prefer native mcp_verso_* connected-app tools. Use this only
+    after identifying the right fallback tool slug and argument schema. arguments
+    must be a JSON object matching the schema from get_composio_tool_schemas.
+    Do not pass null or omit it.
     The result is the Composio execution payload: data, error, and logId.
     """
 

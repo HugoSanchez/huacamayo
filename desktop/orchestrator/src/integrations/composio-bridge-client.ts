@@ -139,6 +139,15 @@ export class RemoteComposioBridgeClient {
     return body.results;
   }
 
+  async listTools(toolkits: string[]): Promise<RemoteBridgeSearchToolResult[]> {
+    const body = await this.request<{ tools: RemoteBridgeSearchToolResult[] }>(
+      'POST',
+      '/v1/composio/tools/list',
+      { toolkits },
+    );
+    return body.tools;
+  }
+
   async getToolSchemas(
     toolSlugs: string[],
   ): Promise<RemoteBridgeToolSchemaView[]> {

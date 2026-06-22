@@ -8,6 +8,8 @@ import {
 import { ManagedBackendClient } from './managed-backend-client.ts';
 import {
   PROPOSE_MESSAGE_DRAFT_SLUG,
+  manifestToolFromComposioUsageInput,
+  type ComposioNativeToolManifestTool,
   type ComposioToolUsageStore,
 } from '../http/composio-tool-usage-store.ts';
 
@@ -138,6 +140,7 @@ export class ComposioBridgeService {
   private readonly bridgeClient: RemoteComposioBridgeClient;
   private readonly usage: ComposioBridgeUsageOptions | null;
   private readonly toolMetadataBySlug = new Map<string, ToolUsageMetadata>();
+  private readonly materializedManifestTools = new Map<string, ComposioNativeToolManifestTool>();
 
   constructor(managedBackend: ManagedBackendClient, usage: ComposioBridgeUsageOptions | null = null) {
     this.bridgeClient = new RemoteComposioBridgeClient(managedBackend);
@@ -160,6 +163,58 @@ export class ComposioBridgeService {
     } catch (error) {
       throw mapRemoteBridgeError(error);
     }
+  }
+
+  async listTools(toolkits: string[]): Promise<ComposioBridgeSearchToolView[]> {
+    this.assertConfigured();
+    const normalizedToolkits = Array.from(new Set(toolkits.map((toolkit) => toolkit.trim()).filter(Boolean)));
+    if (normalizedToolkits.length === 0) throw new ComposioBridgeHttpError(400, 'Missing "toolkits"');
+
+    try {
+      const tools = await this.bridgeClient.listTools(normalizedToolkits);
+      tools.forEach((tool) => this.rememberToolMetadata(tool));
+      return tools;
+    } catch (error) {
+      throw mapRemoteBridgeError(error);
+    }
+  }
+
+  async refreshNativeToolManifest(activeToolkitSlugs: string[]): Promise<void> {
+    if (!this.usage) return;
+    const activeToolkits = Array.from(new Set(
+      activeToolkitSlugs.map((toolkit) => toolkit.trim().toLowerCase()).filter(Boolean),
+    ));
+
+    if (activeToolkits.length === 0) {
+      this.materializedManifestTools.clear();
+      this.writeNativeToolManifest(activeToolkits);
+      return;
+    }
+
+    const tools = await this.listTools(activeToolkits);
+    const schemasBySlug = new Map<string, RemoteBridgeToolSchemaView>();
+    for (const chunk of chunks(tools.map((tool) => tool.slug), 25)) {
+      const schemas = await this.getToolSchemas(chunk);
+      schemas.forEach((schema) => schemasBySlug.set(normalizeToolSlugKey(schema.slug), schema));
+    }
+
+    this.materializedManifestTools.clear();
+    for (const tool of tools) {
+      const slug = cleanString(tool.slug);
+      if (!slug) continue;
+      const usageInput = buildComposioToolUsageInput(
+        slug,
+        schemasBySlug.get(normalizeToolSlugKey(slug)) ?? null,
+        this.toolMetadataBySlug.get(normalizeToolSlugKey(slug)) ?? null,
+        activeToolkits,
+      );
+      if (!usageInput) continue;
+      const manifestTool = manifestToolFromComposioUsageInput(usageInput);
+      if (!manifestTool) continue;
+      this.materializedManifestTools.set(normalizeToolSlugKey(manifestTool.toolSlug), manifestTool);
+    }
+
+    this.writeNativeToolManifest(activeToolkits);
   }
 
   async getToolSchemas(toolSlugs: string[]): Promise<ComposioBridgeToolSchemaView[]> {
@@ -254,10 +309,16 @@ export class ComposioBridgeService {
     this.usage.store.recordSuccessfulUse(usageInput);
     const activeToolkits = new Set(this.usage.getActiveToolkitSlugs());
     activeToolkits.add(usageInput.toolkitSlug);
+    this.writeNativeToolManifest(activeToolkits);
+  }
+
+  private writeNativeToolManifest(activeToolkitSlugs: Iterable<string>): void {
+    if (!this.usage) return;
     this.usage.store.writeManifest(
       this.usage.manifestPath,
-      activeToolkits,
+      activeToolkitSlugs,
       this.usage.manifestLimit,
+      Array.from(this.materializedManifestTools.values()),
     );
   }
 
@@ -392,4 +453,13 @@ function usefulSchemaName(schema: RemoteBridgeToolSchemaView | null): string | n
 function usefulMetadataName(tool: RemoteBridgeSearchToolResult | RemoteBridgeToolSchemaView): string | null {
   if ('inputParameters' in tool && !tool.inputParameters && !tool.toolkitSlug) return null;
   return cleanString(tool.name);
+}
+
+function chunks<T>(items: T[], size: number): T[][] {
+  const chunkSize = Math.max(1, Math.floor(size));
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    result.push(items.slice(index, index + chunkSize));
+  }
+  return result;
 }
