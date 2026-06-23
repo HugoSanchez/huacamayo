@@ -212,6 +212,60 @@ def execute_composio_tool(
     return _structured_result(payload)
 
 
+@mcp.tool()
+def propose_message_draft(
+    channel: str,
+    body: str,
+    to: str | None = None,
+    subject: str | None = None,
+    cc: str | None = None,
+    threadId: str | None = None,
+    channel_label: str | None = None,
+    channel_logo_url: str | None = None,
+    to_display: str | None = None,
+    to_avatar_url: str | None = None,
+) -> types.CallToolResult:
+    """Surface a draft message to the user for review before sending.
+
+    Use this whenever the user asks you to send a message via any app
+    (Slack, Gmail, SMS, WhatsApp, Discord, Telegram, etc). Always call this
+    before the underlying send tool.
+
+    If the result status is "pending_review", Verso handles the final send
+    from the review widget and you are done. If the result status is
+    "approved", dispatch the send yourself using the final_* values returned.
+    If the result status is "rejected", do not send.
+    """
+
+    arguments: dict[str, Any] = {
+        "channel": channel,
+        "body": body,
+    }
+    optional_values = {
+        "to": to,
+        "subject": subject,
+        "cc": cc,
+        "threadId": threadId,
+        "channel_label": channel_label,
+        "channel_logo_url": channel_logo_url,
+        "to_display": to_display,
+        "to_avatar_url": to_avatar_url,
+    }
+    for key, value in optional_values.items():
+        if isinstance(value, str) and value.strip():
+            arguments[key] = value
+
+    payload = _request(
+        "POST",
+        "/composio/tools/execute",
+        {
+            "toolSlug": "PROPOSE_MESSAGE_DRAFT",
+            "arguments": arguments,
+        },
+    )
+    return _structured_result(payload)
+
+
 class _ManifestToolArgs(ArgModelBase):
     """Pass arbitrary MCP arguments through to the mapped Composio tool."""
 
