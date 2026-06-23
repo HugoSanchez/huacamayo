@@ -47,6 +47,7 @@ function buildRoutes(
   hermes: HermesSupervisor,
   memoryExtraction: MemoryExtractionScheduler,
   managedBackend: ManagedBackendClient,
+  composioBridge: ComposioBridgeService,
   localState: LocalStateSnapshot,
   embeddingRuntime: EmbeddingRuntime,
   memoryRuntime: GBrainMemoryRuntime,
@@ -73,6 +74,7 @@ function buildRoutes(
           memoryRuntime: memoryRuntime.diagnostics(),
         },
         managed: await managedBackend.getAccount(),
+        composioTools: composioBridge.getNativeToolManifestStatus(),
         localState,
       });
     }),
@@ -143,7 +145,11 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const refreshComposioToolsManifest = () => {
     void composioBridge
       .refreshNativeToolManifest(activeToolkitSlugs(connectionsStore))
-      .catch(() => {
+      .catch((error) => {
+        console.warn(
+          '[composio-tools] native manifest refresh failed; writing learned-tools fallback:',
+          error instanceof Error ? error.message : String(error),
+        );
         composioToolUsage.writeManifest(
           hermes.composioToolsManifestPath,
           activeToolkitSlugs(connectionsStore),
@@ -190,11 +196,21 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const cronDescriptions = new CronDescriptionsStore();
   const codexAuth = new CodexAuthService(hermes);
   const routes = [
-    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, localState, embeddingRuntime, memoryRuntime),
+    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, composioBridge, localState, embeddingRuntime, memoryRuntime),
     ...buildMemoryRoutes(memoryRuntime),
     ...buildComposioBridgeRoutes(composioBridge),
     ...buildDraftsRoutes(composioBridge, store),
-    ...buildManagedAccountRoutes(managedBackend),
+    ...buildManagedAccountRoutes(managedBackend, {
+      onSessionChanged: () => {
+        void connections.listConnections().catch((error) => {
+          console.warn(
+            '[managed] connection refresh after session change failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+          refreshComposioToolsManifest();
+        });
+      },
+    }),
     ...buildConnectionsRoutes(connections),
     ...buildIngestionRoutes(sourceIngestion),
     ...buildSlackIngestionRoutes(slackSelection),

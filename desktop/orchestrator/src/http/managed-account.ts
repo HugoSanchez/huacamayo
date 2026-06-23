@@ -4,7 +4,14 @@ import {
   type ManagedSessionRecord,
 } from '../integrations/managed-backend-client.ts';
 
-export function buildManagedAccountRoutes(managedBackend: ManagedBackendClient): Route[] {
+export interface ManagedAccountRouteOptions {
+  onSessionChanged?: () => void;
+}
+
+export function buildManagedAccountRoutes(
+  managedBackend: ManagedBackendClient,
+  opts: ManagedAccountRouteOptions = {},
+): Route[] {
   return [
     route('GET', '/managed/account', async (_req, res) => {
       const account = await managedBackend.getAccount();
@@ -18,6 +25,7 @@ export function buildManagedAccountRoutes(managedBackend: ManagedBackendClient):
         return;
       }
       managedBackend.setSession(parsed);
+      opts.onSessionChanged?.();
       json(res, 200, { ok: true });
     }),
 
@@ -32,6 +40,7 @@ export function buildManagedAccountRoutes(managedBackend: ManagedBackendClient):
         console.warn('[managed] revoke failed during sign-out (clearing local anyway):', message);
       }
       managedBackend.setSession(null);
+      opts.onSessionChanged?.();
       json(res, 200, { ok: true });
     }),
   ];

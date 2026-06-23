@@ -9,6 +9,7 @@ import { ManagedBackendClient } from './managed-backend-client.ts';
 import {
   PROPOSE_MESSAGE_DRAFT_SLUG,
   manifestToolFromComposioUsageInput,
+  type ComposioNativeToolManifest,
   type ComposioNativeToolManifestTool,
   type ComposioToolUsageStore,
 } from '../http/composio-tool-usage-store.ts';
@@ -40,6 +41,16 @@ export interface ToolUsageMetadata {
   description: string | null;
   toolkitSlug: string | null;
   toolkitName: string | null;
+}
+
+export interface NativeToolManifestRefreshStatus {
+  status: 'never' | 'ok' | 'failed';
+  refreshedAt: string | null;
+  activeToolkits: string[];
+  listedToolCount: number;
+  materializedToolCount: number;
+  manifestToolCount: number;
+  error: string | null;
 }
 
 /**
@@ -141,6 +152,15 @@ export class ComposioBridgeService {
   private readonly usage: ComposioBridgeUsageOptions | null;
   private readonly toolMetadataBySlug = new Map<string, ToolUsageMetadata>();
   private readonly materializedManifestTools = new Map<string, ComposioNativeToolManifestTool>();
+  private nativeToolManifestStatus: NativeToolManifestRefreshStatus = {
+    status: 'never',
+    refreshedAt: null,
+    activeToolkits: [],
+    listedToolCount: 0,
+    materializedToolCount: 0,
+    manifestToolCount: 0,
+    error: null,
+  };
 
   constructor(managedBackend: ManagedBackendClient, usage: ComposioBridgeUsageOptions | null = null) {
     this.bridgeClient = new RemoteComposioBridgeClient(managedBackend);
@@ -149,6 +169,13 @@ export class ComposioBridgeService {
 
   get configured(): boolean {
     return this.bridgeClient.configured;
+  }
+
+  getNativeToolManifestStatus(): NativeToolManifestRefreshStatus {
+    return {
+      ...this.nativeToolManifestStatus,
+      activeToolkits: [...this.nativeToolManifestStatus.activeToolkits],
+    };
   }
 
   async searchTools(query: string, toolkits?: string[]): Promise<ComposioBridgeSearchToolView[]> {
@@ -185,36 +212,43 @@ export class ComposioBridgeService {
       activeToolkitSlugs.map((toolkit) => toolkit.trim().toLowerCase()).filter(Boolean),
     ));
 
-    if (activeToolkits.length === 0) {
+    try {
+      if (activeToolkits.length === 0) {
+        this.materializedManifestTools.clear();
+        const manifest = this.writeNativeToolManifest(activeToolkits);
+        this.rememberNativeToolManifestStatus('ok', activeToolkits, 0, manifest, null);
+        return;
+      }
+
+      const tools = await this.listTools(activeToolkits);
+      const schemasBySlug = new Map<string, RemoteBridgeToolSchemaView>();
+      for (const chunk of chunks(tools.map((tool) => tool.slug), 25)) {
+        const schemas = await this.getToolSchemas(chunk);
+        schemas.forEach((schema) => schemasBySlug.set(normalizeToolSlugKey(schema.slug), schema));
+      }
+
       this.materializedManifestTools.clear();
-      this.writeNativeToolManifest(activeToolkits);
-      return;
-    }
+      for (const tool of tools) {
+        const slug = cleanString(tool.slug);
+        if (!slug) continue;
+        const usageInput = buildComposioToolUsageInput(
+          slug,
+          schemasBySlug.get(normalizeToolSlugKey(slug)) ?? null,
+          this.toolMetadataBySlug.get(normalizeToolSlugKey(slug)) ?? null,
+          activeToolkits,
+        );
+        if (!usageInput) continue;
+        const manifestTool = manifestToolFromComposioUsageInput(usageInput);
+        if (!manifestTool) continue;
+        this.materializedManifestTools.set(normalizeToolSlugKey(manifestTool.toolSlug), manifestTool);
+      }
 
-    const tools = await this.listTools(activeToolkits);
-    const schemasBySlug = new Map<string, RemoteBridgeToolSchemaView>();
-    for (const chunk of chunks(tools.map((tool) => tool.slug), 25)) {
-      const schemas = await this.getToolSchemas(chunk);
-      schemas.forEach((schema) => schemasBySlug.set(normalizeToolSlugKey(schema.slug), schema));
+      const manifest = this.writeNativeToolManifest(activeToolkits);
+      this.rememberNativeToolManifestStatus('ok', activeToolkits, tools.length, manifest, null);
+    } catch (error) {
+      this.rememberNativeToolManifestStatus('failed', activeToolkits, 0, null, error);
+      throw error;
     }
-
-    this.materializedManifestTools.clear();
-    for (const tool of tools) {
-      const slug = cleanString(tool.slug);
-      if (!slug) continue;
-      const usageInput = buildComposioToolUsageInput(
-        slug,
-        schemasBySlug.get(normalizeToolSlugKey(slug)) ?? null,
-        this.toolMetadataBySlug.get(normalizeToolSlugKey(slug)) ?? null,
-        activeToolkits,
-      );
-      if (!usageInput) continue;
-      const manifestTool = manifestToolFromComposioUsageInput(usageInput);
-      if (!manifestTool) continue;
-      this.materializedManifestTools.set(normalizeToolSlugKey(manifestTool.toolSlug), manifestTool);
-    }
-
-    this.writeNativeToolManifest(activeToolkits);
   }
 
   async getToolSchemas(toolSlugs: string[]): Promise<ComposioBridgeToolSchemaView[]> {
@@ -312,14 +346,34 @@ export class ComposioBridgeService {
     this.writeNativeToolManifest(activeToolkits);
   }
 
-  private writeNativeToolManifest(activeToolkitSlugs: Iterable<string>): void {
-    if (!this.usage) return;
-    this.usage.store.writeManifest(
+  private writeNativeToolManifest(activeToolkitSlugs: Iterable<string>): ComposioNativeToolManifest {
+    if (!this.usage) {
+      throw new ComposioBridgeHttpError(500, 'Composio tool usage store is not configured.');
+    }
+    return this.usage.store.writeManifest(
       this.usage.manifestPath,
       activeToolkitSlugs,
       this.usage.manifestLimit,
       Array.from(this.materializedManifestTools.values()),
     );
+  }
+
+  private rememberNativeToolManifestStatus(
+    status: 'ok' | 'failed',
+    activeToolkits: string[],
+    listedToolCount: number,
+    manifest: ComposioNativeToolManifest | null,
+    error: unknown,
+  ): void {
+    this.nativeToolManifestStatus = {
+      status,
+      refreshedAt: new Date().toISOString(),
+      activeToolkits: [...activeToolkits],
+      listedToolCount,
+      materializedToolCount: this.materializedManifestTools.size,
+      manifestToolCount: manifest?.tools.length ?? 0,
+      error: error ? errorMessage(error) : null,
+    };
   }
 
   private rememberToolMetadata(tool: RemoteBridgeSearchToolResult | RemoteBridgeToolSchemaView): void {
@@ -435,6 +489,10 @@ function cleanString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const cleaned = value.trim();
   return cleaned.length > 0 ? cleaned : null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function usefulDescription(value: unknown): string | null {
