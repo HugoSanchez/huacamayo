@@ -16,8 +16,7 @@ import { GmailSource } from './gmail-source.ts';
 import { GranolaSource } from './granola-source.ts';
 import { SlackSource } from './slack-source.ts';
 import { SourceIngestionScheduler } from './source-ingestion.ts';
-import { SlackSelectionService } from './slack-selection.ts';
-import { buildIngestionRoutes, buildSlackIngestionRoutes } from './ingestion.ts';
+import { buildIngestionRoutes } from './ingestion.ts';
 import { dispatch, json, route, type Route } from './router.ts';
 import { buildSkillsRoutes, setSkillsDir } from './skills.ts';
 import { buildSkillsHubRoutes } from './skills-hub.ts';
@@ -164,11 +163,10 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   // Shares the write gate so its drains never interleave with chat extraction
   // (and yield to it).
   const ingestionStore = new IngestionStore();
-  const slackSource = new SlackSource(composioBridge);
   const sourceIngestion = new SourceIngestionScheduler(
     ingestionStore,
     gbrainWorkerHermes,
-    [new GmailSource(composioBridge), new GranolaSource(composioBridge), slackSource],
+    [new GmailSource(composioBridge), new GranolaSource(composioBridge), new SlackSource(composioBridge)],
     {
       extractionQueue,
       extractionGate,
@@ -179,9 +177,10 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       },
     },
   );
-  // Slack channel/DM selection (DMs default off). Manages per-channel streams
-  // and a periodic DM-discovery refresh.
-  const slackSelection = new SlackSelectionService(slackSource, ingestionStore, sourceIngestion);
+  // Slack used to be polled per channel/DM (one stream each). It's now a single
+  // search-based stream, so retire any legacy per-channel streams and carry the
+  // user's intent forward: if any channel was on, turn the single stream on.
+  migrateSlackToSingleStream(ingestionStore, sourceIngestion);
   // Point the skills scanner at the same Hermes home Hermes itself uses
   // (profile-aware, e.g. ~/.hermes/profiles/verso/skills). Without this it
   // falls back to the legacy ~/.hermes/skills path and misses any skills
@@ -213,7 +212,6 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     }),
     ...buildConnectionsRoutes(connections),
     ...buildIngestionRoutes(sourceIngestion),
-    ...buildSlackIngestionRoutes(slackSelection),
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
@@ -228,7 +226,6 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     void hermes.shutdown();
     memoryExtraction.stop();
     sourceIngestion.stop();
-    slackSelection.stop();
     void gbrainWorkerHermes.shutdown();
     void memoryRuntime.stop();
     void embeddingRuntime.stop();
@@ -242,7 +239,6 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     await hermes.shutdown();
     memoryExtraction.stop();
     sourceIngestion.stop();
-    slackSelection.stop();
     await gbrainWorkerHermes.shutdown();
     await memoryRuntime.stop();
     await embeddingRuntime.stop();
@@ -259,7 +255,6 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       hermes.prepare();
       memoryExtraction.start();
       sourceIngestion.start();
-      slackSelection.start();
       embeddingStart = embeddingRuntime.start();
       void memoryRuntime.start();
       resolve({ server, port: addr.port, close });
@@ -277,6 +272,21 @@ function activeToolkitSlugs(store: ConnectionsStore): string[] {
   return store.listConnections()
     .filter((connection) => connection.status === 'active')
     .map((connection) => connection.toolkitSlug);
+}
+
+/**
+ * One-time migration from the old per-channel Slack model to the single
+ * search-based stream. Disables every legacy per-channel/DM stream so the
+ * scheduler stops claiming them (they'd feed stale cursors into the new
+ * search adapter), and if the user had any of them on, enables the single
+ * stream so Slack stays "on". Idempotent: a no-op once no legacy streams remain.
+ */
+function migrateSlackToSingleStream(store: IngestionStore, scheduler: SourceIngestionScheduler): void {
+  const legacy = store.listSourceStreams('slack').filter((state) => state.stream !== '');
+  if (legacy.length === 0) return;
+  const anyEnabled = legacy.some((state) => state.enabled);
+  for (const state of legacy) store.disableSource('slack', state.stream);
+  if (anyEnabled) scheduler.setSourceEnabled('slack', true);
 }
 
 const isMain = process.argv[1] && (

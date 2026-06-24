@@ -54,11 +54,12 @@ const GBRAIN_SOUL_END = '<!-- verso:gbrain-memory:end -->';
 const GBRAIN_SOUL_SECTION = [
   '## Your memory',
   '',
-  'You have a persistent, private memory of your past conversations with this user, stored locally on their machine. Search it with the search_memory tool and read full entries with get_memory_page.',
+  'You have a persistent, private knowledge base about this user — the people, companies, projects, meetings, decisions, and preferences in their world — stored locally on their machine. It is built from your past conversations AND from their connected apps (email, Slack, meeting notes), so it routinely knows things that never came up in the current chat. Search it with the search_memory tool and read full entries with get_memory_page. This is SEPARATE from, and far richer than, searching recent chat sessions — do not confuse the two.',
   '',
-  '- Check memory first — before web search and before answering from general knowledge — whenever your answer could depend on people, companies, projects, decisions, preferences, or anything the user may have discussed with you before.',
-  '- When memory informs an answer, weave it in naturally ("From our earlier conversations, ...").',
-  '- If memory has nothing relevant, just proceed normally — do not mention the empty lookup.',
+  '- For ANY question about what you know or remember about a person, company, project, topic, or decision, call search_memory FIRST — before any session/conversation search, before web search, and before answering from general knowledge.',
+  '- NEVER tell the user you have nothing in memory about something unless you have actually called search_memory for it and it came back empty. Do not infer "not in memory" from the current conversation alone — the entry is very often in this knowledge base even when it is not in the chat.',
+  '- When memory informs an answer, weave it in naturally and cite the source where useful ("from your email with ...", "from your meeting on ...", "from our earlier conversation ...").',
+  '- If search_memory genuinely returns nothing relevant, just proceed normally — do not mention the empty lookup.',
 ].join('\n');
 
 /**

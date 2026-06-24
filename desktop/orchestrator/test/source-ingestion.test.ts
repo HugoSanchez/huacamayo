@@ -88,7 +88,7 @@ describe('SourceIngestionScheduler', () => {
     expect(runs[0].items.map((i) => i.sourceRef)).toEqual(['m1', 'm2']);
     const s = store.getSource('gmail', '')!;
     expect(s).toMatchObject({ status: 'idle', cursor: '200' });
-    expect(s.nextDueAt).toBe(at(MIN + 15 * MIN).toISOString()); // interval cadence
+    expect(s.nextDueAt).toBe(at(MIN + 120 * MIN).toISOString()); // 2h interval cadence
     expect(store.getItem('gmail', '', 'm1')?.status).toBe('processed');
   });
 
@@ -124,7 +124,7 @@ describe('SourceIngestionScheduler', () => {
     expect(runs).toHaveLength(0);
     const s = store.getSource('gmail', '')!;
     expect(s).toMatchObject({ status: 'idle', cursor: '42' });
-    expect(s.nextDueAt).toBe(at(MIN + 15 * MIN).toISOString());
+    expect(s.nextDueAt).toBe(at(MIN + 120 * MIN).toISOString());
   });
 
   it('defers (no failure, no fetch) when the connection is inactive', async () => {
@@ -139,7 +139,7 @@ describe('SourceIngestionScheduler', () => {
     expect(runs).toHaveLength(0);
     const s = store.getSource('gmail', '')!;
     expect(s).toMatchObject({ status: 'idle', cursor: '0', failCount: 0 });
-    expect(s.nextDueAt).toBe(at(MIN + 15 * MIN).toISOString());
+    expect(s.nextDueAt).toBe(at(MIN + 120 * MIN).toISOString());
   });
 
   it('backs off on a fetch error without advancing the cursor', async () => {

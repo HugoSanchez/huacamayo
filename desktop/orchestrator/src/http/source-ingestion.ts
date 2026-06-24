@@ -9,7 +9,11 @@ import type { SourceAdapter } from './ingestion-source.ts';
 
 const DEFAULT_POLL_INTERVAL_MS = 30 * 1000;
 const DEFAULT_STALE_RUNNING_MS = 10 * 60 * 1000;
-const DEFAULT_SOURCE_INTERVAL_MS = 15 * 60 * 1000;
+// How often a source is re-checked once it's caught up. Ingestion is not
+// time-sensitive — a couple of hours of latency is fine — and a long interval
+// keeps Composio fetch volume low. (A backlog still drains promptly: hasMore
+// sets next_due_at = now so the scheduler keeps going until caught up.)
+const DEFAULT_SOURCE_INTERVAL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_MAX_ITEMS_PER_BATCH = 20;
 const DEFAULT_MAX_BATCH_ATTEMPTS = 5;
 const DEFAULT_BASE_BACKOFF_MS = 30 * 1000;
@@ -28,12 +32,8 @@ export interface IngestionSourceView {
   lastCompletedAt: string | null;
   lastError: string | null;
   nextDueAt: string | null;
-  /** Processed items ingested so far for this source (across streams). */
+  /** Processed items ingested so far for this source. */
   itemCount: number;
-  /** True for sources configured via a picker (Slack); the UI shows "Configure…" not a toggle. */
-  multiStream?: boolean;
-  /** For multi-stream sources: how many streams (channels/DMs) are enabled. */
-  enabledStreamCount?: number;
 }
 
 /** Pulled out so the scheduler is testable without the real network detector. */
@@ -121,13 +121,13 @@ export class SourceIngestionScheduler {
     this.enabledFn = opts.enabled ?? (() => isGBrainEnabled() && isSourceIngestionEnabled());
     this.lookbackMs = opts.lookbackMs ?? DEFAULT_LOOKBACK_MS;
 
-    // Register a disabled row per known single-stream source so the UI can list
-    // it. Multi-stream sources (Slack) have no default stream — their streams
-    // are created as the user selects channels.
+    // Register a disabled row per source so the UI can list it before it's ever
+    // enabled. Every source is single-stream (one watermark per source). Also
+    // reconcile the interval so rows created by an earlier build adopt the
+    // current cadence (ensureIngestionSource won't overwrite an existing row).
     for (const adapter of adapters) {
-      if (!adapter.multiStream) {
-        this.store.ensureIngestionSource(adapter.source, adapter.defaultStream, DEFAULT_SOURCE_INTERVAL_MS);
-      }
+      this.store.ensureIngestionSource(adapter.source, adapter.defaultStream, DEFAULT_SOURCE_INTERVAL_MS);
+      this.store.setSourceInterval(adapter.source, adapter.defaultStream, DEFAULT_SOURCE_INTERVAL_MS);
     }
   }
 
@@ -135,24 +135,18 @@ export class SourceIngestionScheduler {
     return this.enabledFn();
   }
 
-  /** Enable/disable a specific stream (e.g. one Slack channel/DM). Enabling seeds the cursor at now − lookback. */
-  setStreamEnabled(source: string, stream: string, enabled: boolean, now = new Date()): IngestionSourceState | null {
+  /** Toggle a source on/off. Enabling seeds the cursor at now − the adapter's lookback. */
+  setSourceEnabled(source: string, enabled: boolean, now = new Date()): IngestionSourceState | null {
     const adapter = this.adapters.get(source);
     if (!adapter) return null;
     if (enabled) {
-      return this.store.enableSource(source, stream, { seedCursor: adapter.seedCursor(now, this.lookbackMs) }, now);
+      const lookbackMs = adapter.seedLookbackMs ?? this.lookbackMs;
+      return this.store.enableSource(source, adapter.defaultStream, { seedCursor: adapter.seedCursor(now, lookbackMs) }, now);
     }
-    return this.store.disableSource(source, stream, now);
+    return this.store.disableSource(source, adapter.defaultStream, now);
   }
 
-  /** Toggle a single-stream source (gmail, granola). Multi-stream sources use setStreamEnabled per stream. */
-  setSourceEnabled(source: string, enabled: boolean, now = new Date()): IngestionSourceState | null {
-    const adapter = this.adapters.get(source);
-    if (!adapter || adapter.multiStream) return null;
-    return this.setStreamEnabled(source, adapter.defaultStream, enabled, now);
-  }
-
-  /** UI-facing list: one row per adapter (multi-stream sources are aggregated). */
+  /** UI-facing list: one row per source. */
   listSources(): IngestionSourceView[] {
     return [...this.adapters.values()].map((adapter) => this.viewForAdapter(adapter));
   }
@@ -163,27 +157,6 @@ export class SourceIngestionScheduler {
   }
 
   private viewForAdapter(adapter: SourceAdapter): IngestionSourceView {
-    if (adapter.multiStream) {
-      const streams = this.store.listSourceStreams(adapter.source);
-      const enabledStreams = streams.filter((s) => s.enabled);
-      const dmsEnabled = this.store.getConfig(`${adapter.source}.dmsEnabled`) === 'true';
-      const completed = streams.map((s) => s.lastCompletedAt).filter((v): v is string => Boolean(v)).sort();
-      return {
-        source: adapter.source,
-        displayName: adapter.displayName,
-        logoUrl: adapter.logoUrl ?? null,
-        stream: '',
-        connected: this.connectionGate(adapter.source),
-        enabled: enabledStreams.length > 0 || dmsEnabled,
-        status: 'idle',
-        lastCompletedAt: completed.length > 0 ? completed[completed.length - 1] : null,
-        lastError: streams.map((s) => s.lastError).find((v) => Boolean(v)) ?? null,
-        nextDueAt: null,
-        itemCount: this.store.countProcessedItems(adapter.source),
-        multiStream: true,
-        enabledStreamCount: enabledStreams.length,
-      };
-    }
     const state = this.store.getSource(adapter.source, adapter.defaultStream)
       ?? this.store.ensureIngestionSource(adapter.source, adapter.defaultStream);
     return this.toView(state);

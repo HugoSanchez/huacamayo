@@ -38,14 +38,10 @@ export interface SourceAdapter {
   readonly displayName: string;
   /** App logo for the UI. */
   readonly logoUrl?: string;
-  /** '' for single-stream sources (gmail, granola); a channel id for slack. */
+  /** Single watermark stream per source; '' for all current sources. */
   readonly defaultStream: string;
-  /**
-   * True for sources with many user-selected streams (Slack channels/DMs). The
-   * UI shows these as one "Configure…" entry rather than a single toggle, and
-   * listSources aggregates their streams into one row.
-   */
-  readonly multiStream?: boolean;
+  /** Backfill window applied when this source is first enabled. Omit to use the scheduler default. */
+  readonly seedLookbackMs?: number;
   /**
    * Items fetched (and fed to one detector run) per tick. Omit to use the
    * scheduler default. Sources with large, self-contained items (e.g. Granola

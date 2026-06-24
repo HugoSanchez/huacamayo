@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  disableAllSlack,
   disconnectCodex,
   getCodexStatus,
   getIngestionSources,
@@ -10,7 +9,6 @@ import {
   type IngestionSourceView,
 } from './chat';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
-import { SlackChannelsDialog } from './SlackChannelsDialog';
 
 interface ManagedAccountView {
   backend: {
@@ -205,7 +203,6 @@ function IngestionSection() {
   const [sources, setSources] = useState<IngestionSourceView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
-  const [slackOpen, setSlackOpen] = useState(false);
 
   useEffect(() => {
     void refresh();
@@ -241,31 +238,6 @@ function IngestionSection() {
     }
   }
 
-  // Slack is multi-stream: turning it ON opens the channel picker; turning it
-  // OFF disables every channel + DMs. Closing the picker without selecting
-  // anything leaves it off (the toggle reflects whether anything is enabled).
-  async function handleSlackToggle(source: IngestionSourceView) {
-    if (pending) return;
-    if (source.enabled) {
-      setPending(source.source);
-      try {
-        await disableAllSlack();
-        await refresh();
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setPending(null);
-      }
-      return;
-    }
-    if (!source.connected) {
-      setError(`${source.displayName} is not connected. Connect it first.`);
-      return;
-    }
-    setSlackOpen(true);
-  }
-
   // Still loading and nothing to report yet — don't flash an empty section.
   if (sources === null && !error) return null;
   if (sources !== null && sources.length === 0) return null;
@@ -278,9 +250,7 @@ function IngestionSection() {
       </div>
       {error ? <p className="settings-footnote codex-error">{error}</p> : null}
       {sources?.map((source) => {
-        // Slack shows on while the picker is open (optimistic), so cancelling
-        // without a selection visibly flips it back off.
-        const on = source.multiStream ? source.enabled || slackOpen : source.enabled;
+        const on = source.enabled;
         return (
           <div className="settings-row" key={source.source}>
             <span className="settings-label ingestion-source">
@@ -304,20 +274,13 @@ function IngestionSection() {
               role="switch"
               aria-checked={on}
               aria-disabled={pending === source.source || (!source.enabled && !source.connected)}
-              onClick={() => (source.multiStream ? handleSlackToggle(source) : handleToggle(source))}
+              onClick={() => handleToggle(source)}
             >
               <span className="skill-row-toggle-thumb" />
             </span>
           </div>
         );
       })}
-
-      <SlackChannelsDialog
-        isOpen={slackOpen}
-        logoUrl={sources?.find((s) => s.source === 'slack')?.logoUrl ?? null}
-        onClose={() => { setSlackOpen(false); void refresh(); }}
-        onChanged={() => { void refresh(); }}
-      />
     </section>
   );
 }

@@ -308,16 +308,6 @@ export interface IngestionSourceView {
   lastError: string | null;
   nextDueAt: string | null;
   itemCount: number;
-  multiStream?: boolean;
-  enabledStreamCount?: number;
-}
-
-export interface SlackChannelView {
-  id: string;
-  name: string;
-  isPrivate: boolean;
-  isExternal: boolean;
-  enabled: boolean;
 }
 
 export async function getIngestionSources(): Promise<IngestionSourceView[]> {
@@ -340,44 +330,6 @@ export async function toggleIngestionSource(slug: string, enabled: boolean): Pro
   }
   const body = await res.json() as { source: IngestionSourceView };
   return body.source;
-}
-
-export async function getSlackChannels(): Promise<{ channels: SlackChannelView[]; dmsEnabled: boolean }> {
-  const res = await fetch(`${baseURL()}/ingestion/slack/channels`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load Slack channels'));
-  }
-  return await res.json() as { channels: SlackChannelView[]; dmsEnabled: boolean };
-}
-
-export async function toggleSlackChannel(id: string, enabled: boolean): Promise<void> {
-  const res = await fetch(`${baseURL()}/ingestion/slack/channels/${encodeURIComponent(id)}/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to toggle channel'));
-  }
-}
-
-export async function toggleSlackDms(enabled: boolean): Promise<{ dmsEnabled: boolean }> {
-  const res = await fetch(`${baseURL()}/ingestion/slack/dms/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to toggle direct messages'));
-  }
-  return await res.json() as { dmsEnabled: boolean };
-}
-
-export async function disableAllSlack(): Promise<void> {
-  const res = await fetch(`${baseURL()}/ingestion/slack/disable-all`, { method: 'POST' });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to turn off Slack'));
-  }
 }
 
 export async function getCronDetail(id: string): Promise<import('./types').CronDetailView> {

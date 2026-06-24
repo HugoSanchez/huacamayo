@@ -170,6 +170,23 @@ export class IngestionStore {
     return this.getSource(source, stream)!;
   }
 
+  /**
+   * Update the poll interval for an existing row. Used on startup to bring rows
+   * created by an earlier build in line with the current default cadence
+   * (ensureIngestionSource is DO-NOTHING on conflict, so it won't touch them).
+   * Leaves cursor/enabled/next_due_at alone; the next completed run re-spaces.
+   */
+  setSourceInterval(source: string, stream: string, intervalMs: number, now = new Date()): IngestionSourceState | null {
+    const existing = this.getSource(source, stream);
+    if (!existing || existing.intervalMs === intervalMs) return existing;
+    this.db.prepare(`
+      UPDATE ingestion_state
+      SET interval_ms = ?, updated_at = ?
+      WHERE source = ? AND stream = ?
+    `).run(intervalMs, now.toISOString(), source, stream);
+    return this.getSource(source, stream);
+  }
+
   /** Turn ingestion off. The cursor is retained so re-enabling resumes from where it left off. */
   disableSource(source: string, stream: string, now = new Date()): IngestionSourceState | null {
     const existing = this.getSource(source, stream);
