@@ -26,9 +26,9 @@ from mcp.server.stdio import stdio_server
 SERVER_NAME = "verso"
 ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
 COMPOSIO_TOOLS_MANIFEST = os.environ.get("VERSO_COMPOSIO_TOOLS_MANIFEST", "").strip()
-# Memory tool surface for this Hermes profile: "read" (visible assistant),
-# "write" (hidden extraction worker), or unset/anything else for none. The
-# orchestrator owns the single GBrain process; these tools proxy to it.
+# Memory tool surface for this Hermes profile: "full" or unset/anything else
+# for none. The orchestrator owns the in-process memory store; these tools
+# proxy to it.
 MEMORY_TOOLS_MODE = os.environ.get("VERSO_MEMORY_TOOLS", "").strip().lower()
 
 mcp = FastMCP(
@@ -454,13 +454,16 @@ def _sanitize_connection_request(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def search_memory(query: str, limit: int | None = None) -> types.CallToolResult:
-    """Search your persistent memory of past conversations with this user.
+    """Search your persistent memory about this user.
 
-    The memory holds what the user has previously discussed: people,
-    companies, projects, deals, decisions, preferences, and commitments.
-    Use it before web search whenever the answer may involve anything the
-    user has talked about before. Returns matching memory pages with slugs,
-    scores, and snippets; fetch full pages with get_memory_page.
+    The memory holds curated memory pages you have written yourself AND raw
+    history from past conversations and the user's connected apps (email,
+    Slack, meeting notes): people, companies, projects, deals, decisions,
+    preferences, and commitments. Use it before web search whenever the
+    answer may involve anything the user has talked about before. Returns
+    matching entries with slugs, scores, and snippets; fetch full entries
+    with get_memory_page. If wording might differ, retry with a reworded
+    query before concluding nothing is stored.
     """
 
     body: dict[str, Any] = {"query": query}
@@ -470,18 +473,22 @@ def search_memory(query: str, limit: int | None = None) -> types.CallToolResult:
 
 
 def get_memory_page(slug: str) -> types.CallToolResult:
-    """Read one full memory page by slug, as returned by search_memory."""
+    """Read one full memory entry by slug, as returned by search_memory.
+
+    Works on curated page slugs (people/jane-doe) and raw document results
+    (doc:<id>) alike.
+    """
 
     return _structured_result(_request("POST", "/memory/page", {"slug": slug}))
 
 
 def write_memory_page(slug: str, content: str) -> types.CallToolResult:
-    """Create or update a memory page.
+    """Create or update a persistent memory page about a person, project,
+    preference, decision, or fact worth remembering across conversations.
 
-    Use slugs like people/jane-doe, companies/acme, deals/acme-renewal, or
-    wiki/concepts/some-topic. Content is full markdown, optionally with YAML
-    frontmatter. Writing a page does NOT create links or timeline entries —
-    call add_memory_link and add_memory_timeline explicitly.
+    Search first; update the existing page instead of creating a
+    near-duplicate. Slug: short-kebab-case, e.g. people/jane-doe,
+    companies/acme, projects/atlas. Content is full markdown.
     """
 
     return _structured_result(
@@ -489,73 +496,12 @@ def write_memory_page(slug: str, content: str) -> types.CallToolResult:
     )
 
 
-def add_memory_link(
-    from_slug: str,
-    to_slug: str,
-    link_type: str | None = None,
-    context: str | None = None,
-) -> types.CallToolResult:
-    """Link two memory pages (e.g. a meeting page mentions a person page).
-
-    link_type is a short verb-like label such as mentions, works_at,
-    affiliated_with, negotiating_with.
-    """
-
-    body: dict[str, Any] = {"from": from_slug, "to": to_slug}
-    if link_type:
-        body["link_type"] = link_type
-    if context:
-        body["context"] = context
-    return _structured_result(_request("POST", "/memory/link", body))
-
-
-def add_memory_timeline(
-    slug: str,
-    date: str,
-    summary: str,
-    detail: str | None = None,
-) -> types.CallToolResult:
-    """Append a dated timeline entry to a memory page (date as YYYY-MM-DD)."""
-
-    body: dict[str, Any] = {"slug": slug, "date": date, "summary": summary}
-    if detail:
-        body["detail"] = detail
-    return _structured_result(_request("POST", "/memory/timeline", body))
-
-
-def log_memory_ingest(
-    source_ref: str,
-    summary: str,
-    pages_updated: list[str] | None = None,
-    source_type: str | None = None,
-) -> types.CallToolResult:
-    """Record one extraction-run summary in the memory ingest log.
-
-    Call this exactly once at the end of a memory extraction pass — also for
-    zero-signal passes (with an empty pages_updated list). Pass source_type to
-    label the origin (e.g. 'verso_gmail_ingest'); it defaults to chat extraction.
-    """
-
-    body: dict[str, Any] = {
-        "source_ref": source_ref,
-        "summary": summary,
-        "pages_updated": pages_updated or [],
-    }
-    if source_type:
-        body["source_type"] = source_type
-    return _structured_result(_request("POST", "/memory/ingest-log", body))
-
-
 def _register_memory_tools() -> None:
-    if MEMORY_TOOLS_MODE not in ("read", "write"):
+    if MEMORY_TOOLS_MODE != "full":
         return
     mcp.tool()(search_memory)
     mcp.tool()(get_memory_page)
-    if MEMORY_TOOLS_MODE == "write":
-        mcp.tool()(write_memory_page)
-        mcp.tool()(add_memory_link)
-        mcp.tool()(add_memory_timeline)
-        mcp.tool()(log_memory_ingest)
+    mcp.tool()(write_memory_page)
 
 
 async def _run_stdio_async() -> None:

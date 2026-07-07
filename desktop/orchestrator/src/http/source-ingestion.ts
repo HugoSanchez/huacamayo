@@ -1,11 +1,6 @@
-import {
-  isGBrainEnabled,
-  runGBrainSourceIngestion,
-  type HermesGatewayConfig,
-} from './gbrain.ts';
-import { GBrainExtractionQueue } from './gbrain-extraction-queue.ts';
 import { IngestionStore, type IngestionSourceState } from './ingestion-store.ts';
 import type { SourceAdapter } from './ingestion-source.ts';
+import type { MemoryProvider } from './memory-provider.ts';
 
 const DEFAULT_POLL_INTERVAL_MS = 30 * 1000;
 const DEFAULT_STALE_RUNNING_MS = 10 * 60 * 1000;
@@ -38,17 +33,12 @@ export interface IngestionSourceView {
 
 /** Pulled out so the scheduler is testable without the real network detector. */
 export type IngestionRunner = (
-  config: HermesGatewayConfig,
   payload: {
     source: string;
     stream: string;
-    items: Array<{ sourceRef: string; occurredAt: string; content: string }>;
+    items: Array<{ sourceRef: string; occurredAt: string; title?: string; content: string }>;
   },
 ) => Promise<void>;
-
-interface WorkerLike {
-  ensureReady(): Promise<HermesGatewayConfig>;
-}
 
 export function isSourceIngestionEnabled(): boolean {
   // Default ON: enabling a source in Settings is all it takes. The per-source
@@ -69,7 +59,7 @@ export function isSourceIngestionEnabled(): boolean {
  */
 export class SourceIngestionScheduler {
   private readonly store: IngestionStore;
-  private readonly workerHermes: WorkerLike;
+  private readonly provider: MemoryProvider;
   private readonly adapters: Map<string, SourceAdapter>;
   private readonly pollIntervalMs: number;
   private readonly staleRunningMs: number;
@@ -79,7 +69,6 @@ export class SourceIngestionScheduler {
   private readonly maxBackoffMs: number;
   private readonly extractionGate: () => boolean;
   private readonly connectionGate: (source: string) => boolean;
-  private readonly extractionQueue: GBrainExtractionQueue;
   private readonly runIngestion: IngestionRunner;
   private readonly enabledFn: () => boolean;
   private readonly lookbackMs: number;
@@ -88,7 +77,7 @@ export class SourceIngestionScheduler {
 
   constructor(
     store: IngestionStore,
-    workerHermes: WorkerLike,
+    provider: MemoryProvider,
     adapters: SourceAdapter[],
     opts: {
       pollIntervalMs?: number;
@@ -99,14 +88,13 @@ export class SourceIngestionScheduler {
       maxBackoffMs?: number;
       extractionGate?: () => boolean;
       connectionGate?: (source: string) => boolean;
-      extractionQueue?: GBrainExtractionQueue;
       runIngestion?: IngestionRunner;
       enabled?: () => boolean;
       lookbackMs?: number;
     } = {},
   ) {
     this.store = store;
-    this.workerHermes = workerHermes;
+    this.provider = provider;
     this.adapters = new Map(adapters.map((adapter) => [adapter.source, adapter]));
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.staleRunningMs = opts.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
@@ -116,9 +104,8 @@ export class SourceIngestionScheduler {
     this.maxBackoffMs = opts.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
     this.extractionGate = opts.extractionGate ?? (() => true);
     this.connectionGate = opts.connectionGate ?? (() => true);
-    this.extractionQueue = opts.extractionQueue ?? new GBrainExtractionQueue();
-    this.runIngestion = opts.runIngestion ?? ((config, payload) => runGBrainSourceIngestion(config, payload));
-    this.enabledFn = opts.enabled ?? (() => isGBrainEnabled() && isSourceIngestionEnabled());
+    this.runIngestion = opts.runIngestion ?? ((payload) => this.provider.ingestSourceBatch(payload));
+    this.enabledFn = opts.enabled ?? (() => this.provider.diagnostics().enabled && isSourceIngestionEnabled());
     this.lookbackMs = opts.lookbackMs ?? DEFAULT_LOOKBACK_MS;
 
     // Register a disabled row per source so the UI can list it before it's ever
@@ -227,7 +214,10 @@ export class SourceIngestionScheduler {
         return;
       }
 
-      const fetchedRefs = result.items.map((item) => item.sourceRef);
+      // Dedup key: dedupRef when the adapter versions its items (edited Drive
+      // docs re-enter with a new version), else the stable sourceRef.
+      const refOf = (item: { sourceRef: string; dedupRef?: string }) => item.dedupRef ?? item.sourceRef;
+      const fetchedRefs = result.items.map(refOf);
       const newRefs = this.store.filterNewRefs(claim.source, claim.stream, fetchedRefs);
       const nextDue = result.hasMore ? now.toISOString() : this.intervalAt(now, claim.intervalMs);
 
@@ -239,20 +229,20 @@ export class SourceIngestionScheduler {
       }
 
       const newSet = new Set(newRefs);
-      const newItems = result.items.filter((item) => newSet.has(item.sourceRef));
+      const newItems = result.items.filter((item) => newSet.has(refOf(item)));
       this.store.recordPendingItems(claim.source, claim.stream, newRefs, now);
 
       try {
-        const config = await this.workerHermes.ensureReady();
-        await this.extractionQueue.run('source', () => this.runIngestion(config, {
+        await this.runIngestion({
           source: claim.source,
           stream: claim.stream,
           items: newItems.map((item) => ({
             sourceRef: item.sourceRef,
             occurredAt: item.occurredAt,
+            ...(item.title ? { title: item.title } : {}),
             content: item.content,
           })),
-        }));
+        });
         this.store.markItemsProcessed(claim.source, claim.stream, newRefs, now);
         this.store.completeIngestion(claim.source, claim.stream, result.nextCursor, nextDue, now);
       } catch (error: unknown) {

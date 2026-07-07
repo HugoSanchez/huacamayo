@@ -19,7 +19,7 @@ describe('Hermes Chat Streaming', () => {
     VERSO_HERMES_GATEWAY_URL?: string;
     VERSO_CHAT_STORE_PATH?: string;
     VERSO_HERMES_MANAGED?: string;
-    VERSO_GBRAIN_ENABLED?: string;
+    VERSO_MEMORY_DB_PATH?: string;
   } = {};
 
   beforeAll(async () => {
@@ -27,7 +27,7 @@ describe('Hermes Chat Streaming', () => {
       VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
       VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
       VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
-      VERSO_GBRAIN_ENABLED: process.env.VERSO_GBRAIN_ENABLED,
+      VERSO_MEMORY_DB_PATH: process.env.VERSO_MEMORY_DB_PATH,
     };
 
     gateway = http.createServer((req, res) => {
@@ -160,7 +160,9 @@ describe('Hermes Chat Streaming', () => {
     process.env.VERSO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
     process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-test-${process.pid}.sqlite`;
     process.env.VERSO_HERMES_MANAGED = 'false';
-    delete process.env.VERSO_GBRAIN_ENABLED;
+    // Memory defaults on; keep the test's SQLite store out of the real
+    // profile-sibling location.
+    process.env.VERSO_MEMORY_DB_PATH = `/tmp/verso-memory-test-${process.pid}.sqlite`;
 
     const result = await startServer({ port: 0 });
     server = result.server;
@@ -180,7 +182,8 @@ describe('Hermes Chat Streaming', () => {
     process.env.VERSO_HERMES_GATEWAY_URL = envSnapshot.VERSO_HERMES_GATEWAY_URL;
     process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
     process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
-    process.env.VERSO_GBRAIN_ENABLED = envSnapshot.VERSO_GBRAIN_ENABLED;
+    if (envSnapshot.VERSO_MEMORY_DB_PATH === undefined) delete process.env.VERSO_MEMORY_DB_PATH;
+    else process.env.VERSO_MEMORY_DB_PATH = envSnapshot.VERSO_MEMORY_DB_PATH;
   });
 
   function url(pathname: string): string {
@@ -285,7 +288,7 @@ describe('Hermes Chat Streaming', () => {
     expect(messages.body.messages[3].content).toBe('Recovered: Second turn');
   });
 
-  it('marks a GBrain signal detection job pending when enabled', async () => {
+  it('marks a memory extraction job pending after a chat turn', async () => {
     requestLog = [];
     breakConversationChain = false;
     storedResponses.clear();
@@ -294,12 +297,11 @@ describe('Hermes Chat Streaming', () => {
     responseCounter = 0;
     sessionCounter = 0;
     messageCounter = 0;
-    process.env.VERSO_GBRAIN_ENABLED = '1';
 
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'GBrain' }),
+      body: JSON.stringify({ title: 'Memory' }),
     });
     const sessionId = created.body.session.id as string;
 
@@ -314,13 +316,15 @@ describe('Hermes Chat Streaming', () => {
     expect(res.status).toBe(200);
     await res.text();
     const diagnostics = await fetchJson('/diagnostics');
-    delete process.env.VERSO_GBRAIN_ENABLED;
 
     expect(requestLog[0].conversation).toBe(sessionId);
     expect(requestLog).toHaveLength(1);
     expect(diagnostics.body.chat.memoryExtraction.enabled).toBe(true);
     expect(diagnostics.body.chat.memoryExtraction.idleThresholdMs).toBe(120000);
-    expect(diagnostics.body.chat.memoryExtraction.counts.pending).toBe(1);
+    // Memory is enabled by default, so sessions from the earlier tests in
+    // this file are pending too — assert at least this one.
+    expect(diagnostics.body.chat.memoryExtraction.counts.pending).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.body.memory).toMatchObject({ backend: 'lexical', state: 'ready' });
   });
 });
 

@@ -171,6 +171,8 @@ export function buildChatRoutes(
       managedBackend.recordAnalyticsEvent({ eventType: 'message_sent', sessionId: params.id });
 
       const attached = parseAttached(body);
+      const reasoningEffort = parseReasoningEffort(body);
+      const model = parseChatModel(body);
       let promptForHermes = content;
       if (attached?.kind === 'cron') {
         // Fetch the cron's current state and prepend it as a system block so
@@ -201,6 +203,8 @@ export function buildChatRoutes(
           sessionRecord: record,
           userPrompt: promptForHermes,
           isFirstUserMessage,
+          reasoningEffort,
+          model,
           res,
           requestBaseUrl: requestBaseUrl(req),
         }, store, hermes, managedBackend, memoryExtraction);
@@ -260,6 +264,40 @@ export function buildChatDiagnostics(
 }
 
 type AttachedContext = { kind: 'cron'; id: string };
+
+// Reasoning-effort levels Hermes accepts (see hermes_constants.VALID_REASONING_EFFORTS).
+// The chat-input selector sends one of these per message; anything else falls
+// back to the gateway's config.yaml default.
+const VALID_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+type ReasoningEffort = (typeof VALID_REASONING_EFFORTS)[number];
+
+function parseReasoningEffort(body: unknown): ReasoningEffort | null {
+  const raw = body && typeof body === 'object' && !Array.isArray(body)
+    ? (body as Record<string, unknown>).reasoningEffort
+    : undefined;
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim().toLowerCase();
+  return (VALID_REASONING_EFFORTS as readonly string[]).includes(value)
+    ? (value as ReasoningEffort)
+    : null;
+}
+
+// Codex models the chat-input model selector may pick. Allowlisted so a stray
+// client value can't ask the gateway to load an unauthenticated model; absent
+// values let the gateway use its config.yaml default.
+const VALID_CHAT_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const;
+type ChatModel = (typeof VALID_CHAT_MODELS)[number];
+
+function parseChatModel(body: unknown): ChatModel | null {
+  const raw = body && typeof body === 'object' && !Array.isArray(body)
+    ? (body as Record<string, unknown>).model
+    : undefined;
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim().toLowerCase();
+  return (VALID_CHAT_MODELS as readonly string[]).includes(value)
+    ? (value as ChatModel)
+    : null;
+}
 
 function parseAttached(body: unknown): AttachedContext | null {
   if (!body || typeof body !== 'object') return null;
@@ -398,6 +436,8 @@ async function runHermesMessage(
     sessionRecord: ChatSessionRecord;
     userPrompt: string;
     isFirstUserMessage: boolean;
+    reasoningEffort?: ReasoningEffort | null;
+    model?: ChatModel | null;
     res: ServerResponse;
     requestBaseUrl: string;
   },
@@ -530,6 +570,8 @@ async function runHermesMessage(
       conversation: opts.session.id,
       userPrompt: opts.userPrompt,
       conversationHistory: null,
+      reasoningEffort: opts.reasoningEffort ?? null,
+      model: opts.model ?? null,
       signal: controller.signal,
       onSessionId: (sessionId) => {
         linkedHermesSessionId = sessionId;
@@ -555,6 +597,8 @@ async function runHermesMessage(
         conversation: opts.session.id,
         userPrompt: opts.userPrompt,
         conversationHistory: recoveryMessages,
+        reasoningEffort: opts.reasoningEffort ?? null,
+        model: opts.model ?? null,
         signal: controller.signal,
         onSessionId: (sessionId) => {
           linkedHermesSessionId = sessionId;
@@ -693,6 +737,8 @@ async function streamHermesConversation(
     conversation: string;
     userPrompt: string;
     conversationHistory: ChatMessageRecord[] | null;
+    reasoningEffort?: ReasoningEffort | null;
+    model?: ChatModel | null;
     signal: AbortSignal;
     onSessionId: (sessionId: string) => void;
     onEvent: (eventName: string, data: HermesEventPayload) => void;
@@ -702,6 +748,8 @@ async function streamHermesConversation(
     opts.conversation,
     opts.userPrompt,
     opts.conversationHistory,
+    opts.reasoningEffort ?? null,
+    opts.model ?? null,
   );
   await streamHermesResponse(config, payload, opts.signal, opts.onSessionId, opts.onEvent);
 }
@@ -710,6 +758,8 @@ function buildHermesRequestBody(
   conversation: string,
   userPrompt: string,
   conversationHistory: ChatMessageRecord[] | null,
+  reasoningEffort: ReasoningEffort | null = null,
+  model: ChatModel | null = null,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     input: userPrompt,
@@ -718,6 +768,16 @@ function buildHermesRequestBody(
     stream: true,
     store: true,
   };
+
+  // OpenAI Responses native fields. The gateway (via the Verso request-overrides
+  // patch) reads `reasoning.effort` and `model` per request and overrides
+  // config.yaml for that turn.
+  if (reasoningEffort) {
+    body.reasoning = { effort: reasoningEffort };
+  }
+  if (model) {
+    body.model = model;
+  }
 
   if (conversationHistory && conversationHistory.length > 0) {
     body.conversation_history = conversationHistory.map((message) => ({

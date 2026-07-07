@@ -8,8 +8,21 @@ import { SourceIngestionScheduler } from '../src/http/source-ingestion.ts';
 import { buildIngestionRoutes } from '../src/http/ingestion.ts';
 import { dispatch } from '../src/http/router.ts';
 import type { IngestionFetchResult, SourceAdapter } from '../src/http/ingestion-source.ts';
+import type { MemoryProvider } from '../src/http/memory-provider.ts';
 
-const fakeWorker = { ensureReady: async () => ({ baseUrl: 'http://test', apiKey: null }) };
+const fakeProvider: MemoryProvider = {
+  backend: 'lexical',
+  capabilities: { search: true, getPage: true, bridgeWrites: true },
+  start: async () => undefined,
+  stop: async () => undefined,
+  isReady: () => true,
+  getState: () => 'ready',
+  diagnostics: () => ({ enabled: true, state: 'ready', backend: 'lexical' }),
+  search: async () => [],
+  getPage: async () => null,
+  ingestChatSegment: async () => undefined,
+  ingestSourceBatch: async () => undefined,
+};
 
 class FakeAdapter implements SourceAdapter {
   readonly source = 'gmail';
@@ -36,7 +49,7 @@ describe('Ingestion routes', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'verso-ingroutes-'));
     tempDirs.push(dir);
     const store = new IngestionStore(path.join(dir, 'ingestion.sqlite'));
-    return new SourceIngestionScheduler(store, fakeWorker, [new FakeAdapter()], {
+    return new SourceIngestionScheduler(store, fakeProvider, [new FakeAdapter()], {
       enabled: () => true,
       connectionGate: () => connected,
       runIngestion: async () => {},

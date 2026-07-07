@@ -120,6 +120,12 @@ struct ContentView: View {
     @State private var crons: [SidebarCron] = []
     @State private var pendingCronOpen: CronOpenRequest?
     @State private var pendingSettingsOpen: SettingsOpenRequest?
+    // One-shot signal that asks the WebView to drop whatever page it's
+    // showing (settings / skill / cron) and return to the chat surface for
+    // the current session. Fired when the user taps the *already-selected*
+    // session in the leftbar — selection doesn't change, so there's no shell
+    // state delta to clear the overlay, yet the user clearly wants to go back.
+    @State private var pendingChatFocus: ChatFocusRequest?
     @State private var hasCompletedInitialSelection = false
     @State private var isSystemAsleep = false
 
@@ -260,6 +266,7 @@ struct ContentView: View {
                 isSkillsCatalogOpen: isSkillsCatalogExpanded,
                 pendingCronOpen: pendingCronOpen,
                 pendingSettingsOpen: pendingSettingsOpen,
+                pendingChatFocus: pendingChatFocus,
                 shellState: ShellState(sessions: sessions, selectedSessionId: selectedSessionId),
                 onCatalogStateChange: { open in
                     isConnectionsCatalogExpanded = open
@@ -700,7 +707,13 @@ struct ContentView: View {
 
     @MainActor
     private func selectSession(_ sessionId: String) {
-        guard selectedSessionId != sessionId else { return }
+        guard selectedSessionId != sessionId else {
+            // Re-tapping the active session: selection is unchanged, so the
+            // WebView won't see a shell-state delta to clear an open page.
+            // Nudge it back to the chat surface explicitly.
+            pendingChatFocus = ChatFocusRequest(token: UUID())
+            return
+        }
         if let session = sessions.first(where: { $0.id == sessionId }),
            session.archivedAt != nil {
             Task { await resumeArchivedSession(sessionId) }
@@ -729,6 +742,7 @@ struct ContentView: View {
         crons = []
         pendingCronOpen = nil
         pendingSettingsOpen = nil
+        pendingChatFocus = nil
         hasCompletedInitialSelection = false
     }
 
@@ -1335,6 +1349,10 @@ struct CronOpenRequest: Equatable {
 }
 
 struct SettingsOpenRequest: Equatable {
+    let token: UUID
+}
+
+struct ChatFocusRequest: Equatable {
     let token: UUID
 }
 

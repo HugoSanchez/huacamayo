@@ -99,7 +99,11 @@ export function streamChatMessage(
   onEvent: (event: ChatSSEEvent) => void,
   onDone: () => void,
   onError: (err: string) => void,
-  options: { attached?: import('./types').AttachedContext | null } = {},
+  options: {
+    attached?: import('./types').AttachedContext | null;
+    reasoningEffort?: string | null;
+    model?: string | null;
+  } = {},
 ): () => void {
   const controller = new AbortController();
 
@@ -110,12 +114,17 @@ export function streamChatMessage(
     ? { kind: 'cron' as const, id: options.attached.id }
     : undefined;
 
+  const requestBody: Record<string, unknown> = { content };
+  if (attached) requestBody.attached = attached;
+  if (options.reasoningEffort) requestBody.reasoningEffort = options.reasoningEffort;
+  if (options.model) requestBody.model = options.model;
+
   (async () => {
     try {
       const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(attached ? { content, attached } : { content }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 

@@ -39,3 +39,6 @@ desktop/runtime-bundles/
 # Sparkle EdDSA private key — should NEVER be committed
 *sparkle*private*key*
 verso-edkey.txt
+
+# supermemory local data dir (spike)
+.supermemory/

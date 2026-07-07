@@ -13,11 +13,8 @@ import {
   isBundledRuntime,
   seedHermesHomeFromBundle,
 } from './runtime-bootstrap.ts';
-import {
-  applyGBrainSoulSection,
-  type GBrainMcpToolMode,
-  resolveGBrainRuntimeConfig,
-} from './gbrain.ts';
+import { isMemoryEnabled } from './lexical-provider.ts';
+import { applyMemorySoulSection } from './memory-soul.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -179,8 +176,7 @@ export interface HermesSupervisorOptions {
   config?: HermesGatewayConfig;
   launch?: HermesLaunchConfig;
   runtimeMode?: RuntimeMode;
-  managedProfileName?: string;
-  gbrainMcpMode?: GBrainMcpToolMode | 'none';
+  memoryToolsMode?: 'full' | 'none';
 }
 
 // Skills the user must never be able to enable. They overlap with — and
@@ -219,8 +215,7 @@ export class HermesSupervisor {
   private readonly templateHermesHome: string;
   private readonly seedHermesHome: string;
   private readonly runtimeMode: RuntimeMode;
-  private readonly managedProfileName: string;
-  private readonly gbrainMcpMode: GBrainMcpToolMode | 'none';
+  private readonly memoryToolsMode: 'full' | 'none';
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
@@ -237,13 +232,12 @@ export class HermesSupervisor {
     this.config = options.config ?? getHermesGatewayConfig();
     this.launch = options.launch ?? getHermesLaunchConfig();
     this.runtimeMode = options.runtimeMode ?? 'managed';
-    this.managedProfileName = options.managedProfileName ?? 'verso';
-    this.gbrainMcpMode = options.gbrainMcpMode ?? 'read';
+    this.memoryToolsMode = options.memoryToolsMode ?? 'full';
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
-    this.managedHermesHome = getManagedHermesHome(this.templateHermesHome, this.managedProfileName);
-    this.seedHermesHome = getManagedProfileSeedHome(this.templateHermesHome, this.managedProfileName);
+    this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
+    this.seedHermesHome = this.templateHermesHome;
     this.baseUrlResolved = this.hasExplicitBaseUrl;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
@@ -814,8 +808,7 @@ export class HermesSupervisor {
     const mcpServers = asRecord(config.mcp_servers) ?? {};
     delete mcpServers.vervo;
 
-    const gbrain = resolveGBrainRuntimeConfig(this.managedHermesHome);
-    const memoryToolsActive = gbrain.enabled && gbrain.command !== null && this.gbrainMcpMode !== 'none';
+    const memoryToolsActive = isMemoryEnabled() && this.memoryToolsMode !== 'none';
 
     if (this.orchestratorBaseUrl) {
       const pythonPath = resolveHermesPython(this.templateHermesHome);
@@ -835,11 +828,9 @@ export class HermesSupervisor {
           env.PYTHONPATH = bundled.sitePackages;
         }
         // Memory tools are part of the verso bridge: the orchestrator owns
-        // the single GBrain process and the bridge proxies to it, so the
-        // per-profile surface is just an env switch ("read" for the visible
-        // agent, "write" for the hidden extraction worker).
+        // the in-process memory store and the bridge proxies to it.
         if (memoryToolsActive) {
-          env.VERSO_MEMORY_TOOLS = this.gbrainMcpMode;
+          env.VERSO_MEMORY_TOOLS = 'full';
         }
         mcpServers.verso = {
           command: pythonPath,
@@ -856,10 +847,9 @@ export class HermesSupervisor {
     // provider tool schemas are too unstable for the primary product path.
     delete mcpServers.composio;
 
-    // GBrain must never be wired as a per-profile MCP server: PGLite is a
-    // single-process embedded DB and concurrent `gbrain serve` children
-    // corrupted it. The orchestrator owns the only GBrain process; agents
-    // reach memory through the verso bridge tools configured above.
+    // Hygiene for pre-existing user configs from the GBrain era: memory is
+    // in-process now, and a stale per-profile gbrain MCP entry would spawn a
+    // dead child on every Hermes launch.
     delete mcpServers.gbrain;
 
     const tools = asRecord(config.tools) ?? {};
@@ -872,25 +862,24 @@ export class HermesSupervisor {
     // Teach the visible agent that the memory tools ARE its memory —
     // without this it pattern-matches "what do you know about X" to web
     // search. Managed via marker comments so user SOUL edits survive, and
-    // removed again when the feature is off. The hidden worker profile is
-    // driven by an explicit extraction prompt and doesn't need it.
-    this.syncGBrainSoulSection(memoryToolsActive && this.gbrainMcpMode === 'read');
+    // removed again when the feature is off.
+    this.syncMemorySoulSection(memoryToolsActive);
 
     config.mcp_servers = mcpServers;
     config.tools = tools;
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
-  private syncGBrainSoulSection(enabled: boolean): void {
+  private syncMemorySoulSection(enabled: boolean): void {
     const soulPath = join(this.managedHermesHome, 'SOUL.md');
     try {
       const current = existsSync(soulPath) ? readFileSync(soulPath, 'utf8') : '';
-      const next = applyGBrainSoulSection(current, enabled);
+      const next = applyMemorySoulSection(current, enabled);
       if (next !== current) {
         writeFileSync(soulPath, next, 'utf8');
       }
     } catch (error: unknown) {
-      console.warn(`[gbrain] SOUL.md memory section sync failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[memory] SOUL.md memory section sync failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1051,21 +1040,10 @@ function getTemplateHermesHome(): string {
     || join(os.homedir(), '.hermes');
 }
 
-function getManagedHermesHome(templateHome: string, profileName: string): string {
+function getManagedHermesHome(templateHome: string): string {
   const override = process.env.VERSO_HERMES_HOME?.trim();
-  if (override) {
-    return profileName === 'verso' ? override : `${override}-${profileName}`;
-  }
-  return join(resolveHermesRoot(templateHome), 'profiles', profileName);
-}
-
-function getManagedProfileSeedHome(templateHome: string, profileName: string): string {
-  if (profileName === 'verso') return templateHome;
-
-  const canonicalManagedHome = getManagedHermesHome(templateHome, 'verso');
-  return existsSync(join(canonicalManagedHome, 'config.yaml'))
-    ? canonicalManagedHome
-    : templateHome;
+  if (override) return override;
+  return join(resolveHermesRoot(templateHome), 'profiles', 'verso');
 }
 
 function resolveHermesRoot(home: string): string {

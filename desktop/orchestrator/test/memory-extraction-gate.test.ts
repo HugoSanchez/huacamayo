@@ -1,28 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { MemoryExtractionScheduler } from '../src/http/memory-extraction.ts';
 import type { ChatStore } from '../src/http/chat-store.ts';
-import type { HermesSupervisor } from '../src/http/hermes-supervisor.ts';
+import type { MemoryProvider } from '../src/http/memory-provider.ts';
 
 /**
- * The extraction gate defers claiming while the local embedding runtime is
- * not ready: gbrain's put_page propagates embedding failures, so claiming a
- * session during the model-download window would burn the attempt instead of
- * just waiting. Deferred sessions stay pending and are claimed on a later
- * tick once the gate opens.
+ * The extraction gate defers claiming while the provider can't accept writes
+ * (e.g. the store hasn't opened yet). Deferred sessions stay pending and are
+ * claimed on a later tick once the gate opens.
  */
 describe('MemoryExtractionScheduler extraction gate', () => {
-  let envSnapshot: string | undefined;
-
-  beforeEach(() => {
-    envSnapshot = process.env.VERSO_GBRAIN_ENABLED;
-    process.env.VERSO_GBRAIN_ENABLED = '1';
-  });
-
-  afterEach(() => {
-    if (envSnapshot === undefined) delete process.env.VERSO_GBRAIN_ENABLED;
-    else process.env.VERSO_GBRAIN_ENABLED = envSnapshot;
-  });
-
   function makeStore(): { store: ChatStore; claims: number } {
     const counter = { store: null as unknown as ChatStore, claims: 0 };
     counter.store = {
@@ -34,12 +20,28 @@ describe('MemoryExtractionScheduler extraction gate', () => {
     return counter;
   }
 
+  function fakeProvider(): MemoryProvider {
+    return {
+      backend: 'lexical',
+      capabilities: { search: true, getPage: true, bridgeWrites: true },
+      start: async () => undefined,
+      stop: async () => undefined,
+      isReady: () => true,
+      getState: () => 'ready',
+      diagnostics: () => ({ enabled: true, state: 'ready', backend: 'lexical' }),
+      search: async () => [],
+      getPage: async () => null,
+      ingestChatSegment: async () => undefined,
+      ingestSourceBatch: async () => undefined,
+    };
+  }
+
   it('does not claim while the gate is closed', async () => {
     const counter = makeStore();
     let gateOpen = false;
     const scheduler = new MemoryExtractionScheduler(
       counter.store,
-      {} as HermesSupervisor,
+      fakeProvider(),
       { extractionGate: () => gateOpen },
     );
 
@@ -53,7 +55,7 @@ describe('MemoryExtractionScheduler extraction gate', () => {
 
   it('claims by default when no gate is provided', async () => {
     const counter = makeStore();
-    const scheduler = new MemoryExtractionScheduler(counter.store, {} as HermesSupervisor);
+    const scheduler = new MemoryExtractionScheduler(counter.store, fakeProvider());
 
     await scheduler.tick();
     expect(counter.claims).toBe(1);

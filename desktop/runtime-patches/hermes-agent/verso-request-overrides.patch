@@ -1,0 +1,93 @@
+--- a/gateway/platforms/api_server.py
++++ b/gateway/platforms/api_server.py
+@@ -1026,6 +1026,8 @@
+         tool_start_callback=None,
+         tool_complete_callback=None,
+         reasoning_callback=None,
++        reasoning_effort_override: Optional[str] = None,
++        model_override: Optional[str] = None,
+         gateway_session_key: Optional[str] = None,
+     ) -> Any:
+         """
+@@ -1055,7 +1057,20 @@
+ 
+         runtime_kwargs = _resolve_runtime_agent_kwargs()
+         reasoning_config = GatewayRunner._load_reasoning_config()
+-        model = _resolve_gateway_model()
++        # Per-request reasoning-effort override (Verso chat-input selector).
++        # Falls back to the config-loaded value when absent or unrecognized.
++        if reasoning_effort_override:
++            from hermes_constants import parse_reasoning_effort
++            _override_cfg = parse_reasoning_effort(reasoning_effort_override)
++            if _override_cfg is not None:
++                reasoning_config = _override_cfg
++        # Per-request model override (Verso chat-input model selector). Both
++        # Codex models share the same provider/auth, so swapping the model
++        # string is sufficient; empty/absent falls back to config.yaml.
++        if isinstance(model_override, str) and model_override.strip():
++            model = model_override.strip()
++        else:
++            model = _resolve_gateway_model()
+ 
+         user_config = _load_gateway_config()
+         enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))
+@@ -2854,6 +2869,23 @@
+         previous_response_id = body.get("previous_response_id")
+         conversation = body.get("conversation")
+         store = _coerce_request_bool(body.get("store"), default=True)
++
++        # Per-request reasoning effort (OpenAI Responses native ``reasoning.effort``).
++        # Verso's chat-input selector sends this so the user can trade latency for
++        # depth per message; absent/invalid values fall back to config.yaml.
++        reasoning_effort_override: Optional[str] = None
++        _reasoning_param = body.get("reasoning")
++        if isinstance(_reasoning_param, dict):
++            _effort = _reasoning_param.get("effort")
++            if isinstance(_effort, str) and _effort.strip():
++                reasoning_effort_override = _effort.strip()
++
++        # Per-request model override (Verso chat-input model selector). Absent or
++        # blank values let the gateway use its config.yaml default model.
++        model_override: Optional[str] = None
++        _model_param = body.get("model")
++        if isinstance(_model_param, str) and _model_param.strip():
++            model_override = _model_param.strip()
+ 
+         # conversation and previous_response_id are mutually exclusive
+         if conversation and previous_response_id:
+@@ -2993,6 +3025,8 @@
+                 tool_start_callback=_on_tool_start,
+                 tool_complete_callback=_on_tool_complete,
+                 reasoning_callback=_on_reasoning,
++                reasoning_effort_override=reasoning_effort_override,
++                model_override=model_override,
+                 agent_ref=agent_ref,
+                 gateway_session_key=gateway_session_key,
+             ))
+@@ -3027,6 +3061,8 @@
+                 conversation_history=conversation_history,
+                 ephemeral_system_prompt=instructions,
+                 session_id=session_id,
++                reasoning_effort_override=reasoning_effort_override,
++                model_override=model_override,
+                 gateway_session_key=gateway_session_key,
+             )
+ 
+@@ -3600,6 +3636,8 @@
+         tool_start_callback=None,
+         tool_complete_callback=None,
+         reasoning_callback=None,
++        reasoning_effort_override: Optional[str] = None,
++        model_override: Optional[str] = None,
+         agent_ref: Optional[list] = None,
+         gateway_session_key: Optional[str] = None,
+     ) -> tuple:
+@@ -3634,6 +3672,8 @@
+                     tool_start_callback=tool_start_callback,
+                     tool_complete_callback=tool_complete_callback,
+                     reasoning_callback=reasoning_callback,
++                    reasoning_effort_override=reasoning_effort_override,
++                    model_override=model_override,
+                     gateway_session_key=gateway_session_key,
+                 )
+                 if agent_ref is not None:

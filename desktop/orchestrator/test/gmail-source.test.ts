@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { GmailSource, parseGmailCursor } from '../src/http/gmail-source.ts';
-import { buildSourceIngestionPrompt } from '../src/http/gbrain.ts';
 import type { IngestionBridge } from '../src/http/ingestion-source.ts';
 
 interface Call {
@@ -134,25 +133,5 @@ describe('GmailSource', () => {
 
     const { bridge: b2 } = fakeBridge({ error: 'insufficient scope' });
     await expect(new GmailSource(b2).fetchSince('', '0', { maxItems: 20 })).rejects.toThrow(/insufficient scope/);
-  });
-});
-
-describe('buildSourceIngestionPrompt (pages-only)', () => {
-  const items = [{ sourceRef: 'm_abc', occurredAt: '2026-06-17T10:00:00.000Z', content: 'Subject: Hi\n\nBody text' }];
-
-  it('is pages-only: forbids add_memory_timeline, allows write_memory_page', () => {
-    const prompt = buildSourceIngestionPrompt({ source: 'gmail', stream: '', items, timestamp: new Date('2026-06-17T00:00:00Z') });
-    expect(prompt).toMatch(/Do NOT call add_memory_timeline/);
-    expect(prompt).toContain('write_memory_page');
-    expect(prompt).toContain('source_type "verso_gmail_ingest"'); // labeled, not chat
-    expect(prompt).toContain('[Source: Gmail,');
-    expect(prompt).toContain('source_ref: m_abc');
-    expect(prompt).toContain('Body text');
-  });
-
-  it('labels known sources and includes the stream when present', () => {
-    const prompt = buildSourceIngestionPrompt({ source: 'slack', stream: 'C123', items, timestamp: new Date('2026-06-17T00:00:00Z') });
-    expect(prompt).toContain('Slack');
-    expect(prompt).toContain('C123');
   });
 });

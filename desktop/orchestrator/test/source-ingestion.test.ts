@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { IngestionStore } from '../src/http/ingestion-store.ts';
 import { SourceIngestionScheduler, isSourceIngestionEnabled, type IngestionRunner } from '../src/http/source-ingestion.ts';
 import type { IngestionFetchResult, IngestionItem, SourceAdapter } from '../src/http/ingestion-source.ts';
+import type { MemoryProvider } from '../src/http/memory-provider.ts';
 
 const t0 = new Date('2026-06-17T10:00:00.000Z');
 const MIN = 60 * 1000;
@@ -38,7 +39,19 @@ class ScriptedAdapter implements SourceAdapter {
   }
 }
 
-const fakeWorker = { ensureReady: async () => ({ baseUrl: 'http://test', apiKey: null }) };
+const fakeProvider: MemoryProvider = {
+  backend: 'lexical',
+  capabilities: { search: true, getPage: true, bridgeWrites: true },
+  start: async () => undefined,
+  stop: async () => undefined,
+  isReady: () => true,
+  getState: () => 'ready',
+  diagnostics: () => ({ enabled: true, state: 'ready', backend: 'lexical' }),
+  search: async () => [],
+  getPage: async () => null,
+  ingestChatSegment: async () => undefined,
+  ingestSourceBatch: async () => undefined,
+};
 
 describe('SourceIngestionScheduler', () => {
   const tempDirs: string[] = [];
@@ -61,11 +74,11 @@ describe('SourceIngestionScheduler', () => {
     const store = new IngestionStore(path.join(dir, 'ingestion.sqlite'));
     const adapter = new ScriptedAdapter(opts.behavior, opts.adapterMaxItems);
     const runs: Array<{ source: string; stream: string; items: Array<{ sourceRef: string }> }> = [];
-    const runIngestion: IngestionRunner = async (_config, payload) => {
+    const runIngestion: IngestionRunner = async (payload) => {
       runs.push(payload);
       if (opts.detectThrows) throw new Error('detect boom');
     };
-    const scheduler = new SourceIngestionScheduler(store, fakeWorker, [adapter], {
+    const scheduler = new SourceIngestionScheduler(store, fakeProvider, [adapter], {
       enabled: opts.enabled ?? (() => true),
       extractionGate: opts.extractionGate ?? (() => true),
       connectionGate: opts.connectionGate,
@@ -112,6 +125,32 @@ describe('SourceIngestionScheduler', () => {
     await scheduler.tick(at(MIN));
     expect(runs[0].items.map((i) => i.sourceRef)).toEqual(['m2']); // only the new one
     expect(store.getSource('gmail', '')?.cursor).toBe('200');
+  });
+
+  it('dedups on dedupRef, so an edited item re-ingests under its stable sourceRef', async () => {
+    // Drive-style versioned items: sourceRef is the file id, dedupRef carries
+    // the version. A new version passes dedup and reaches the provider (which
+    // upserts on sourceRef); refetching the same version is skipped.
+    const versioned = (ref: string, version: number, ts: number) => ({
+      ...item(ref, ts),
+      dedupRef: `${ref}:${version}`,
+    });
+    const { store, runs, scheduler } = setup({
+      behavior: (_cursor, call) => call === 1
+        ? { items: [versioned('doc-1', 1, 100)], nextCursor: '100', hasMore: false }
+        // Second fetch: same version re-fetched (boundary overlap) plus an edit.
+        : { items: [versioned('doc-1', 1, 100), versioned('doc-1', 2, 300)], nextCursor: '300', hasMore: false },
+    });
+    store.enableSource('gmail', '', { seedCursor: '0' }, t0);
+
+    await scheduler.tick(at(MIN));
+    await scheduler.tick(at(130 * MIN)); // past the 2h interval
+
+    expect(runs).toHaveLength(2);
+    expect(runs[0].items.map((i) => i.sourceRef)).toEqual(['doc-1']);
+    expect(runs[1].items.map((i) => i.sourceRef)).toEqual(['doc-1']); // v2 only — v1 deduped
+    expect(store.getItem('gmail', '', 'doc-1:1')?.status).toBe('processed');
+    expect(store.getItem('gmail', '', 'doc-1:2')?.status).toBe('processed');
   });
 
   it('does not call the detector on an empty page', async () => {

@@ -16,10 +16,20 @@ export interface IngestionBridge {
 export interface IngestionItem {
   /** Stable unique id for dedup (e.g. Gmail messageId). */
   sourceRef: string;
+  /**
+   * Versioned dedup key for sources whose items legitimately re-enter after
+   * edits (e.g. Drive `<fileId>:<modifiedTime>`). The scheduler tracks
+   * processed items by this key, so a new version passes dedup and is
+   * re-ingested — while `sourceRef` stays stable so the memory store upserts
+   * over the same row instead of duplicating it. Omit for immutable items.
+   */
+  dedupRef?: string;
   /** Monotonic position used to advance the cursor and to sort a page (e.g. epoch ms). */
   cursorValue: number;
   /** ISO timestamp of the item, for citations. Empty string if unknown. */
   occurredAt: string;
+  /** Optional display title, stored (and FTS-indexed) alongside the content. */
+  title?: string;
   /** Detector-ready text for this item. */
   content: string;
 }

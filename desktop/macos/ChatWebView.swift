@@ -106,6 +106,9 @@ struct ChatWebView: NSViewRepresentable {
     let isSkillsCatalogOpen: Bool
     let pendingCronOpen: CronOpenRequest?
     let pendingSettingsOpen: SettingsOpenRequest?
+    // One-shot: dismiss any open page (settings/skill/cron) and return to the
+    // chat surface. Fired when the active session is re-tapped in the leftbar.
+    let pendingChatFocus: ChatFocusRequest?
     // Full shell-state snapshot pushed to JS on every change. The chat-ui
     // derives its session list + selection off this; Swift-side mutations
     // that change either bump the snapshot automatically via SwiftUI's
@@ -276,6 +279,15 @@ struct ChatWebView: NSViewRepresentable {
             }
         }
 
+        // Chat-focus requests are nonced too, so re-tapping the active session
+        // re-fires even when nothing about the selection changed.
+        if let request = pendingChatFocus, request.token != context.coordinator.lastInjectedChatFocusToken {
+            context.coordinator.pendingChatFocus = request
+            if context.coordinator.pageLoaded {
+                context.coordinator.injectFocusChat(request)
+            }
+        }
+
         // Shell-state snapshot. Pushed on every change so the chat-ui can
         // drive its rendering off a single source of truth instead of N
         // overlapping injection channels. Step 2: pushed but not yet
@@ -317,6 +329,8 @@ struct ChatWebView: NSViewRepresentable {
         var pendingCronOpen: CronOpenRequest?
         var lastInjectedSettingsToken: UUID?
         var pendingSettingsOpen: SettingsOpenRequest?
+        var lastInjectedChatFocusToken: UUID?
+        var pendingChatFocus: ChatFocusRequest?
         var lastInjectedShellState: ShellState?
         var pendingShellState: ShellState?
         var lastDarkMode: Bool?
@@ -462,6 +476,9 @@ struct ChatWebView: NSViewRepresentable {
             if let request = pendingSettingsOpen {
                 injectOpenSettings(request)
             }
+            if let request = pendingChatFocus {
+                injectFocusChat(request)
+            }
             if let state = pendingShellState {
                 injectShellState(state)
             }
@@ -605,6 +622,21 @@ struct ChatWebView: NSViewRepresentable {
                 }
             }
             lastInjectedSettingsToken = request.token
+        }
+
+        func injectFocusChat(_ request: ChatFocusRequest) {
+            guard let webView else { return }
+            let js = """
+            (function() {
+              window.dispatchEvent(new CustomEvent('verso:focus-chat'));
+            })();
+            """
+            webView.evaluateJavaScript(js) { _, error in
+                if let error {
+                    print("[ChatWebView] Failed to inject focus-chat: \(error.localizedDescription)")
+                }
+            }
+            lastInjectedChatFocusToken = request.token
         }
 
         func injectSkillsCatalogState(_ open: Bool) {

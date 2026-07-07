@@ -9,9 +9,9 @@ import { ComposioToolUsageStore } from './composio-tool-usage-store.ts';
 import { buildConnectionsRoutes } from './connections.ts';
 import { ConnectionsStore } from './connections-store.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
-import { GBrainExtractionQueue } from './gbrain-extraction-queue.ts';
 import { MemoryExtractionScheduler } from './memory-extraction.ts';
 import { IngestionStore } from './ingestion-store.ts';
+import { GdriveSource } from './gdrive-source.ts';
 import { GmailSource } from './gmail-source.ts';
 import { GranolaSource } from './granola-source.ts';
 import { SlackSource } from './slack-source.ts';
@@ -24,15 +24,9 @@ import { HermesSkillsConfig } from './skills-store.ts';
 import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
 import { CronDescriptionsStore } from './cron-descriptions-store.ts';
-import {
-  ensureGBrainInitialized,
-  getGBrainDiagnostics,
-  gbrainWantsEmbeddings,
-  resolveGBrainRuntimeConfig,
-  runGBrainEmbedBackfill,
-} from './gbrain.ts';
-import { EmbeddingRuntime } from './embeddings.ts';
-import { buildMemoryRoutes, GBrainMemoryRuntime } from './memory.ts';
+import { LexicalMemoryProvider, resolveLexicalMemoryConfig } from './lexical-provider.ts';
+import { buildMemoryRoutes } from './memory-routes.ts';
+import type { MemoryProvider } from './memory-provider.ts';
 import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
 import { ConnectionsService } from '../integrations/composio.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
@@ -48,8 +42,7 @@ function buildRoutes(
   managedBackend: ManagedBackendClient,
   composioBridge: ComposioBridgeService,
   localState: LocalStateSnapshot,
-  embeddingRuntime: EmbeddingRuntime,
-  memoryRuntime: GBrainMemoryRuntime,
+  memoryProvider: MemoryProvider,
 ): Route[] {
   return [
     route('GET', '/health', async (_req, res) => {
@@ -67,11 +60,7 @@ function buildRoutes(
         },
         chat: buildChatDiagnostics(store, memoryExtraction),
         hermes: await hermes.getStatus(500),
-        gbrain: {
-          ...getGBrainDiagnostics(hermes.hermesHome),
-          embeddingRuntime: embeddingRuntime.diagnostics(),
-          memoryRuntime: memoryRuntime.diagnostics(),
-        },
+        memory: memoryProvider.diagnostics(),
         managed: await managedBackend.getAccount(),
         composioTools: composioBridge.getNativeToolManifestStatus(),
         localState,
@@ -89,51 +78,16 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const store = new ChatStore();
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
-  const hermes = new HermesSupervisor({ runtimeMode, gbrainMcpMode: 'read' });
-  const gbrainWorkerHermes = new HermesSupervisor({
-    runtimeMode,
-    managedProfileName: 'verso-gbrain-worker',
-    gbrainMcpMode: 'write',
-  });
-  const gbrainRuntime = resolveGBrainRuntimeConfig(hermes.hermesHome);
-  const embeddingRuntime = new EmbeddingRuntime(gbrainRuntime.embedding);
-  let embeddingStart: Promise<void> = Promise.resolve();
-  const memoryRuntime = new GBrainMemoryRuntime(gbrainRuntime, {
-    // PGLite is single-process: CLI work against the brain (init, embed
-    // backfill) is only safe before the long-lived serve child spawns. The
-    // backfill waits briefly for the local embedding server; on a first run
-    // (model still downloading) it skips — pages written later are embedded
-    // inline at write time anyway.
-    prepare: async () => {
-      ensureGBrainInitialized(gbrainRuntime);
-      await Promise.race([embeddingStart, delay(15_000)]);
-      if (gbrainWantsEmbeddings(gbrainRuntime.home) && embeddingRuntime.isReady()) {
-        const result = await runGBrainEmbedBackfill(gbrainRuntime);
-        if (result.ok) {
-          console.log(`[gbrain] embed backfill complete: ${result.detail}`);
-        } else {
-          console.warn(`[gbrain] embed backfill skipped/failed: ${result.detail}`);
-        }
-      }
-    },
-  });
-  // Single shared write gate: chat extraction and (soon) source ingestion both
-  // run their worker through this queue so two logical GBrain extraction runs
-  // never interleave writes. Chat takes priority over source drains.
-  const extractionQueue = new GBrainExtractionQueue();
-  // Defer extraction (don't fail it) until the memory stack can actually
-  // accept writes: the single GBrain owner process must be up, and when
-  // the brain expects embeddings the local embedding server must be ready
-  // too (e.g. not mid model-download on first run) because page writes
-  // embed inline and propagate failures. Shared by chat extraction and
-  // source ingestion.
-  const extractionGate = () =>
-    memoryRuntime.isReady()
-    && (!gbrainWantsEmbeddings(gbrainRuntime.home) || embeddingRuntime.isReady());
-  const memoryExtraction = new MemoryExtractionScheduler(store, gbrainWorkerHermes, {
-    extractionQueue,
-    extractionGate,
-  });
+  const hermes = new HermesSupervisor({ runtimeMode });
+  // The one memory backend: an in-process SQLite FTS5 store. No child
+  // processes, no model downloads — ready as soon as the file opens.
+  const memoryProvider: MemoryProvider = new LexicalMemoryProvider(
+    resolveLexicalMemoryConfig(hermes.hermesHome),
+  );
+  // Defer extraction (don't fail it) until the store is open. Shared by chat
+  // extraction and source ingestion.
+  const extractionGate = () => memoryProvider.isReady();
+  const memoryExtraction = new MemoryExtractionScheduler(store, memoryProvider, { extractionGate });
   const connectionsStore = new ConnectionsStore();
   const composioToolUsage = new ComposioToolUsageStore();
   const composioBridge = new ComposioBridgeService(managedBackend, {
@@ -157,22 +111,24 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   };
   refreshComposioToolsManifest();
   const connections = new ConnectionsService(managedBackend, connectionsStore, refreshComposioToolsManifest);
-  // Automated source ingestion (Gmail, Granola, Slack). Runs whenever GBrain is
-  // enabled; the per-source toggles in Settings decide what actually gets
+  // Automated source ingestion (Gmail, Granola, Slack). Runs whenever memory
+  // is enabled; the per-source toggles in Settings decide what actually gets
   // ingested (an explicit falsy VERSO_INGESTION_ENABLED is a kill switch).
-  // Shares the write gate so its drains never interleave with chat extraction
-  // (and yield to it).
   const ingestionStore = new IngestionStore();
   const sourceIngestion = new SourceIngestionScheduler(
     ingestionStore,
-    gbrainWorkerHermes,
-    [new GmailSource(composioBridge), new GranolaSource(composioBridge), new SlackSource(composioBridge)],
+    memoryProvider,
+    [
+      new GmailSource(composioBridge),
+      new GranolaSource(composioBridge),
+      new SlackSource(composioBridge),
+      new GdriveSource(composioBridge),
+    ],
     {
-      extractionQueue,
       extractionGate,
       // Cheap, local connection check — never a remote listConnections() call.
       connectionGate: (source) => {
-        const toolkit = source === 'granola' ? 'granola_mcp' : source;
+        const toolkit = SOURCE_TOOLKITS[source] ?? source;
         return activeToolkitSlugs(connectionsStore).includes(toolkit);
       },
     },
@@ -195,8 +151,8 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const cronDescriptions = new CronDescriptionsStore();
   const codexAuth = new CodexAuthService(hermes);
   const routes = [
-    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, composioBridge, localState, embeddingRuntime, memoryRuntime),
-    ...buildMemoryRoutes(memoryRuntime),
+    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, composioBridge, localState, memoryProvider),
+    ...buildMemoryRoutes(memoryProvider),
     ...buildComposioBridgeRoutes(composioBridge),
     ...buildDraftsRoutes(composioBridge, store),
     ...buildManagedAccountRoutes(managedBackend, {
@@ -226,9 +182,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     void hermes.shutdown();
     memoryExtraction.stop();
     sourceIngestion.stop();
-    void gbrainWorkerHermes.shutdown();
-    void memoryRuntime.stop();
-    void embeddingRuntime.stop();
+    void memoryProvider.stop();
   });
 
   const port = opts.port ?? parseInt(process.env.PORT || '0', 10);
@@ -239,9 +193,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     await hermes.shutdown();
     memoryExtraction.stop();
     sourceIngestion.stop();
-    await gbrainWorkerHermes.shutdown();
-    await memoryRuntime.stop();
-    await embeddingRuntime.stop();
+    await memoryProvider.stop();
   };
 
   return new Promise((resolve) => {
@@ -249,24 +201,20 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       const addr = server.address() as { port: number };
       const baseUrl = `http://127.0.0.1:${addr.port}`;
       hermes.setOrchestratorBaseUrl(baseUrl);
-      // The hidden worker reaches memory through the verso bridge too, so it
-      // needs the orchestrator URL just like the visible profile.
-      gbrainWorkerHermes.setOrchestratorBaseUrl(baseUrl);
       hermes.prepare();
       memoryExtraction.start();
       sourceIngestion.start();
-      embeddingStart = embeddingRuntime.start();
-      void memoryRuntime.start();
+      void memoryProvider.start();
       resolve({ server, port: addr.port, close });
     });
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms).unref();
-  });
-}
+// Ingestion sources whose Composio toolkit slug differs from the source name.
+const SOURCE_TOOLKITS: Record<string, string> = {
+  granola: 'granola_mcp',
+  gdrive: 'googledrive',
+};
 
 function activeToolkitSlugs(store: ConnectionsStore): string[] {
   return store.listConnections()

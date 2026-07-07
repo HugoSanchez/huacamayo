@@ -6,8 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 // Ingestion state lives in its own SQLite database (not chat-sessions.sqlite):
 // external sources (gmail, slack, granola) are not chat sessions, so the
 // scheduler that drains them should not depend on ChatStore, and the working
-// chat schema stays untouched. The shared single-writer guarantee for GBrain
-// is enforced by the extraction queue, not by co-locating these tables.
+// chat schema stays untouched.
 
 export type IngestionStatus = 'idle' | 'running' | 'failed';
 export type IngestionItemStatus = 'pending' | 'processed' | 'poisoned';
