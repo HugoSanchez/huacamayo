@@ -41,14 +41,15 @@ export function isMemoryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Passive capture of raw chat transcripts into memory. OFF by default for
- * now — unlike connected sources it has no per-source Settings toggle yet,
- * so the opt-in lives here. Agent-written pages (write_memory_page) and
- * source ingestion are unaffected.
+ * Passive capture of idle chat transcripts into memory. ON by default; an
+ * explicit falsy VERSO_MEMORY_CHAT_CAPTURE is a kill switch (matching
+ * isMemoryEnabled / isSourceIngestionEnabled). Agent-written pages
+ * (write_memory_page) and source ingestion are unaffected either way.
  */
 export function isChatCaptureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.VERSO_MEMORY_CHAT_CAPTURE?.trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  if (!raw) return true;
+  return !(raw === '0' || raw === 'false' || raw === 'no' || raw === 'off');
 }
 
 export function resolveLexicalMemoryConfig(

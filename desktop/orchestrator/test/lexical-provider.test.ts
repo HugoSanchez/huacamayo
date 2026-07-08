@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import type { EmbedderLike, EmbedderState } from '../src/http/embedder.ts';
-import { buildFtsMatchExpression, LexicalMemoryProvider } from '../src/http/lexical-provider.ts';
+import { buildFtsMatchExpression, isChatCaptureEnabled, LexicalMemoryProvider } from '../src/http/lexical-provider.ts';
 import { buildMemoryRoutes } from '../src/http/memory-routes.ts';
 import type { Route } from '../src/http/router.ts';
 
@@ -496,5 +496,18 @@ describe('LexicalMemoryProvider merge-on-upsert (grouped sources)', () => {
     await provider.ingestSourceBatch({ source: 'gdrive', stream: '', items: [{ sourceRef: 'file-1', title: 'Doc', content: 'v2' }] });
     const page = await provider.getPage('doc:1');
     expect(page?.content).toBe('v2');
+  });
+});
+
+describe('isChatCaptureEnabled', () => {
+  it('defaults on, with an explicit falsy env as a kill switch', () => {
+    expect(isChatCaptureEnabled({})).toBe(true);
+    expect(isChatCaptureEnabled({ VERSO_MEMORY_CHAT_CAPTURE: '' })).toBe(true);
+    for (const off of ['0', 'false', 'no', 'off', 'OFF']) {
+      expect(isChatCaptureEnabled({ VERSO_MEMORY_CHAT_CAPTURE: off })).toBe(false);
+    }
+    for (const on of ['1', 'true', 'yes', 'on', 'anything']) {
+      expect(isChatCaptureEnabled({ VERSO_MEMORY_CHAT_CAPTURE: on })).toBe(true);
+    }
   });
 });
