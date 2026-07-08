@@ -31,8 +31,10 @@ import type {
   ChatSSEEvent,
   ActivityStep,
   ChatSessionSummary,
+  ChatModel,
   ConnectionRequestView,
   ConnectionView,
+  ReasoningEffort,
   StoredChatMessage,
   ToolkitView,
 } from './types';
@@ -114,6 +116,13 @@ export function App() {
   const [activeSkillName, setActiveSkillName] = useState<string | null>(null);
   const [activeCronName, setActiveCronName] = useState<string | null>(null);
   const [inputDrafts, setInputDrafts] = useState<Record<string, { text: string; attached: AttachedContext | null }>>({});
+  // Reasoning effort for the next message. Sticky across sessions (matches the
+  // global model/effort footer in Cursor/Claude). 'medium' mirrors the gateway
+  // config default so the visible selection and actual behaviour line up.
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
+  // Codex model for the next message. Sticky across sessions, like the effort
+  // selector. 'gpt-5.5' mirrors the gateway config default.
+  const [model, setModel] = useState<ChatModel>('gpt-5.5');
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const sessionIdRef = useRef<string | null>(null);
   // Per-session streams: one stream per session, multiple sessions can stream
@@ -607,6 +616,22 @@ export function App() {
     };
   }, []);
 
+  // Re-tapping the already-selected session in the native leftbar fires this.
+  // Selection doesn't change, so the shell-state mirror effect never runs —
+  // we clear any open page here so the click still lands you back in the chat.
+  useEffect(() => {
+    const handleFocusChat = () => {
+      setSelectedSkillSlug(null);
+      setSelectedHubSkillIdentifier(null);
+      setSelectedCronId(null);
+      setIsSettingsOpen(false);
+    };
+    window.addEventListener('verso:focus-chat', handleFocusChat as EventListener);
+    return () => {
+      window.removeEventListener('verso:focus-chat', handleFocusChat as EventListener);
+    };
+  }, []);
+
   useEffect(() => {
     const handleAttachCron = (event: Event) => {
       const detail = (event as CustomEvent<{ id?: unknown; name?: unknown; sessionId?: unknown }>).detail;
@@ -887,7 +912,7 @@ export function App() {
             postShellAction({ kind: 'session-mutated', id: sessionId });
             notifyNativeResponseReady(isNativeShell);
           },
-          { attached },
+          { attached, reasoningEffort, model },
         );
 
         // Register the stream now that we have both the sessionId and the
@@ -924,7 +949,7 @@ export function App() {
         }
       }
     })();
-  }, [ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, updateSessionMessages]);
+  }, [ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, model, reasoningEffort, updateSessionMessages]);
 
   const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
     const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
@@ -1164,6 +1189,10 @@ export function App() {
             onAttachedChange={handleDraftAttachedChange}
             onSend={handleSend}
             onStop={handleStop}
+            reasoningEffort={reasoningEffort}
+            onReasoningEffortChange={setReasoningEffort}
+            model={model}
+            onModelChange={setModel}
             isStreaming={selectedSessionId !== null && streamingSessions.has(selectedSessionId)}
             disabled={!connected || isHydratingSession || !!selectedSession?.archivedAt}
             focusRecoveryEnabled={!isCatalogOpen && !isSkillsCatalogOpen}

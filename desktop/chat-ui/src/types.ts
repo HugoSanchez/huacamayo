@@ -187,6 +187,31 @@ export type AttachedContext =
   | { kind: 'skill'; slug: string }
   | { kind: 'cron'; id: string; name: string };
 
+// Reasoning-effort levels offered in the chat-input selector. A subset of the
+// levels Hermes accepts (it also supports "minimal"/"xhigh"); these are the
+// ones we surface to non-technical users. Sent per message as
+// `reasoningEffort` and applied by the gateway over its config.yaml default.
+export const REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+};
+
+// Codex models offered in the chat-input model selector. Order defines the
+// click-to-cycle sequence. Sent per message as `model` and applied by the
+// gateway over its config.yaml default (validated server-side too).
+export const CHAT_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const;
+export type ChatModel = (typeof CHAT_MODELS)[number];
+
+export const CHAT_MODEL_LABELS: Record<ChatModel, string> = {
+  'gpt-5.5': 'GPT-5.5',
+  'gpt-5.4': 'GPT-5.4',
+  'gpt-5.4-mini': 'GPT-5.4 mini',
+};
+
 export type ActivityStep =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }

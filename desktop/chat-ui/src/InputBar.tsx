@@ -1,6 +1,12 @@
-import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect, type CSSProperties } from 'react';
 import { getSkills } from './chat';
-import type { AttachedContext, SkillSummaryView } from './types';
+import type { AttachedContext, ChatModel, ReasoningEffort, SkillSummaryView } from './types';
+import {
+  CHAT_MODELS,
+  CHAT_MODEL_LABELS,
+  REASONING_EFFORTS,
+  REASONING_EFFORT_LABELS,
+} from './types';
 
 interface Props {
   text: string;
@@ -9,6 +15,10 @@ interface Props {
   onAttachedChange: (attached: AttachedContext | null) => void;
   onSend: (text: string, attached: AttachedContext | null) => void;
   onStop: () => void;
+  reasoningEffort: ReasoningEffort;
+  onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  model: ChatModel;
+  onModelChange: (model: ChatModel) => void;
   isStreaming: boolean;
   disabled: boolean;
   focusRecoveryEnabled: boolean;
@@ -24,6 +34,10 @@ export function InputBar({
   onAttachedChange,
   onSend,
   onStop,
+  reasoningEffort,
+  onReasoningEffortChange,
+  model,
+  onModelChange,
   isStreaming,
   disabled,
   focusRecoveryEnabled,
@@ -351,7 +365,15 @@ export function InputBar({
             textIndent: isAttached ? `${chipWidth}px` : 0,
           }}
         />
-        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: '4px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+            <ModelCycler value={model} onChange={onModelChange} disabled={disabled} />
+            <ReasoningEffortCycler
+              value={reasoningEffort}
+              onChange={onReasoningEffortChange}
+              disabled={disabled}
+            />
+          </div>
           <button
             onClick={handleSubmit}
             disabled={disabled || !canSend}
@@ -424,5 +446,109 @@ function SlashSuggestions({
         </button>
       ))}
     </div>
+  );
+}
+
+// Signal-bars glyph whose filled-bar count tracks the effort level
+// (low → 1, medium → 2, high → 3), mirroring the Cursor/Claude footer affordance.
+function EffortBars({ level }: { level: number }) {
+  const heights = [4, 7, 10];
+  return (
+    <svg width="13" height="11" viewBox="0 0 13 11" aria-hidden="true">
+      {heights.map((h, i) => (
+        <rect
+          key={i}
+          x={i * 4.5}
+          y={11 - h}
+          width="3"
+          height={h}
+          rx="1"
+          fill="currentColor"
+          opacity={i < level ? 1 : 0.3}
+        />
+      ))}
+    </svg>
+  );
+}
+
+// OpenAI/Codex-ish spark glyph for the model cycler.
+function SparkGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M6 1 L7 5 L11 6 L7 7 L6 11 L5 7 L1 6 L5 5 Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Shared styling for the footer cycle buttons. Clicking advances to the next
+// option; the tooltip names the control. No menu — matching the lightweight
+// Cursor/Claude footer affordance the user asked for.
+function footerCycleStyle(disabled: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '5px',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-dim)',
+    borderRadius: '7px',
+    padding: '3px 6px',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    fontSize: '12px',
+    fontFamily: 'inherit',
+    opacity: disabled ? 0.4 : 1,
+  };
+}
+
+function cycleNext<T>(items: readonly T[], current: T): T {
+  const index = items.indexOf(current);
+  return items[(index + 1) % items.length];
+}
+
+function ReasoningEffortCycler({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ReasoningEffort;
+  onChange: (effort: ReasoningEffort) => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(cycleNext(REASONING_EFFORTS, value))}
+      disabled={disabled}
+      aria-label={`Reasoning effort: ${REASONING_EFFORT_LABELS[value]} (click to change)`}
+      title="Reasoning effort"
+      style={footerCycleStyle(disabled)}
+    >
+      <EffortBars level={REASONING_EFFORTS.indexOf(value) + 1} />
+      <span>{REASONING_EFFORT_LABELS[value]}</span>
+    </button>
+  );
+}
+
+function ModelCycler({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ChatModel;
+  onChange: (model: ChatModel) => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(cycleNext(CHAT_MODELS, value))}
+      disabled={disabled}
+      aria-label={`Model: ${CHAT_MODEL_LABELS[value]} (click to change)`}
+      title="Model"
+      style={footerCycleStyle(disabled)}
+    >
+      <SparkGlyph />
+      <span>{CHAT_MODEL_LABELS[value]}</span>
+    </button>
   );
 }

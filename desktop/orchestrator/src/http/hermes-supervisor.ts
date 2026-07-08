@@ -13,6 +13,8 @@ import {
   isBundledRuntime,
   seedHermesHomeFromBundle,
 } from './runtime-bootstrap.ts';
+import { isMemoryEnabled } from './lexical-provider.ts';
+import { applyMemorySoulSection } from './memory-soul.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -174,6 +176,7 @@ export interface HermesSupervisorOptions {
   config?: HermesGatewayConfig;
   launch?: HermesLaunchConfig;
   runtimeMode?: RuntimeMode;
+  memoryToolsMode?: 'full' | 'none';
 }
 
 // Skills the user must never be able to enable. They overlap with — and
@@ -210,7 +213,9 @@ export class HermesSupervisor {
   private readonly manualMode: boolean;
   private readonly managedHermesHome: string;
   private readonly templateHermesHome: string;
+  private readonly seedHermesHome: string;
   private readonly runtimeMode: RuntimeMode;
+  private readonly memoryToolsMode: 'full' | 'none';
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
@@ -227,10 +232,12 @@ export class HermesSupervisor {
     this.config = options.config ?? getHermesGatewayConfig();
     this.launch = options.launch ?? getHermesLaunchConfig();
     this.runtimeMode = options.runtimeMode ?? 'managed';
+    this.memoryToolsMode = options.memoryToolsMode ?? 'full';
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
+    this.seedHermesHome = this.templateHermesHome;
     this.baseUrlResolved = this.hasExplicitBaseUrl;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
@@ -584,13 +591,13 @@ export class HermesSupervisor {
     this.migrateLegacyVervoProfile();
     mkdirSync(this.managedHermesHome, { recursive: true });
     const configExistedBeforeSeed = existsSync(join(this.managedHermesHome, 'config.yaml'));
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'auth.json');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'config.yaml');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, '.env');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'auth.json');
     this.syncManagedAuthStore();
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'SOUL.md');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'SOUL.md');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
+    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
     this.restoreManagedModelConfigIfProxyOwned();
@@ -629,7 +636,7 @@ export class HermesSupervisor {
   }
 
   private syncManagedAuthStore(): void {
-    const sourcePath = join(this.templateHermesHome, 'auth.json');
+    const sourcePath = join(this.seedHermesHome, 'auth.json');
     const targetPath = join(this.managedHermesHome, 'auth.json');
     if (sourcePath === targetPath || !existsSync(sourcePath)) return;
 
@@ -774,7 +781,7 @@ export class HermesSupervisor {
     const provider = typeof currentModel?.provider === 'string' ? currentModel.provider : '';
     if (provider !== 'custom' || !baseUrl.endsWith('/llm/v1')) return;
 
-    const templateModel = asRecord(readYamlRecord(join(this.templateHermesHome, 'config.yaml'))?.model);
+    const templateModel = asRecord(readYamlRecord(join(this.seedHermesHome, 'config.yaml'))?.model);
     if (templateModel) {
       config.model = templateModel;
     } else {
@@ -801,6 +808,8 @@ export class HermesSupervisor {
     const mcpServers = asRecord(config.mcp_servers) ?? {};
     delete mcpServers.vervo;
 
+    const memoryToolsActive = isMemoryEnabled() && this.memoryToolsMode !== 'none';
+
     if (this.orchestratorBaseUrl) {
       const pythonPath = resolveHermesPython(this.templateHermesHome);
       const serverPath = resolveversoMcpServerPath();
@@ -818,6 +827,11 @@ export class HermesSupervisor {
         if (bundled) {
           env.PYTHONPATH = bundled.sitePackages;
         }
+        // Memory tools are part of the verso bridge: the orchestrator owns
+        // the in-process memory store and the bridge proxies to it.
+        if (memoryToolsActive) {
+          env.VERSO_MEMORY_TOOLS = 'full';
+        }
         mcpServers.verso = {
           command: pythonPath,
           args: [serverPath],
@@ -833,8 +847,40 @@ export class HermesSupervisor {
     // provider tool schemas are too unstable for the primary product path.
     delete mcpServers.composio;
 
+    // Hygiene for pre-existing user configs from the GBrain era: memory is
+    // in-process now, and a stale per-profile gbrain MCP entry would spawn a
+    // dead child on every Hermes launch.
+    delete mcpServers.gbrain;
+
+    const tools = asRecord(config.tools) ?? {};
+    const toolSearch = asRecord(tools.tool_search) ?? {};
+    tools.tool_search = {
+      ...toolSearch,
+      enabled: 'on',
+    };
+
+    // Teach the visible agent that the memory tools ARE its memory —
+    // without this it pattern-matches "what do you know about X" to web
+    // search. Managed via marker comments so user SOUL edits survive, and
+    // removed again when the feature is off.
+    this.syncMemorySoulSection(memoryToolsActive);
+
     config.mcp_servers = mcpServers;
+    config.tools = tools;
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
+  }
+
+  private syncMemorySoulSection(enabled: boolean): void {
+    const soulPath = join(this.managedHermesHome, 'SOUL.md');
+    try {
+      const current = existsSync(soulPath) ? readFileSync(soulPath, 'utf8') : '';
+      const next = applyMemorySoulSection(current, enabled);
+      if (next !== current) {
+        writeFileSync(soulPath, next, 'utf8');
+      }
+    } catch (error: unknown) {
+      console.warn(`[memory] SOUL.md memory section sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private captureLog(stream: 'stdout' | 'stderr', chunk: string): void {

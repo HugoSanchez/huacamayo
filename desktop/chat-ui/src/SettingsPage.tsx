@@ -2,8 +2,11 @@ import { useEffect, useState } from 'react';
 import {
   disconnectCodex,
   getCodexStatus,
+  getIngestionSources,
   getSidecarPort,
+  toggleIngestionSource,
   type CodexStatus,
+  type IngestionSourceView,
 } from './chat';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
 
@@ -148,6 +151,8 @@ export function SettingsPage({ onBack }: Props) {
 
           <CodexSection />
 
+          <IngestionSection />
+
           <section className="settings-section settings-section-signout">
             <div className="settings-row">
               <span className="settings-label">Session</span>
@@ -170,6 +175,114 @@ export function SettingsPage({ onBack }: Props) {
 function titleCase(value: string): string {
   if (!value) return value;
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function sourceStatus(source: IngestionSourceView): string | null {
+  if (!source.enabled) return null;
+  if (source.status === 'running') return 'syncing…';
+  if (source.lastError) return 'last sync failed';
+  if (source.lastCompletedAt) {
+    return `synced ${timeAgo(source.lastCompletedAt)} · ${source.itemCount} ${source.itemCount === 1 ? 'item' : 'items'}`;
+  }
+  return 'waiting to sync…';
+}
+
+function timeAgo(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return 'recently';
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 45) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+function IngestionSection() {
+  const [sources, setSources] = useState<IngestionSourceView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+
+  useEffect(() => {
+    void refresh();
+    // Poll while Settings is open so the per-source status updates live.
+    const id = window.setInterval(() => { void refresh(); }, 5000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  async function refresh() {
+    try {
+      setSources(await getIngestionSources());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleToggle(source: IngestionSourceView) {
+    if (pending) return;
+    if (!source.enabled && !source.connected) {
+      setError(`${source.displayName} is not connected. Connect it first.`);
+      return;
+    }
+    setPending(source.source);
+    try {
+      const updated = await toggleIngestionSource(source.source, !source.enabled);
+      setSources((prev) => (prev ? prev.map((s) => (s.source === updated.source ? updated : s)) : prev));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  // Still loading and nothing to report yet — don't flash an empty section.
+  if (sources === null && !error) return null;
+  if (sources !== null && sources.length === 0) return null;
+
+  return (
+    <section className="settings-section">
+      <div className="ingestion-header">
+        <h2>Ingestion</h2>
+        <p className="settings-footnote">Let Verso automatically remember from your connected apps.</p>
+      </div>
+      {error ? <p className="settings-footnote codex-error">{error}</p> : null}
+      {sources?.map((source) => {
+        const on = source.enabled;
+        return (
+          <div className="settings-row" key={source.source}>
+            <span className="settings-label ingestion-source">
+              {source.logoUrl ? (
+                <img className="catalog-row-logo" src={source.logoUrl} alt="" aria-hidden="true" />
+              ) : (
+                <span className="catalog-row-logo-fallback" aria-hidden="true">{source.displayName.charAt(0)}</span>
+              )}
+              <span className="ingestion-source-text">
+                <span>
+                  {source.displayName}
+                  {!source.connected ? <span className="settings-value"> · not connected</span> : null}
+                </span>
+                {sourceStatus(source) ? (
+                  <span className="ingestion-source-status">{sourceStatus(source)}</span>
+                ) : null}
+              </span>
+            </span>
+            <span
+              className={`skill-row-toggle is-${on ? 'on' : 'off'}`}
+              role="switch"
+              aria-checked={on}
+              aria-disabled={pending === source.source || (!source.enabled && !source.connected)}
+              onClick={() => handleToggle(source)}
+            >
+              <span className="skill-row-toggle-thumb" />
+            </span>
+          </div>
+        );
+      })}
+    </section>
+  );
 }
 
 function CodexSection() {

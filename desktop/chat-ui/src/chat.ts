@@ -99,7 +99,11 @@ export function streamChatMessage(
   onEvent: (event: ChatSSEEvent) => void,
   onDone: () => void,
   onError: (err: string) => void,
-  options: { attached?: import('./types').AttachedContext | null } = {},
+  options: {
+    attached?: import('./types').AttachedContext | null;
+    reasoningEffort?: string | null;
+    model?: string | null;
+  } = {},
 ): () => void {
   const controller = new AbortController();
 
@@ -110,12 +114,17 @@ export function streamChatMessage(
     ? { kind: 'cron' as const, id: options.attached.id }
     : undefined;
 
+  const requestBody: Record<string, unknown> = { content };
+  if (attached) requestBody.attached = attached;
+  if (options.reasoningEffort) requestBody.reasoningEffort = options.reasoningEffort;
+  if (options.model) requestBody.model = options.model;
+
   (async () => {
     try {
       const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(attached ? { content, attached } : { content }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -294,6 +303,42 @@ export async function toggleSkill(slug: string, enabled: boolean): Promise<Skill
   const body = await res.json() as { skill: SkillSummaryView };
   notifyHost('skillsChanged');
   return body.skill;
+}
+
+export interface IngestionSourceView {
+  source: string;
+  displayName: string;
+  logoUrl: string | null;
+  stream: string;
+  connected: boolean;
+  enabled: boolean;
+  status: 'idle' | 'running' | 'failed';
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  nextDueAt: string | null;
+  itemCount: number;
+}
+
+export async function getIngestionSources(): Promise<IngestionSourceView[]> {
+  const res = await fetch(`${baseURL()}/ingestion/sources`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load ingestion sources'));
+  }
+  const body = await res.json() as { sources: IngestionSourceView[] };
+  return body.sources;
+}
+
+export async function toggleIngestionSource(slug: string, enabled: boolean): Promise<IngestionSourceView> {
+  const res = await fetch(`${baseURL()}/ingestion/sources/${encodeURIComponent(slug)}/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to toggle ingestion source'));
+  }
+  const body = await res.json() as { source: IngestionSourceView };
+  return body.source;
 }
 
 export async function getCronDetail(id: string): Promise<import('./types').CronDetailView> {

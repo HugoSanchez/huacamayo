@@ -86,6 +86,17 @@ class StubComposioService extends ComposioService {
     ];
   }
 
+  override async listTools(userId: string, toolkits: string[]): Promise<BridgeSearchToolResult[]> {
+    this.capturedUserId = userId;
+    return toolkits.map((toolkit) => ({
+      slug: `${toolkit.toUpperCase()}_SEARCH`,
+      name: `${toolkit} search`,
+      description: null,
+      toolkitSlug: toolkit,
+      toolkitName: toolkit,
+    }));
+  }
+
   override async getToolSchemas(userId: string, toolSlugs: string[]): Promise<BridgeToolSchemaView[]> {
     this.capturedUserId = userId;
     return toolSlugs.map((slug) => ({
@@ -277,6 +288,38 @@ describe('Composio routes', () => {
     expect(receivedToolkits).toEqual(['slack']);
     expect(s.composio.capturedUserId).toBe(s.userId);
     expect(res.json().results[0].slug).toBe('SLACK_SEARCH_MESSAGES');
+  });
+
+  test('POST /v1/composio/tools/list uses authenticated user and forwards toolkits', async () => {
+    s = await setup();
+    const composio = s.composio;
+    let receivedToolkits: string[] | undefined;
+    composio.listTools = async (userId, toolkits) => {
+      composio.capturedUserId = userId;
+      receivedToolkits = toolkits;
+      return [
+        {
+          slug: 'GMAIL_SEND_EMAIL',
+          name: 'Send email',
+          description: null,
+          toolkitSlug: 'gmail',
+          toolkitName: 'Gmail',
+        },
+      ];
+    };
+    const res = await s.app.inject({
+      method: 'POST',
+      url: '/v1/composio/tools/list',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+      payload: {
+        userId: 'usr_attacker_attempting_to_act_as_someone_else',
+        toolkits: ['gmail'],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(receivedToolkits).toEqual(['gmail']);
+    expect(s.composio.capturedUserId).toBe(s.userId);
+    expect(res.json().tools[0].slug).toBe('GMAIL_SEND_EMAIL');
   });
 
   test('POST /v1/composio/tools/schemas forwards tool slugs', async () => {

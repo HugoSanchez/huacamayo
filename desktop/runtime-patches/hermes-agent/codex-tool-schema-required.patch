@@ -8,7 +8,7 @@
  from types import SimpleNamespace
  from typing import Any, Dict, List, Optional
  
-@@ -250,11 +251,71 @@
+@@ -257,11 +258,71 @@
              "name": name,
              "description": fn.get("description", ""),
              "strict": False,
@@ -78,10 +78,10 @@
 +    return normalized
 +
 +
- # ---------------------------------------------------------------------------
- # Message format conversion
- # ---------------------------------------------------------------------------
-@@ -799,11 +860,9 @@
+ # Provider-executed built-in tool *declaration* types accepted on the
+ # Responses ``tools`` array.  These are declared by ``type`` alone (no
+ # client-side name/parameters schema) and run server-side — the provider
+@@ -843,11 +904,9 @@
                  raise ValueError(f"Codex Responses tools[{idx}] has unsupported type {tool.get('type')!r}.")
  
              name = tool.get("name")

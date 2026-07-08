@@ -51,6 +51,33 @@
             ReferencedContainer = "container:verso.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "VERSO_HERMES_HOME"
+            value = "/Users/hugo-succinct/Library/Application Support/verso/hermes-home"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "VERSO_BUNDLED_PYTHON_DIR"
+            value = "/Users/hugo-succinct/conductor/workspaces/huacamayo/papeete/desktop/runtime-bundles/python"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "VERSO_BUNDLED_SITE_PACKAGES_DIR"
+            value = "/Users/hugo-succinct/conductor/workspaces/huacamayo/papeete/desktop/runtime-bundles/site-packages"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "VERSO_BUNDLED_DEFAULTS"
+            value = "/Users/hugo-succinct/conductor/workspaces/huacamayo/papeete/desktop/runtime-bundles/hermes-defaults"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "VERSO_BUNDLE_VERSION"
+            value = "dev-supermemory"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

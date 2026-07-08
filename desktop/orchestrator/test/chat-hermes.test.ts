@@ -19,6 +19,8 @@ describe('Hermes Chat Streaming', () => {
     VERSO_HERMES_GATEWAY_URL?: string;
     VERSO_CHAT_STORE_PATH?: string;
     VERSO_HERMES_MANAGED?: string;
+    VERSO_MEMORY_DB_PATH?: string;
+    VERSO_MEMORY_CHAT_CAPTURE?: string;
   } = {};
 
   beforeAll(async () => {
@@ -26,6 +28,8 @@ describe('Hermes Chat Streaming', () => {
       VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
       VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
       VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
+      VERSO_MEMORY_DB_PATH: process.env.VERSO_MEMORY_DB_PATH,
+      VERSO_MEMORY_CHAT_CAPTURE: process.env.VERSO_MEMORY_CHAT_CAPTURE,
     };
 
     gateway = http.createServer((req, res) => {
@@ -158,6 +162,10 @@ describe('Hermes Chat Streaming', () => {
     process.env.VERSO_HERMES_GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
     process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-test-${process.pid}.sqlite`;
     process.env.VERSO_HERMES_MANAGED = 'false';
+    // Memory defaults on; keep the test's SQLite store out of the real
+    // profile-sibling location. Chat capture is opt-in — this suite tests it.
+    process.env.VERSO_MEMORY_DB_PATH = `/tmp/verso-memory-test-${process.pid}.sqlite`;
+    process.env.VERSO_MEMORY_CHAT_CAPTURE = '1';
 
     const result = await startServer({ port: 0 });
     server = result.server;
@@ -177,6 +185,10 @@ describe('Hermes Chat Streaming', () => {
     process.env.VERSO_HERMES_GATEWAY_URL = envSnapshot.VERSO_HERMES_GATEWAY_URL;
     process.env.VERSO_CHAT_STORE_PATH = envSnapshot.VERSO_CHAT_STORE_PATH;
     process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
+    if (envSnapshot.VERSO_MEMORY_DB_PATH === undefined) delete process.env.VERSO_MEMORY_DB_PATH;
+    else process.env.VERSO_MEMORY_DB_PATH = envSnapshot.VERSO_MEMORY_DB_PATH;
+    if (envSnapshot.VERSO_MEMORY_CHAT_CAPTURE === undefined) delete process.env.VERSO_MEMORY_CHAT_CAPTURE;
+    else process.env.VERSO_MEMORY_CHAT_CAPTURE = envSnapshot.VERSO_MEMORY_CHAT_CAPTURE;
   });
 
   function url(pathname: string): string {
@@ -279,6 +291,45 @@ describe('Hermes Chat Streaming', () => {
     const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
     expect(messages.body.messages).toHaveLength(4);
     expect(messages.body.messages[3].content).toBe('Recovered: Second turn');
+  });
+
+  it('marks a memory extraction job pending after a chat turn', async () => {
+    requestLog = [];
+    breakConversationChain = false;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+    responseCounter = 0;
+    sessionCounter = 0;
+    messageCounter = 0;
+
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Memory' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const res = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'I had a meeting with Sarah Chen from Acme Corp. She said Acme is evaluating Verso for customer support notes.',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    const diagnostics = await fetchJson('/diagnostics');
+
+    expect(requestLog[0].conversation).toBe(sessionId);
+    expect(requestLog).toHaveLength(1);
+    expect(diagnostics.body.chat.memoryExtraction.enabled).toBe(true);
+    expect(diagnostics.body.chat.memoryExtraction.idleThresholdMs).toBe(120000);
+    // Memory is enabled by default, so sessions from the earlier tests in
+    // this file are pending too — assert at least this one.
+    expect(diagnostics.body.chat.memoryExtraction.counts.pending).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.body.memory).toMatchObject({ backend: 'lexical', state: 'ready' });
   });
 });
 

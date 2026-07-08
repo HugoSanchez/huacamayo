@@ -43,82 +43,6 @@ const DEFAULT_MANIFEST_LIMIT = 25;
 // the orchestrator intercepts execute calls. Kept in this module so both the
 // manifest writer and the bridge interceptor stay in sync.
 export const PROPOSE_MESSAGE_DRAFT_SLUG = 'PROPOSE_MESSAGE_DRAFT';
-export const PROPOSE_MESSAGE_DRAFT_NATIVE_NAME = 'propose_message_draft';
-
-// Always-on tool description injected into every manifest write so Hermes
-// registers the draft tool even before any real Composio call has happened.
-// The tool doesn't belong to a Composio toolkit — execution is short-circuited
-// in ComposioBridgeService.executeTool and held until the user approves or
-// rejects from the inline widget. The result tells the caller exactly which
-// values to use when actually dispatching the message.
-const PROPOSE_MESSAGE_DRAFT_TOOL: ComposioNativeToolManifestTool = {
-  nativeName: PROPOSE_MESSAGE_DRAFT_NATIVE_NAME,
-  toolSlug: PROPOSE_MESSAGE_DRAFT_SLUG,
-  toolkitSlug: 'verso',
-  name: 'Propose message draft',
-  description:
-    [
-      'Surface a draft message to the user for review before sending. Use this whenever the user asks you to send a message via any tool (Slack, Gmail, SMS, WhatsApp, Discord, Telegram, etc). Always call this BEFORE the underlying send tool — never send first.',
-      '',
-      'The result\'s `status` tells you what to do next:',
-      '- status="pending_review": Slack and Gmail are handled directly by Verso. The user reviews and sends the message themselves from the widget — you are DONE. Do NOT call any send tool. Reply in one short sentence that you\'ve prepared it for review, then stop.',
-      '- status="approved": (other channels) the user confirmed but you must dispatch the send yourself. Call the appropriate Composio tool for the channel (e.g. WHATSAPP_SEND_MESSAGE) using `final_to`, `final_body`, `final_subject`, `final_cc` from the result — NOT your original input, since the user may have edited them.',
-      '- status="rejected": the user discarded the draft. Acknowledge briefly, do not send, and ask what they\'d like to do instead.',
-    ].join('\n'),
-  inputParameters: {
-    type: 'object',
-    required: ['channel', 'body'],
-    properties: {
-      channel: {
-        type: 'string',
-        description:
-          'Toolkit slug of the channel ("slack", "gmail", "whatsapp", "telegram", "discord", etc.). Used to look up the widget\'s logo and label.',
-      },
-      channel_label: {
-        type: 'string',
-        description:
-          'Optional display name for the channel (e.g. "WhatsApp"). Set this for channels Verso may not know about. Defaults to a title-cased `channel` otherwise.',
-      },
-      channel_logo_url: {
-        type: 'string',
-        description:
-          'Optional URL to the channel\'s logo for the widget header. Only needed for channels that aren\'t in the connected toolkit catalog — Slack/Gmail and similar resolve automatically.',
-      },
-      to: {
-        type: 'string',
-        description:
-          'Recipient identifier in whatever form the channel expects (email address, "#channel", user id, phone number, etc.). For Slack: channel name, channel id (Cxxx/Gxxx), user id (Uxxx) or DM id (Dxxx). Keep this precise — it is what the user will edit and what eventually gets sent.',
-      },
-      to_display: {
-        type: 'string',
-        description:
-          'Human-readable name to show the user when `to` is an opaque id (e.g. "#design" or "Alice Wong"). The widget displays this instead of the raw id. Omit if `to` is already friendly.',
-      },
-      to_avatar_url: {
-        type: 'string',
-        description:
-          'Optional avatar URL for a single-recipient message (Slack DM, SMS contact, etc.). Shown as a small circle next to the To field.',
-      },
-      cc: {
-        type: 'string',
-        description: 'Comma-separated secondary recipients. Mainly Gmail. Optional.',
-      },
-      subject: {
-        type: 'string',
-        description: 'Subject line. Mainly Gmail. Optional but recommended where the channel supports it.',
-      },
-      body: {
-        type: 'string',
-        description: 'Message body. Markdown is fine for chat-style channels; plain text or HTML for email.',
-      },
-      threadId: {
-        type: 'string',
-        description: 'Optional thread identifier for reply-style channels (Slack thread ts, email message id, etc.).',
-      },
-    },
-    additionalProperties: false,
-  },
-};
 
 function defaultStorePath(): string {
   return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'composio-tool-usage.sqlite');
@@ -213,14 +137,17 @@ export class ComposioToolUsageStore {
     manifestPath: string,
     activeToolkitSlugs: Iterable<string>,
     limit = DEFAULT_MANIFEST_LIMIT,
+    materializedTools: ComposioNativeToolManifestTool[] = [],
   ): ComposioNativeToolManifest {
-    // Synthetic verso tools always lead so Hermes can register them even
-    // when no Composio toolkit is connected yet. The propose-message-draft
-    // tool is the first of these.
-    const tools: ComposioNativeToolManifestTool[] = [
-      PROPOSE_MESSAGE_DRAFT_TOOL,
-      ...this.listManifestTools(activeToolkitSlugs, limit),
-    ];
+    const active = normalizeToolkitSet(activeToolkitSlugs);
+    const connectedMaterializedTools = materializedTools
+      .filter((tool) => active.has(tool.toolkitSlug.trim().toLowerCase()))
+      .map(normalizeManifestTool);
+
+    const tools = dedupeManifestTools([
+      ...this.listManifestTools(active, limit),
+      ...connectedMaterializedTools,
+    ]);
     const manifest: ComposioNativeToolManifest = {
       version: 1,
       generatedAt: new Date().toISOString(),
@@ -243,6 +170,20 @@ export function nativeNameForComposioToolSlug(toolSlug: string): string {
   return /^[a-z]/.test(normalized) ? normalized : `tool_${normalized}`;
 }
 
+export function manifestToolFromComposioUsageInput(tool: ComposioToolUsageInput): ComposioNativeToolManifestTool | null {
+  const slug = tool.slug.trim();
+  const toolkitSlug = tool.toolkitSlug.trim().toLowerCase();
+  if (!slug || !toolkitSlug) return null;
+  return normalizeManifestTool({
+    nativeName: nativeNameForComposioToolSlug(slug),
+    toolSlug: slug,
+    toolkitSlug,
+    name: tool.name.trim() || slug,
+    description: tool.description,
+    inputParameters: normalizeInputParameters(tool.inputParameters),
+  });
+}
+
 function rowToManifestTool(row: UsageRow): ComposioNativeToolManifestTool | null {
   const parsedInputParameters = parseJsonRecord(row.input_parameters);
   if (!parsedInputParameters) return null;
@@ -255,6 +196,34 @@ function rowToManifestTool(row: UsageRow): ComposioNativeToolManifestTool | null
     description: row.description,
     inputParameters: normalizeInputParameters(parsedInputParameters),
   };
+}
+
+function normalizeManifestTool(tool: ComposioNativeToolManifestTool): ComposioNativeToolManifestTool {
+  return {
+    nativeName: nativeNameForComposioToolSlug(tool.toolSlug || tool.nativeName),
+    toolSlug: tool.toolSlug.trim(),
+    toolkitSlug: tool.toolkitSlug.trim().toLowerCase(),
+    name: tool.name.trim() || tool.toolSlug.trim(),
+    description: tool.description,
+    inputParameters: normalizeInputParameters(tool.inputParameters),
+  };
+}
+
+function dedupeManifestTools(tools: ComposioNativeToolManifestTool[]): ComposioNativeToolManifestTool[] {
+  const seenSlugs = new Set<string>();
+  const seenNativeNames = new Set<string>();
+  const deduped: ComposioNativeToolManifestTool[] = [];
+  for (const tool of tools) {
+    const slugKey = tool.toolSlug.trim().toUpperCase();
+    const nativeNameKey = tool.nativeName.trim().toLowerCase();
+    if (!slugKey || !nativeNameKey || seenSlugs.has(slugKey) || seenNativeNames.has(nativeNameKey)) {
+      continue;
+    }
+    seenSlugs.add(slugKey);
+    seenNativeNames.add(nativeNameKey);
+    deduped.push(tool);
+  }
+  return deduped;
 }
 
 function normalizeInputParameters(value: Record<string, unknown>): Record<string, unknown> {

@@ -340,6 +340,7 @@ final class SidecarManager: ObservableObject {
         ]
         let currentPath = env["PATH"] ?? ""
         env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+
         // Release builds (Archive) point the orchestrator at the deployed
         // managed backend. Debug builds (Xcode → Run) keep the orchestrator
         // default of http://127.0.0.1:8788 so local dev iterates against the
@@ -375,7 +376,6 @@ final class SidecarManager: ObservableObject {
         } else {
             logger.info("Agent runtime launch mode: auto-detect installed CLI")
         }
-
         self.process = process
 
         try process.run()

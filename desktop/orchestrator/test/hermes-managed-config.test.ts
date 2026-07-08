@@ -24,12 +24,14 @@ describe('HermesSupervisor: managed config override', () => {
       HERMES_HOME: process.env.HERMES_HOME,
       VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
       VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
+      VERSO_MEMORY_ENABLED: process.env.VERSO_MEMORY_ENABLED,
     };
     process.env.HERMES_HOME = templateHome;
     // Pretend Hermes is launchable so the supervisor doesn't bail out.
     process.env.VERSO_HERMES_COMMAND = '/bin/true';
     // Avoid touching the real Hermes gateway during tests.
     delete process.env.VERSO_HERMES_GATEWAY_URL;
+    delete process.env.VERSO_MEMORY_ENABLED;
 
     // Seed a minimal template config.yaml that mirrors the user's real one.
     writeFileSync(path.join(tempRoot, 'config.yaml'), [
@@ -124,13 +126,18 @@ describe('HermesSupervisor: managed config override', () => {
     supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
     (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
 
-    expect(readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8')).toBe(newSoul);
+    // The managed memory section is appended after the refreshed identity.
+    const refreshed = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
+    expect(refreshed.startsWith(newSoul.trimEnd())).toBe(true);
+    expect(refreshed).toContain('verso:gbrain-memory:start');
 
     writeFileSync(path.join(tempRoot, 'SOUL.md'), '# Verso\n\nAnother new identity.\n', 'utf8');
     writeFileSync(path.join(managedHome, 'SOUL.md'), '# Custom\n\nKeep my local identity.\n', 'utf8');
     (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
 
-    expect(readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8')).toBe('# Custom\n\nKeep my local identity.\n');
+    const custom = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
+    expect(custom.startsWith('# Custom\n\nKeep my local identity.')).toBe(true);
+    expect(custom).not.toContain('Another new identity');
   });
 
   it('leaves the model section untouched when runtimeMode is not managed', () => {
@@ -191,5 +198,114 @@ describe('HermesSupervisor: managed config override', () => {
     };
     expect(parsed.mcp_servers?.vervo).toBeUndefined();
     expect(parsed.mcp_servers?.composio).toBeUndefined();
+  });
+
+  it('removes a stale per-profile GBrain MCP entry from an older install', () => {
+    mkdirSync(managedHome, { recursive: true });
+    writeFileSync(path.join(managedHome, 'config.yaml'), [
+      'model:',
+      '  provider: openai-codex',
+      'mcp_servers:',
+      '  gbrain:',
+      '    command: /Users/someone/.bun/bin/bun',
+      '    args:',
+      '      - /tmp/gbrain/src/cli.ts',
+      '      - serve',
+    ].join('\n'), 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, unknown>;
+    };
+    expect(parsed.mcp_servers?.gbrain).toBeUndefined();
+  });
+
+  it('exposes the full memory tool surface through the verso bridge env by default', () => {
+    // Make resolveHermesPython resolve inside the temp template home so the
+    // verso bridge block is generated in this test environment.
+    const fakePython = path.join(tempRoot, 'hermes-agent', 'venv', 'bin', 'python');
+    mkdirSync(path.dirname(fakePython), { recursive: true });
+    writeFileSync(fakePython, '#!/bin/sh\n', 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(parsed.mcp_servers?.verso?.env?.VERSO_MEMORY_TOOLS).toBe('full');
+    expect(parsed.mcp_servers?.verso?.env?.VERSO_MEMORY_BACKEND).toBeUndefined();
+  });
+
+  it('omits the memory tools env when memory is disabled', () => {
+    const fakePython = path.join(tempRoot, 'hermes-agent', 'venv', 'bin', 'python');
+    mkdirSync(path.dirname(fakePython), { recursive: true });
+    writeFileSync(fakePython, '#!/bin/sh\n', 'utf8');
+    process.env.VERSO_MEMORY_ENABLED = '0';
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(parsed.mcp_servers?.verso?.env?.VERSO_MEMORY_TOOLS).toBeUndefined();
+  });
+
+  it('adds the memory section to the profile SOUL.md by default', () => {
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
+    // The markers keep the historical gbrain name so existing installs
+    // upgrade their managed block in place.
+    expect(soul).toContain('<!-- verso:gbrain-memory:start -->');
+    expect(soul).toContain('## Your memory');
+    expect(soul).toContain('search_memory FIRST');
+    expect(soul).toContain('write_memory_page');
+  });
+
+  it('removes the memory section when memory is disabled', () => {
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+    expect(readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8')).toContain('## Your memory');
+
+    process.env.VERSO_MEMORY_ENABLED = '0';
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
+    expect(soul).not.toContain('## Your memory');
+    expect(soul).not.toContain('verso:gbrain-memory');
+  });
+
+  it('replaces an older gbrain-era managed SOUL section in place', () => {
+    mkdirSync(managedHome, { recursive: true });
+    writeFileSync(path.join(managedHome, 'SOUL.md'), [
+      '# Custom identity',
+      '',
+      '<!-- verso:gbrain-memory:start -->',
+      '## Your memory',
+      '',
+      'Old GBrain knowledge-base wording.',
+      '<!-- verso:gbrain-memory:end -->',
+      '',
+    ].join('\n'), 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
+    expect(soul).toContain('# Custom identity');
+    expect(soul).not.toContain('Old GBrain knowledge-base wording.');
+    expect(soul).toContain('write_memory_page');
+    expect(soul.match(/verso:gbrain-memory:start/g)).toHaveLength(1);
   });
 });

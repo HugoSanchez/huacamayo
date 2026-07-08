@@ -26,15 +26,22 @@ from mcp.server.stdio import stdio_server
 SERVER_NAME = "verso"
 ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
 COMPOSIO_TOOLS_MANIFEST = os.environ.get("VERSO_COMPOSIO_TOOLS_MANIFEST", "").strip()
+# Memory tool surface for this Hermes profile: "full" or unset/anything else
+# for none. The orchestrator owns the in-process memory store; these tools
+# proxy to it.
+MEMORY_TOOLS_MODE = os.environ.get("VERSO_MEMORY_TOOLS", "").strip().lower()
 
 mcp = FastMCP(
     SERVER_NAME,
     instructions=(
         "verso app bridge. Use search_toolkits to find the right app first when needed, "
         "then request_connection/list_connections/get_connection_status for auth and connection state. "
-        "For Composio-backed app actions, use search_composio_tools to find the right "
-        "tool slug, get_composio_tool_schemas to inspect its arguments, then "
-        "execute_composio_tool to run it.\n\n"
+        "For Composio-backed app actions, prefer the native mcp_verso_* connected-app "
+        "tools that Hermes exposes from this server. If the right native tool is not "
+        "visible, use Hermes native tool search/describe/call to discover it. Use "
+        "search_composio_tools, get_composio_tool_schemas, and execute_composio_tool "
+        "only as a fallback when no native connected-app tool is available or the "
+        "manifest has not materialized yet.\n\n"
         "Connection management for ALL apps goes through verso, not Composio. "
         "If tool discovery or execution reports that no active connection exists, "
         "call verso.request_connection({toolkit: <slug>}) instead. After it "
@@ -136,8 +143,9 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 def search_composio_tools(query: str, toolkits: list[str] | None = None) -> types.CallToolResult:
     """Search Composio tools by use case.
 
-    Use this before attempting a third-party app action when you do not yet know
-    the best tool slug. Optionally narrow results to toolkit slugs like
+    Fallback only: native connected-app tools plus Hermes tool search are the
+    preferred path. Use this when the right native mcp_verso_* tool is missing
+    or not yet materialized. Optionally narrow results to toolkit slugs like
     ["gmail"] or ["slack"].
     """
 
@@ -156,8 +164,9 @@ def search_composio_tools(query: str, toolkits: list[str] | None = None) -> type
 def get_composio_tool_schemas(tool_slugs: list[str]) -> types.CallToolResult:
     """Fetch input schemas for Composio tools by slug.
 
-    Call this after search_composio_tools and before execute_composio_tool when
-    you need the exact parameter schema for one or more tool slugs.
+    Fallback only: native connected-app tools already expose their schemas. Call
+    this after search_composio_tools and before execute_composio_tool when you
+    need the exact parameter schema for one or more fallback tool slugs.
     """
 
     payload = _request(
@@ -177,9 +186,10 @@ def execute_composio_tool(
 ) -> types.CallToolResult:
     """Execute a Composio-backed tool through verso's bridge.
 
-    Use this only after identifying the right tool slug and argument schema.
-    arguments must be a JSON object matching the schema from
-    get_composio_tool_schemas. Do not pass null or omit it.
+    Fallback only: prefer native mcp_verso_* connected-app tools. Use this only
+    after identifying the right fallback tool slug and argument schema. arguments
+    must be a JSON object matching the schema from get_composio_tool_schemas.
+    Do not pass null or omit it.
     The result is the Composio execution payload: data, error, and logId.
     """
 
@@ -196,6 +206,60 @@ def execute_composio_tool(
         "/composio/tools/execute",
         {
             "toolSlug": tool_slug,
+            "arguments": arguments,
+        },
+    )
+    return _structured_result(payload)
+
+
+@mcp.tool()
+def propose_message_draft(
+    channel: str,
+    body: str,
+    to: str | None = None,
+    subject: str | None = None,
+    cc: str | None = None,
+    threadId: str | None = None,
+    channel_label: str | None = None,
+    channel_logo_url: str | None = None,
+    to_display: str | None = None,
+    to_avatar_url: str | None = None,
+) -> types.CallToolResult:
+    """Surface a draft message to the user for review before sending.
+
+    Use this whenever the user asks you to send a message via any app
+    (Slack, Gmail, SMS, WhatsApp, Discord, Telegram, etc). Always call this
+    before the underlying send tool.
+
+    If the result status is "pending_review", Verso handles the final send
+    from the review widget and you are done. If the result status is
+    "approved", dispatch the send yourself using the final_* values returned.
+    If the result status is "rejected", do not send.
+    """
+
+    arguments: dict[str, Any] = {
+        "channel": channel,
+        "body": body,
+    }
+    optional_values = {
+        "to": to,
+        "subject": subject,
+        "cc": cc,
+        "threadId": threadId,
+        "channel_label": channel_label,
+        "channel_logo_url": channel_logo_url,
+        "to_display": to_display,
+        "to_avatar_url": to_avatar_url,
+    }
+    for key, value in optional_values.items():
+        if isinstance(value, str) and value.strip():
+            arguments[key] = value
+
+    payload = _request(
+        "POST",
+        "/composio/tools/execute",
+        {
+            "toolSlug": "PROPOSE_MESSAGE_DRAFT",
             "arguments": arguments,
         },
     )
@@ -389,6 +453,57 @@ def _sanitize_connection_request(request: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
+def search_memory(query: str, limit: int | None = None) -> types.CallToolResult:
+    """Search your persistent memory about this user.
+
+    The memory holds curated memory pages you have written yourself AND raw
+    history from past conversations and the user's connected apps (email,
+    Slack, meeting notes): people, companies, projects, deals, decisions,
+    preferences, and commitments. Use it before web search whenever the
+    answer may involve anything the user has talked about before. Returns
+    matching entries with slugs, scores, and snippets; fetch full entries
+    with get_memory_page. If wording might differ, retry with a reworded
+    query before concluding nothing is stored.
+    """
+
+    body: dict[str, Any] = {"query": query}
+    if isinstance(limit, int):
+        body["limit"] = limit
+    return _structured_result(_request("POST", "/memory/search", body))
+
+
+def get_memory_page(slug: str) -> types.CallToolResult:
+    """Read one full memory entry by slug, as returned by search_memory.
+
+    Works on curated page slugs (people/jane-doe) and raw document results
+    (doc:<id>) alike.
+    """
+
+    return _structured_result(_request("POST", "/memory/page", {"slug": slug}))
+
+
+def write_memory_page(slug: str, content: str) -> types.CallToolResult:
+    """Create or update a persistent memory page about a person, project,
+    preference, decision, or fact worth remembering across conversations.
+
+    Search first; update the existing page instead of creating a
+    near-duplicate. Slug: short-kebab-case, e.g. people/jane-doe,
+    companies/acme, projects/atlas. Content is full markdown.
+    """
+
+    return _structured_result(
+        _request("POST", "/memory/write-page", {"slug": slug, "content": content})
+    )
+
+
+def _register_memory_tools() -> None:
+    if MEMORY_TOOLS_MODE != "full":
+        return
+    mcp.tool()(search_memory)
+    mcp.tool()(get_memory_page)
+    mcp.tool()(write_memory_page)
+
+
 async def _run_stdio_async() -> None:
     async with stdio_server() as (read_stream, write_stream):
         await mcp._mcp_server.run(  # noqa: SLF001
@@ -400,6 +515,7 @@ async def _run_stdio_async() -> None:
 
 def main() -> None:
     _register_manifest_tools()
+    _register_memory_tools()
     anyio.run(_run_stdio_async)
 
 
