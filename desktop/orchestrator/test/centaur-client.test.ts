@@ -127,6 +127,54 @@ describe('CentaurStreamTranslator', () => {
     expect(t.composedAnswer()).toBe('Hello world');
   });
 
+  it('separates consecutive agent messages with a paragraph break', () => {
+    const t = new CentaurStreamTranslator();
+    t.handle(outputLine({ method: 'item/agentMessage/delta', params: { itemId: 'a', delta: 'Phase one.' } }));
+    const second = t.handle(outputLine({ method: 'item/agentMessage/delta', params: { itemId: 'b', delta: 'Phase two.' } }));
+    expect(second).toEqual([{ kind: 'text_delta', text: '\n\nPhase two.' }]);
+    expect(t.composedAnswer()).toBe('Phase one.\n\nPhase two.');
+  });
+
+  it('separates a never-streamed completed message from earlier text', () => {
+    const t = new CentaurStreamTranslator();
+    t.handle(outputLine({ method: 'item/agentMessage/delta', params: { itemId: 'a', delta: 'Intro.' } }));
+    const completed = t.handle(outputLine({
+      method: 'item/completed',
+      params: { itemId: 'b', item: { id: 'b', type: 'agentMessage', text: 'Final.' } },
+    }));
+    expect(completed).toEqual([{ kind: 'text_delta', text: '\n\nFinal.' }]);
+    expect(t.composedAnswer()).toBe('Intro.\n\nFinal.');
+  });
+
+  it('maps command executions to tool_use and tool_result (normalized dialect)', () => {
+    const t = new CentaurStreamTranslator();
+    const started = t.handle(outputLine({
+      method: 'item/started',
+      params: { item: { id: 'c1', command: 'ls -la' } },
+    }));
+    expect(started).toEqual([{ kind: 'tool_use', id: 'c1', name: 'shell', input: { command: 'ls -la' } }]);
+
+    const completed = t.handle(outputLine({
+      method: 'item/completed',
+      params: { item: { id: 'c1', command: 'ls -la', aggregatedOutput: 'total 0\n' } },
+    }));
+    expect(completed).toEqual([{ kind: 'tool_result', toolUseId: 'c1', content: 'total 0' }]);
+    // Command output never leaks into the composed answer text.
+    expect(t.composedAnswer()).toBe('');
+  });
+
+  it('truncates huge command outputs in tool_result frames', () => {
+    const t = new CentaurStreamTranslator();
+    const events = t.handle(outputLine({
+      method: 'item/completed',
+      params: { item: { id: 'c2', command: 'cat big', aggregatedOutput: 'x'.repeat(5000) } },
+    }));
+    expect(events).toHaveLength(1);
+    const content = (events[0] as { content: string }).content;
+    expect(content.length).toBeLessThan(1600);
+    expect(content.endsWith('…[truncated]')).toBe(true);
+  });
+
   it('maps tool_result frames', () => {
     const t = new CentaurStreamTranslator();
     const events = t.handle(outputLine({

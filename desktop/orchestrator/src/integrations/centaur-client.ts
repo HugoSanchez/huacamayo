@@ -104,21 +104,38 @@ export function threadKeyForSession(sessionId: string): string {
  * ChatStore keeps the user's clean prompt, so the UI never shows it.
  */
 export function buildSessionPreamble(composioUserId: string | null): string {
-  const userIdNote = composioUserId
-    ? `Always pass user_id='${composioUserId}' — it scopes calls to this user's connected accounts.`
-    : `Pass the user's Composio user_id when known.`;
-  return [
-    '<verso-environment-notes>',
-    'Composio (SaaS integrations like Gmail, Slack, Notion): the `composio` CLI in this sandbox',
-    'only exposes `health`. For real use, call the Python client from the tool package, e.g.:',
-    '  cd /app/tools/productivity/composio && uv run python -c \\',
-    '    "from centaur_tool_composio.client import ComposioClient; c = ComposioClient(); \\',
-    '     print(c.execute(\'GMAIL_FETCH_EMAILS\', {\'max_results\': 1}, user_id=\'...\'))"',
-    'Methods: search_tools(query, user_id), list_tools(toolkit, user_id),',
-    'get_tool_schema(tool_slug, user_id), execute(tool_slug, arguments, user_id).',
-    userIdNote,
-    '</verso-environment-notes>',
-  ].join('\n');
+  const userId = composioUserId ?? "<ask the user for their Composio user id>";
+  return `<verso-environment-notes>
+You are the user's personal assistant inside Verso, a macOS app, running on their private
+cloud agent instance. Identity: you are Verso's assistant — do NOT describe yourself as
+"Centaur" or "Paradigm's assistant". Answer identity and small-talk questions directly,
+without running any commands.
+
+WORKS on this instance:
+- Composio — the user's own connected apps (Gmail, Slack, Google Calendar, Notion, ...).
+  This is THE way to read or act on the user's personal apps. The \`composio\` CLI exposes
+  only \`health\`; call the Python client with this exact pattern (the import name only
+  resolves through the symlink — do not skip it):
+    TMPD=$(mktemp -d)
+    ln -s /app/tools/productivity/composio "$TMPD/centaur_tool_composio"
+    cd "$TMPD" && PYTHONPATH="$TMPD:/opt/centaur" uv run --no-project \\
+      --with 'composio>=0.13.0' --with 'python-dotenv>=1.0.0' \\
+      --with 'rich>=13.0.0' --with 'typer>=0.12.0' python -c "
+    from centaur_tool_composio.client import ComposioClient
+    c = ComposioClient()
+    print(c.execute('GMAIL_FETCH_EMAILS', {'max_results': 1}, user_id='${userId}'))
+    "
+  Client methods: search_tools(query, user_id), list_tools(toolkit, user_id),
+  get_tool_schema(tool_slug, user_id), execute(tool_slug, arguments, user_id).
+  ALWAYS pass user_id='${userId}' — it scopes calls to this user's connected accounts.
+- Web research and general shell/python work in your sandbox.
+
+BROKEN or unconfigured on this instance — do NOT attempt, they only waste time:
+- First-party tool CLIs (slack, linear, notion, gsuite, ...): version-skewed or not set
+  up here. Known examples: \`slack\` fails with a centaur_sdk ImportError, and
+  SLACK_BOT_TOKEN is a placeholder for a Slack app that is not installed (direct Slack
+  API calls return invalid_auth). For Slack/Gmail/Calendar actions, use Composio above.
+</verso-environment-notes>`;
 }
 
 /**
@@ -372,9 +389,12 @@ export class CentaurStreamTranslator {
 
   /** Best-effort final answer assembled from streamed item text. */
   composedAnswer(): string {
-    let out = '';
-    for (const value of this.answerByItemId.values()) out += value;
-    return out;
+    return Array.from(this.answerByItemId.values()).filter(Boolean).join('\n\n');
+  }
+
+  private hasAnswerText(): boolean {
+    for (const value of this.answerByItemId.values()) if (value) return true;
+    return false;
   }
 
   private handleOutputLine(line: string): CentaurChatEvent[] {
@@ -390,18 +410,21 @@ export class CentaurStreamTranslator {
       return text ? [{ kind: 'reasoning_delta', text }] : [];
     }
 
-    // Incremental agent message text (codex).
+    // Incremental agent message text (codex). A NEW message item after
+    // earlier answer text gets a paragraph break — without it multi-phase
+    // answers run together ("...before I go further.The token resolves...").
     if (type === 'item.agentMessage.delta') {
       const id = itemId(notification);
       const text = extractDeltaText(notification);
       if (!text) return [];
+      const needsSeparator = !this.answerByItemId.has(id) && this.hasAnswerText();
       this.streamedItemIds.add(id);
       this.answerByItemId.set(id, (this.answerByItemId.get(id) ?? '') + text);
-      return [{ kind: 'text_delta', text }];
+      return [{ kind: 'text_delta', text: needsSeparator ? `\n\n${text}` : text }];
     }
 
-    // Completed agent message (codex): reconcile the stored text; only emit if
-    // we never streamed deltas for it (some harnesses skip the delta phase).
+    // Completed items (codex): agent messages reconcile stored text; command
+    // executions become tool_result frames so the UI logs the agent's work.
     if (type === 'item.completed') {
       const item = asRecord(notification.item);
       const itemType = String(item?.type ?? '');
@@ -410,8 +433,29 @@ export class CentaurStreamTranslator {
         const text = String(item?.text ?? '');
         if (!text) return [];
         const alreadyStreamed = this.streamedItemIds.has(id);
+        const needsSeparator = !this.answerByItemId.has(id) && this.hasAnswerText();
         this.answerByItemId.set(id, text);
-        return alreadyStreamed ? [] : [{ kind: 'text_delta', text }];
+        return alreadyStreamed ? [] : [{ kind: 'text_delta', text: needsSeparator ? `\n\n${text}` : text }];
+      }
+      const completedCommand = typeof item?.command === 'string' ? item.command : '';
+      if (completedCommand) {
+        const output = typeof item?.aggregatedOutput === 'string' ? item.aggregatedOutput : '';
+        return [{
+          kind: 'tool_result',
+          toolUseId: itemId(notification),
+          content: truncateToolOutput(output),
+        }];
+      }
+      return [];
+    }
+
+    // Command execution starting (normalized dialect): surface as tool
+    // activity so long turns render a live progress feed instead of dead air.
+    if (type === 'item.started') {
+      const item = asRecord(notification.item);
+      const startedCommand = typeof item?.command === 'string' ? item.command : '';
+      if (startedCommand) {
+        return [{ kind: 'tool_use', id: itemId(notification), name: 'shell', input: { command: startedCommand } }];
       }
       return [];
     }
@@ -521,6 +565,15 @@ function toolResults(notification: Record<string, unknown>): Array<Record<string
     .map(asRecord)
     .filter((block): block is Record<string, unknown> =>
       Boolean(block) && (block!.type === 'tool_result' || 'tool_use_id' in block!));
+}
+
+const MAX_TOOL_OUTPUT_CHARS = 1500;
+
+function truncateToolOutput(output: string): string {
+  const trimmed = output.trim();
+  return trimmed.length <= MAX_TOOL_OUTPUT_CHARS
+    ? trimmed
+    : `${trimmed.slice(0, MAX_TOOL_OUTPUT_CHARS)}…[truncated]`;
 }
 
 function extractResultText(data: string): string {
