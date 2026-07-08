@@ -242,6 +242,53 @@ describe('SourceIngestionScheduler', () => {
     }
   });
 
+  it('rebuilds the corpus when the memory store instance token changes', () => {
+    const { store, scheduler } = setup({ behavior: () => ({ items: [], nextCursor: '0', hasMore: false }) });
+    store.enableSource('gmail', '', { seedCursor: '0' }, t0);
+    // Prior runs advanced the cursor well past history and marked items processed.
+    store.completeIngestion('gmail', '', '999999', at(MIN).toISOString(), t0);
+    store.markItemsProcessed('gmail', '', ['old-1', 'old-2'], t0);
+    expect(store.getItem('gmail', '', 'old-1')?.status).toBe('processed');
+
+    const now = at(60 * MIN);
+    expect(scheduler.reconcileWithMemoryToken('mem-abc', now)).toBe(true);
+
+    // Ledger wiped so nothing is skipped on re-fetch.
+    expect(store.getItem('gmail', '', 'old-1')).toBeNull();
+    // Cursor re-seeded to the lookback floor (7d default) and made due now.
+    const s = store.getSource('gmail', '')!;
+    expect(s.cursor).toBe(String(now.getTime() - 7 * 24 * 60 * 60 * 1000));
+    expect(s.nextDueAt).toBe(now.toISOString());
+
+    // Idempotent: the same token no longer rebuilds.
+    expect(scheduler.reconcileWithMemoryToken('mem-abc', at(70 * MIN))).toBe(false);
+  });
+
+  it('does not rebuild on a null token, and preserves the ledger once reconciled', () => {
+    const { store, scheduler } = setup({ behavior: () => ({ items: [], nextCursor: '0', hasMore: false }) });
+    store.enableSource('gmail', '', { seedCursor: '0' }, t0);
+    store.markItemsProcessed('gmail', '', ['keep'], t0);
+
+    // Store not ready yet → skip without recording, so a later real token still triggers a rebuild.
+    expect(scheduler.reconcileWithMemoryToken(null, at(MIN))).toBe(false);
+    expect(store.getItem('gmail', '', 'keep')?.status).toBe('processed');
+
+    expect(scheduler.reconcileWithMemoryToken('tok', at(MIN))).toBe(true);
+    store.markItemsProcessed('gmail', '', ['fresh'], at(2 * MIN));
+    expect(scheduler.reconcileWithMemoryToken('tok', at(3 * MIN))).toBe(false);
+    expect(store.getItem('gmail', '', 'fresh')?.status).toBe('processed'); // steady-state ledger untouched
+  });
+
+  it('re-seeds only enabled sources on rebuild', () => {
+    const { store, scheduler } = setup({ behavior: () => ({ items: [], nextCursor: '0', hasMore: false }) });
+    store.enableSource('gmail', '', { seedCursor: '12345' }, t0);
+    store.disableSource('gmail', '', t0);
+
+    expect(scheduler.reconcileWithMemoryToken('tok', at(MIN))).toBe(true);
+    // A disabled source keeps its cursor (re-enabling resumes where it left off).
+    expect(store.getSource('gmail', '')?.cursor).toBe('12345');
+  });
+
   it('does nothing when disabled or while the gate is closed', async () => {
     const disabled = setup({ behavior: () => ({ items: [item('m1', 1)], nextCursor: '1', hasMore: false }), enabled: () => false });
     disabled.store.enableSource('gmail', '', { seedCursor: '0' }, t0);

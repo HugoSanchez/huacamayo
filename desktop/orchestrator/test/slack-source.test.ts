@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SlackSource, parseSlackCursor, extractMatches, extractNextCursor } from '../src/http/slack-source.ts';
 import type { IngestionBridge } from '../src/http/ingestion-source.ts';
+import type { SlackUserDirectory } from '../src/http/slack-users.ts';
+import type { SlackConversationDirectory } from '../src/http/slack-conversations.ts';
 
 interface Call { slug: string; args: Record<string, unknown>; opts?: { recordUsage?: boolean }; }
 
@@ -14,6 +16,24 @@ const match = (
   over: Record<string, unknown> = {},
   channel: Record<string, unknown> = {},
 ) => ({ type: 'message', ts, user: 'U1', text, channel: { id: channelId, name: 'general', ...channel }, ...over });
+
+// A directory that maps ids from a fixed table, falling back to the id itself.
+const directory = (table: Record<string, string> = {}): SlackUserDirectory => ({
+  async resolve(userIds) {
+    const out = new Map<string, string>();
+    for (const id of userIds) out.set(id, table[id] ?? id);
+    return out;
+  },
+});
+
+// Maps DM channel ids to a peer user id from a fixed table.
+const conversations = (table: Record<string, string> = {}): SlackConversationDirectory => ({
+  async peerIds(channelIds) {
+    const out = new Map<string, string>();
+    for (const id of channelIds) if (table[id]) out.set(id, table[id]);
+    return out;
+  },
+});
 
 // `pages` is one array of matches per page; the mock simulates cursor-mark
 // pagination — page 0 is fetched with cursor '*', page i with cursor `cur<i>`,
@@ -37,20 +57,45 @@ function bridgeWith(pages: unknown[][] | ((args: Record<string, unknown>) => Ret
 }
 
 describe('SlackSource.fetchSince', () => {
-  it('searches recent messages and builds channel-qualified items, recordUsage:false', async () => {
+  it('groups messages into per-(channel, day) documents with time-stamped lines', async () => {
     const { bridge, calls } = bridgeWith([[
       match('C1', '100.000100', 'hi'),
       match('C9', '200.000100', 'hello'),
     ]]);
     const result = await new SlackSource(bridge).fetchSince('', '50.0', { maxItems: 50 });
 
-    expect(result.items.map((i) => i.sourceRef)).toEqual(['C1.100.000100', 'C9.200.000100']);
-    expect(result.items[0].content).toBe('[#general] U1: hi');
+    // sourceRef is the day bucket; dedupRef is the unique per-message key.
+    expect(result.items.map((i) => i.sourceRef)).toEqual(['C1#1970-01-01', 'C9#1970-01-01']);
+    expect(result.items.map((i) => i.dedupRef)).toEqual(['C1.100.000100', 'C9.200.000100']);
+    expect(result.items.every((i) => i.merge === true)).toBe(true);
+    expect(result.items[0]).toMatchObject({ title: '#general 1970-01-01', content: '[00:01] U1: hi' });
+
     expect(calls[0].args).toMatchObject({ sort: 'timestamp', sort_dir: 'asc', count: 100, cursor: '*' });
     expect(String(calls[0].args.query)).toMatch(/^after:\d{4}-\d{2}-\d{2}$/);
     expect(calls[0].opts).toEqual({ recordUsage: false });
     expect(JSON.parse(result.nextCursor)).toEqual({ w: '200.000100', a: null, c: null }); // caught up
     expect(result.hasMore).toBe(false);
+  });
+
+  it('shares one sourceRef across a channel-day so messages merge into it', async () => {
+    const { bridge } = bridgeWith([[
+      match('C1', '100.0', 'first'),
+      match('C1', '200.0', 'second'),
+    ]]);
+    const result = await new SlackSource(bridge).fetchSince('', '0', { maxItems: 50 });
+    expect(result.items.map((i) => i.sourceRef)).toEqual(['C1#1970-01-01', 'C1#1970-01-01']);
+    expect(result.items.map((i) => i.dedupRef)).toEqual(['C1.100.0', 'C1.200.0']);
+    expect(result.items.map((i) => i.content)).toEqual(['[00:01] U1: first', '[00:03] U1: second']);
+  });
+
+  it('resolves author ids and <@mention> ids to display names', async () => {
+    const { bridge } = bridgeWith([[
+      match('C1', '100.0', 'hey <@U2> and <@U3|ignored-handle>', { user: 'U1' }),
+    ]]);
+    const src = new SlackSource(bridge, { userDirectory: directory({ U1: 'Alice', U2: 'Bob' }) });
+    const result = await src.fetchSince('', '0', { maxItems: 50 });
+    // U1 → Alice (author), U2 → Bob (mention), U3 → unresolved falls back to the id.
+    expect(result.items[0].content).toBe('[00:01] Alice: hey @Bob and @U3');
   });
 
   it('drops messages below the watermark and keeps the exact ts cursor precise', async () => {
@@ -60,7 +105,7 @@ describe('SlackSource.fetchSince', () => {
       match('C1', '100.000123', 'just after'),
     ]]);
     const result = await new SlackSource(bridge).fetchSince('', '100.000000', { maxItems: 50 });
-    expect(result.items.map((i) => i.sourceRef)).toEqual(['C1.100.000000', 'C1.100.000123']);
+    expect(result.items.map((i) => i.dedupRef)).toEqual(['C1.100.000000', 'C1.100.000123']);
     expect(JSON.parse(result.nextCursor).w).toBe('100.000123');
   });
 
@@ -81,7 +126,7 @@ describe('SlackSource.fetchSince', () => {
     expect(calls).toHaveLength(20); // capped at MAX_PAGES this tick
 
     const run2 = await src.fetchSince('', run1.nextCursor, { maxItems: 50 });
-    expect(run2.items.map((i) => i.content)).toEqual(['[#general] U1: fresh']);
+    expect(run2.items.map((i) => i.content)).toEqual(['[01:40] U1: fresh']);
     expect(run2.hasMore).toBe(false);
     expect(calls[20].args.cursor).toBe('cur20'); // resumed from the carried cursor — no re-scan
   });
@@ -105,26 +150,50 @@ describe('SlackSource.fetchSince', () => {
       match('C1', '30.0', 'c'),
     ]]);
     const result = await new SlackSource(bridge).fetchSince('', '0', { maxItems: 2 });
-    expect(result.items.map((i) => i.content)).toEqual(['[#general] U1: a', '[#general] U1: b']);
+    expect(result.items.map((i) => i.content)).toEqual(['[00:00] U1: a', '[00:00] U1: b']);
     expect(result.hasMore).toBe(true);
     const cur = JSON.parse(result.nextCursor);
     expect(cur.w).toBe('20.0'); // advanced only to the last item taken — c isn't skipped
     expect(cur.c).toBe('*'); // re-read this page next run (taken items fall below the watermark)
   });
 
-  it('labels DMs and group DMs distinctly from channels', async () => {
+  it('labels DMs and group DMs distinctly from channels in the title', async () => {
     const { bridge } = bridgeWith([[
       match('D1', '10.0', 'direct', {}, { is_im: true, name: '' }),
       match('G1', '20.0', 'huddle', {}, { is_mpim: true, name: 'mpdm-a--b' }),
       match('C1', '30.0', 'public'),
     ]]);
     const result = await new SlackSource(bridge).fetchSince('', '0', { maxItems: 50 });
-    expect(result.items.map((i) => i.content)).toEqual([
-      '[DM] U1: direct',
-      '[Group DM] U1: huddle',
-      '[#general] U1: public',
+    expect(result.items.map((i) => i.title)).toEqual([
+      'DM 1970-01-01',
+      'Group DM 1970-01-01',
+      '#general 1970-01-01',
     ]);
-    expect(result.items.map((i) => i.sourceRef)).toEqual(['D1.10.0', 'G1.20.0', 'C1.30.0']);
+    expect(result.items.map((i) => i.sourceRef)).toEqual(['D1#1970-01-01', 'G1#1970-01-01', 'C1#1970-01-01']);
+    expect(result.items.map((i) => i.content)).toEqual([
+      '[00:00] U1: direct',
+      '[00:00] U1: huddle',
+      '[00:00] U1: public',
+    ]);
+  });
+
+  it('titles a DM document with the resolved peer name', async () => {
+    const { bridge } = bridgeWith([[match('D1', '10.0', 'hey', { user: 'U1' }, { is_im: true, name: '' })]]);
+    const src = new SlackSource(bridge, {
+      userDirectory: directory({ U1: 'Alice', U2: 'Bob' }), // U1 sent it, U2 is the DM peer
+      conversationDirectory: conversations({ D1: 'U2' }),
+    });
+    const result = await src.fetchSince('', '0', { maxItems: 50 });
+    expect(result.items[0].title).toBe('DM with Bob 1970-01-01');
+    expect(result.items[0].content).toBe('[00:00] Alice: hey');
+  });
+
+  it('falls back to a bare DM title when the peer name is unavailable', async () => {
+    const { bridge } = bridgeWith([[match('D1', '10.0', 'hey', {}, { is_im: true, name: '' })]]);
+    // Peer id resolves but the (identity) user directory cannot name it → "DM".
+    const src = new SlackSource(bridge, { conversationDirectory: conversations({ D1: 'U2' }) });
+    const result = await src.fetchSince('', '0', { maxItems: 50 });
+    expect(result.items[0].title).toBe('DM 1970-01-01');
   });
 
   it('skips system messages (subtype), empty text, missing ts, and missing channel id', async () => {
@@ -136,7 +205,7 @@ describe('SlackSource.fetchSince', () => {
       { type: 'message', ts: '5.1', text: 'no channel', user: 'U9' },
     ]]);
     const result = await new SlackSource(bridge).fetchSince('', '0', { maxItems: 50 });
-    expect(result.items.map((i) => i.sourceRef)).toEqual(['C1.1.1']);
+    expect(result.items.map((i) => i.dedupRef)).toEqual(['C1.1.1']);
   });
 
   it('returns the watermark unchanged when nothing new matches', async () => {

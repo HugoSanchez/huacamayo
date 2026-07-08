@@ -186,6 +186,36 @@ export class IngestionStore {
     return this.getSource(source, stream);
   }
 
+  /**
+   * Rebuild support: re-seed an enabled source's cursor back to a fresh floor
+   * and make it due now, so the next tick re-fetches from the lookback window.
+   * Unlike enableSource this never flips `enabled` and always overwrites the
+   * cursor (enableSource keeps an existing one). Clears failure state too.
+   */
+  reseedCursor(source: string, stream: string, seedCursor: string, now = new Date()): IngestionSourceState | null {
+    const existing = this.getSource(source, stream);
+    if (!existing) return null;
+    const nowIso = now.toISOString();
+    this.db.prepare(`
+      UPDATE ingestion_state
+      SET cursor = ?,
+          status = 'idle',
+          next_due_at = ?,
+          running_started_at = NULL,
+          last_error = NULL,
+          fail_count = 0,
+          updated_at = ?
+      WHERE source = ? AND stream = ?
+    `).run(seedCursor, nowIso, nowIso, source, stream);
+    return this.getSource(source, stream);
+  }
+
+  /** Rebuild support: wipe the whole per-item dedup ledger so nothing is skipped on re-fetch. Returns rows deleted. */
+  clearProcessedLedger(): number {
+    const result = this.db.prepare('DELETE FROM ingestion_items').run();
+    return Number(result.changes);
+  }
+
   /** Turn ingestion off. The cursor is retained so re-enabling resumes from where it left off. */
   disableSource(source: string, stream: string, now = new Date()): IngestionSourceState | null {
     const existing = this.getSource(source, stream);

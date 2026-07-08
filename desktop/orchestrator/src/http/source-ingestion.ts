@@ -15,6 +15,10 @@ const DEFAULT_BASE_BACKOFF_MS = 30 * 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30 * 60 * 1000;
 const DEFAULT_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
+// ingestion_config key holding the memory-store instance token we last rebuilt
+// the corpus for. A mismatch on startup means memory was reset → rebuild.
+const MEMORY_INSTANCE_CONFIG_KEY = 'memory_instance_id';
+
 /** UI-facing view of a source: store state enriched with adapter + connection info. */
 export interface IngestionSourceView {
   source: string;
@@ -36,7 +40,7 @@ export type IngestionRunner = (
   payload: {
     source: string;
     stream: string;
-    items: Array<{ sourceRef: string; occurredAt: string; title?: string; content: string }>;
+    items: Array<{ sourceRef: string; occurredAt: string; title?: string; content: string; merge?: boolean }>;
   },
 ) => Promise<void>;
 
@@ -131,6 +135,42 @@ export class SourceIngestionScheduler {
       return this.store.enableSource(source, adapter.defaultStream, { seedCursor: adapter.seedCursor(now, lookbackMs) }, now);
     }
     return this.store.disableSource(source, adapter.defaultStream, now);
+  }
+
+  /**
+   * Reconcile the ingestion ledger with the memory store's identity. The memory
+   * store and this ledger have independent lifecycles: if the store is recreated
+   * (fresh build, path change, manual wipe) its instance token changes, but the
+   * ledger still marks every past item 'processed' and the cursors sit past
+   * them — so nothing is ever re-fetched and the new store stays empty except
+   * for whatever high-churn source happens to produce new items. Detect that
+   * mismatch and rebuild: clear the ledger and re-seed every enabled source's
+   * cursor to its lookback floor, so the corpus re-fetches into the new store.
+   *
+   * A null token (store not ready / memory disabled) is a no-op — we retry on
+   * the next launch rather than clobbering the recorded token. Returns true when
+   * a rebuild ran.
+   */
+  reconcileWithMemoryToken(memoryToken: string | null, now = new Date()): boolean {
+    if (!memoryToken) return false;
+    const recorded = this.store.getConfig(MEMORY_INSTANCE_CONFIG_KEY);
+    if (recorded === memoryToken) return false;
+
+    const cleared = this.store.clearProcessedLedger();
+    const reseeded: string[] = [];
+    for (const adapter of this.adapters.values()) {
+      const state = this.store.getSource(adapter.source, adapter.defaultStream);
+      if (!state?.enabled) continue;
+      const lookbackMs = adapter.seedLookbackMs ?? this.lookbackMs;
+      this.store.reseedCursor(adapter.source, adapter.defaultStream, adapter.seedCursor(now, lookbackMs), now);
+      reseeded.push(adapter.source);
+    }
+    this.store.setConfig(MEMORY_INSTANCE_CONFIG_KEY, memoryToken);
+    console.log(
+      `[ingest] memory store reset detected (${recorded ?? 'none'} → ${memoryToken}); `
+      + `rebuilding corpus: cleared ${cleared} ledger row(s), re-seeded [${reseeded.join(', ') || 'none'}]`,
+    );
+    return true;
   }
 
   /** UI-facing list: one row per source. */
@@ -241,6 +281,7 @@ export class SourceIngestionScheduler {
             occurredAt: item.occurredAt,
             ...(item.title ? { title: item.title } : {}),
             content: item.content,
+            ...(item.merge ? { merge: true } : {}),
           })),
         });
         this.store.markItemsProcessed(claim.source, claim.stream, newRefs, now);

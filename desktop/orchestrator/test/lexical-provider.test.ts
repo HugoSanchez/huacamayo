@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
+import type { EmbedderLike, EmbedderState } from '../src/http/embedder.ts';
 import { buildFtsMatchExpression, LexicalMemoryProvider } from '../src/http/lexical-provider.ts';
 import { buildMemoryRoutes } from '../src/http/memory-routes.ts';
 import type { Route } from '../src/http/router.ts';
@@ -154,6 +155,144 @@ describe('FTS5 query sanitization', () => {
   });
 });
 
+/**
+ * Deterministic fake embedder: maps texts onto a tiny concept space so
+ * "TPS" and "throughput" land on the same axis without any real model.
+ * Vectors are unit-normalized like the real embedder's.
+ */
+function fakeEmbedder(opts: { ready?: boolean; failQueries?: boolean } = {}): EmbedderLike & { embedCalls: string[][] } {
+  const CONCEPTS: Record<string, number> = {
+    tps: 0, throughput: 0, speed: 0,
+    lunch: 1, restaurant: 1, comida: 1,
+    atlas: 2,
+  };
+  const embed = (text: string): Float32Array => {
+    const v = new Float32Array(3);
+    for (const token of text.toLowerCase().match(/[a-zá-ú]+/g) ?? []) {
+      if (token in CONCEPTS) v[CONCEPTS[token]] += 1;
+    }
+    const norm = Math.hypot(...v) || 1;
+    return v.map((x) => x / norm) as Float32Array;
+  };
+  const ready = opts.ready ?? true;
+  return {
+    modelId: 'fake-e5',
+    embedCalls: [],
+    start: async () => undefined,
+    isReady: () => ready,
+    getState: (): EmbedderState => (ready ? 'ready' : 'loading'),
+    diagnostics: () => ({ state: ready ? 'ready' : 'loading', modelId: 'fake-e5' }),
+    async embedQuery(text) {
+      if (opts.failQueries) throw new Error('embed boom');
+      return embed(text);
+    },
+    async embedPassages(texts) {
+      this.embedCalls.push(texts);
+      return texts.map(embed);
+    },
+  };
+}
+
+describe('hybrid retrieval (embeddings)', () => {
+  async function hybridProvider(opts: Parameters<typeof fakeEmbedder>[0] = {}) {
+    const embedder = fakeEmbedder(opts);
+    const p = new LexicalMemoryProvider(
+      { enabled: true, dbPath: path.join(tempRoot, 'hybrid.db') },
+      { embedder },
+    );
+    await p.start();
+    return { p, embedder };
+  }
+
+  it('finds paraphrases BM25 misses once vectors are backfilled', async () => {
+    const { p } = await hybridProvider();
+    await p.putPage('projects/proving-tps', '# Proving TPS\n\nWe need higher TPS on the prover.');
+    await p.putPage('places/lunch-spot', '# Lunch spot\n\nGreat restaurant nearby.');
+    await p.runEmbeddingBackfill();
+
+    // "throughput" appears in neither page — BM25 alone returns nothing.
+    const results = await p.search('throughput speed', 5);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].slug).toBe('projects/proving-tps');
+    // Vector-only hits still carry display data.
+    expect(results[0].title).toBe('Proving TPS');
+    expect(results[0].snippet).toContain('Proving TPS');
+    await p.stop();
+  });
+
+  it('fuses BM25 and vector ranks (exact term match still wins)', async () => {
+    const { p } = await hybridProvider();
+    await p.putPage('projects/atlas', '# Atlas\n\nProject Atlas kickoff notes.');
+    await p.putPage('projects/proving-tps', '# Proving TPS\n\nHigher TPS.');
+    await p.runEmbeddingBackfill();
+
+    const results = await p.search('atlas', 5);
+    expect(results[0].slug).toBe('projects/atlas');
+    await p.stop();
+  });
+
+  it('re-embeds a page after its content changes', async () => {
+    const { p, embedder } = await hybridProvider();
+    await p.putPage('a/b', '# B\n\nfirst version');
+    expect(await p.runEmbeddingBackfill()).toBe(1);
+    expect(await p.runEmbeddingBackfill()).toBe(0); // stable — nothing stale
+
+    await new Promise((resolve) => setTimeout(resolve, 5)); // distinct updated_at stamp
+    await p.putPage('a/b', '# B\n\nsecond version');
+    expect(await p.runEmbeddingBackfill()).toBe(1); // stamp changed → re-embed
+    expect(embedder.embedCalls).toHaveLength(2);
+    await p.stop();
+  });
+
+  it('embeds ingested documents too, and re-embeds after an upsert', async () => {
+    const { p } = await hybridProvider();
+    const batch = (content: string) => ({
+      source: 'gdrive',
+      stream: '',
+      items: [{ sourceRef: 'file-1', occurredAt: '2026-07-01T00:00:00.000Z', title: 'Doc', content }],
+    });
+    await p.ingestSourceBatch(batch('v1 throughput'));
+    expect(await p.runEmbeddingBackfill()).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 5)); // distinct updated_at stamp
+    await p.ingestSourceBatch(batch('v2 throughput'));
+    expect(await p.runEmbeddingBackfill()).toBe(1);
+    expect(p.diagnostics()).toMatchObject({ documents: 1, embeddedRows: 1 });
+    await p.stop();
+  });
+
+  it('is BM25-only while the embedder is not ready — never blocks', async () => {
+    const { p } = await hybridProvider({ ready: false });
+    await p.putPage('projects/proving-tps', '# Proving TPS\n\nHigher TPS.');
+    expect(await p.runEmbeddingBackfill()).toBe(0); // no-op, not an error
+
+    expect((await p.search('tps', 5))[0].slug).toBe('projects/proving-tps'); // exact term works
+    expect(await p.search('throughput', 5)).toEqual([]); // paraphrase miss expected
+    await p.stop();
+  });
+
+  it('falls back to BM25 when query embedding fails', async () => {
+    const { p } = await hybridProvider({ failQueries: true });
+    await p.putPage('projects/proving-tps', '# Proving TPS\n\nHigher TPS.');
+    await p.runEmbeddingBackfill();
+
+    const results = await p.search('tps', 5);
+    expect(results[0].slug).toBe('projects/proving-tps');
+    await p.stop();
+  });
+
+  it('chunks long content into multiple vectors', async () => {
+    const { p, embedder } = await hybridProvider();
+    await p.putPage('long/page', `# Long\n\n${'atlas '.repeat(1200)}`); // ~7k chars
+    await p.runEmbeddingBackfill();
+
+    expect(embedder.embedCalls[0].length).toBeGreaterThan(1);
+    const results = await p.search('atlas', 5);
+    expect(results[0].slug).toBe('long/page'); // best-chunk-per-row, no duplicates
+    expect(results).toHaveLength(1);
+    await p.stop();
+  });
+});
+
 describe('lifecycle & diagnostics', () => {
   it('reports disabled when memory is off', async () => {
     const off = new LexicalMemoryProvider({ enabled: false, dbPath: path.join(tempRoot, 'off.db') });
@@ -274,5 +413,88 @@ describe('memory routes', () => {
     for (const retired of ['/memory/link', '/memory/timeline', '/memory/ingest-log']) {
       expect(routes.find((r) => r.pattern.test(retired))).toBeUndefined();
     }
+  });
+});
+
+describe('LexicalMemoryProvider instance token', () => {
+  it('is stable across reopens of the same file but differs for a fresh file', async () => {
+    const token = provider.instanceToken();
+    expect(token).toBeTruthy();
+
+    // Closed store has no token.
+    await provider.stop();
+    expect(provider.instanceToken()).toBeNull();
+
+    // Reopening the same file recovers the same token.
+    const reopened = new LexicalMemoryProvider({
+      enabled: true,
+      dbPath: path.join(tempRoot, 'memory', 'verso-memory.db'),
+    });
+    await reopened.start();
+    expect(reopened.instanceToken()).toBe(token);
+    await reopened.stop();
+
+    // A different file mints a different token — this is what signals a reset.
+    const fresh = new LexicalMemoryProvider({
+      enabled: true,
+      dbPath: path.join(tempRoot, 'memory2', 'verso-memory.db'),
+    });
+    await fresh.start();
+    expect(fresh.instanceToken()).toBeTruthy();
+    expect(fresh.instanceToken()).not.toBe(token);
+    await fresh.stop();
+  });
+});
+
+describe('LexicalMemoryProvider merge-on-upsert (grouped sources)', () => {
+  it('appends merge items into one shared row and advances occurredAt', async () => {
+    await provider.ingestSourceBatch({
+      source: 'slack',
+      stream: 'C1',
+      items: [{
+        sourceRef: 'C1#2026-07-01',
+        occurredAt: '2026-07-01T09:00:00.000Z',
+        title: '#gtm 2026-07-01',
+        content: '[09:00] Alice: morning',
+        merge: true,
+      }],
+    });
+    await provider.ingestSourceBatch({
+      source: 'slack',
+      stream: 'C1',
+      items: [{
+        sourceRef: 'C1#2026-07-01',
+        occurredAt: '2026-07-01T10:30:00.000Z',
+        title: '#gtm 2026-07-01',
+        content: '[10:30] Bob: reply',
+        merge: true,
+      }],
+    });
+
+    const page = await provider.getPage('doc:1');
+    expect(page?.content).toBe('[09:00] Alice: morning\n[10:30] Bob: reply');
+    expect(page?.occurredAt).toBe('2026-07-01T10:30:00.000Z'); // later message wins
+    expect(provider.diagnostics()).toMatchObject({ documents: 1 });
+  });
+
+  it('merged rows are searchable across appended lines', async () => {
+    await provider.ingestSourceBatch({
+      source: 'slack',
+      stream: 'C1',
+      items: [
+        { sourceRef: 'C1#2026-07-01', occurredAt: '2026-07-01T09:00:00.000Z', content: '[09:00] Alice: kicking off Plasma', merge: true },
+        { sourceRef: 'C1#2026-07-01', occurredAt: '2026-07-01T10:30:00.000Z', content: '[10:30] Bob: validium proposal', merge: true },
+      ],
+    });
+    // A term from the second appended line still finds the single grouped row.
+    const hits = await provider.search('validium', 5);
+    expect(hits.map((h) => h.slug)).toContain('doc:1');
+  });
+
+  it('leaves non-merge upserts replacing content (default unchanged)', async () => {
+    await provider.ingestSourceBatch({ source: 'gdrive', stream: '', items: [{ sourceRef: 'file-1', title: 'Doc', content: 'v1' }] });
+    await provider.ingestSourceBatch({ source: 'gdrive', stream: '', items: [{ sourceRef: 'file-1', title: 'Doc', content: 'v2' }] });
+    const page = await provider.getPage('doc:1');
+    expect(page?.content).toBe('v2');
   });
 });

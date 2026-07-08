@@ -32,6 +32,14 @@ export interface IngestionItem {
   title?: string;
   /** Detector-ready text for this item. */
   content: string;
+  /**
+   * Append to the target row (keyed by sourceRef) instead of replacing it. Used
+   * by sources whose sourceRef is a coarse bucket that many items share — e.g.
+   * Slack messages grouped into one per-(channel, day) document. Each item still
+   * carries a unique `dedupRef` so it's ingested exactly once; the store then
+   * merges its content into the shared row. Omit for replace semantics.
+   */
+  merge?: boolean;
 }
 
 export interface IngestionFetchResult {

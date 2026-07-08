@@ -43,6 +43,13 @@ export interface MemoryProvider {
   getState(): MemoryRuntimeState;
   diagnostics(): MemoryDiagnostics;
 
+  /**
+   * Stable id of the physical store instance; changes only when the underlying
+   * store is recreated (fresh file, path change, manual wipe). Null when the
+   * store isn't ready. Lets ingestion detect a reset and rebuild the corpus.
+   */
+  instanceToken?(): string | null;
+
   search(query: string, limit: number): Promise<MemorySearchResult[]>;
   getPage?(slug: string): Promise<MemoryPage | null>;
 
@@ -57,7 +64,7 @@ export interface MemoryProvider {
   ingestSourceBatch(batch: {
     source: string;
     stream: string;
-    items: Array<{ sourceRef: string; occurredAt?: string; title?: string; content: string }>;
+    items: Array<{ sourceRef: string; occurredAt?: string; title?: string; content: string; merge?: boolean }>;
   }): Promise<void>;
 }
 

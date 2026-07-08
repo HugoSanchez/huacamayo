@@ -15,6 +15,8 @@ import { GdriveSource } from './gdrive-source.ts';
 import { GmailSource } from './gmail-source.ts';
 import { GranolaSource } from './granola-source.ts';
 import { SlackSource } from './slack-source.ts';
+import { ComposioSlackUserDirectory } from './slack-users.ts';
+import { ComposioSlackConversationDirectory } from './slack-conversations.ts';
 import { SourceIngestionScheduler } from './source-ingestion.ts';
 import { buildIngestionRoutes } from './ingestion.ts';
 import { dispatch, json, route, type Route } from './router.ts';
@@ -24,7 +26,8 @@ import { HermesSkillsConfig } from './skills-store.ts';
 import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
 import { CronDescriptionsStore } from './cron-descriptions-store.ts';
-import { LexicalMemoryProvider, resolveLexicalMemoryConfig } from './lexical-provider.ts';
+import { LocalEmbedder, resolveEmbedderConfig } from './embedder.ts';
+import { isChatCaptureEnabled, LexicalMemoryProvider, resolveLexicalMemoryConfig } from './lexical-provider.ts';
 import { buildMemoryRoutes } from './memory-routes.ts';
 import type { MemoryProvider } from './memory-provider.ts';
 import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
@@ -79,15 +82,24 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
   const hermes = new HermesSupervisor({ runtimeMode });
-  // The one memory backend: an in-process SQLite FTS5 store. No child
-  // processes, no model downloads — ready as soon as the file opens.
+  // The one memory backend: an in-process SQLite FTS5 store, ready as soon
+  // as the file opens. The local embedder upgrades search to hybrid
+  // (BM25 + cosine, RRF-fused) once its model loads — it backfills in the
+  // background and never gates reads or writes.
+  const embedderConfig = resolveEmbedderConfig(hermes.hermesHome);
   const memoryProvider: MemoryProvider = new LexicalMemoryProvider(
     resolveLexicalMemoryConfig(hermes.hermesHome),
+    { embedder: embedderConfig.enabled ? new LocalEmbedder(embedderConfig) : null },
   );
   // Defer extraction (don't fail it) until the store is open. Shared by chat
   // extraction and source ingestion.
   const extractionGate = () => memoryProvider.isReady();
-  const memoryExtraction = new MemoryExtractionScheduler(store, memoryProvider, { extractionGate });
+  // Chat-transcript capture is opt-in (VERSO_MEMORY_CHAT_CAPTURE); connected
+  // sources have their own per-source toggles in Settings.
+  const memoryExtraction = new MemoryExtractionScheduler(store, memoryProvider, {
+    extractionGate,
+    enabled: () => isChatCaptureEnabled() && memoryProvider.diagnostics().enabled,
+  });
   const connectionsStore = new ConnectionsStore();
   const composioToolUsage = new ComposioToolUsageStore();
   const composioBridge = new ComposioBridgeService(managedBackend, {
@@ -121,7 +133,10 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     [
       new GmailSource(composioBridge),
       new GranolaSource(composioBridge),
-      new SlackSource(composioBridge),
+      new SlackSource(composioBridge, {
+        userDirectory: new ComposioSlackUserDirectory(composioBridge),
+        conversationDirectory: new ComposioSlackConversationDirectory(composioBridge),
+      }),
       new GdriveSource(composioBridge),
     ],
     {
@@ -202,9 +217,14 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       const baseUrl = `http://127.0.0.1:${addr.port}`;
       hermes.setOrchestratorBaseUrl(baseUrl);
       hermes.prepare();
+      // Open the memory store first so its instance token is available: if the
+      // store was recreated since the last run, rebuild the ingested corpus
+      // (re-seed cursors + clear the dedup ledger) before ingestion ticks, so a
+      // reset store doesn't stay empty behind an already-'processed' ledger.
+      await memoryProvider.start();
+      sourceIngestion.reconcileWithMemoryToken(memoryProvider.instanceToken?.() ?? null);
       memoryExtraction.start();
       sourceIngestion.start();
-      void memoryProvider.start();
       resolve({ server, port: addr.port, close });
     });
   });

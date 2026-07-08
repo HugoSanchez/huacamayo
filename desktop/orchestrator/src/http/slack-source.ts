@@ -5,6 +5,8 @@ import {
   type IngestionItem,
   type SourceAdapter,
 } from './ingestion-source.ts';
+import { identityUserDirectory, type SlackUserDirectory } from './slack-users.ts';
+import { emptyConversationDirectory, type SlackConversationDirectory } from './slack-conversations.ts';
 
 const SLACK_SEARCH_MESSAGES = 'SLACK_SEARCH_MESSAGES';
 const DEFAULT_CONTENT_LIMIT = 4000;
@@ -41,6 +43,18 @@ interface SlackCursor {
   c: string | null;
 }
 
+/** A single accepted Slack message, parsed but not yet name-resolved or grouped. */
+interface ParsedSlackMessage {
+  channelId: string;
+  label: string;
+  isIm: boolean;
+  ts: string;
+  tsNum: number;
+  userId: string;
+  text: string;
+  occurredAt: string;
+}
+
 export class SlackSource implements SourceAdapter {
   readonly source = 'slack';
   readonly displayName = 'Slack';
@@ -48,10 +62,25 @@ export class SlackSource implements SourceAdapter {
   readonly defaultStream = '';
   readonly seedLookbackMs = SEED_LOOKBACK_MS;
 
+  private readonly contentLimit: number;
+  private readonly userDirectory: SlackUserDirectory;
+  private readonly conversationDirectory: SlackConversationDirectory;
+
   constructor(
     private readonly bridge: IngestionBridge,
-    private readonly contentLimit = DEFAULT_CONTENT_LIMIT,
-  ) {}
+    opts: {
+      contentLimit?: number;
+      userDirectory?: SlackUserDirectory;
+      conversationDirectory?: SlackConversationDirectory;
+    } = {},
+  ) {
+    this.contentLimit = opts.contentLimit ?? DEFAULT_CONTENT_LIMIT;
+    // Default to identity/empty (raw ids, bare "DM") so the adapter works
+    // standalone; the server wires Composio-backed directories that resolve ids
+    // to display names and DMs to their peer.
+    this.userDirectory = opts.userDirectory ?? identityUserDirectory;
+    this.conversationDirectory = opts.conversationDirectory ?? emptyConversationDirectory;
+  }
 
   seedCursor(now: Date, lookbackMs: number): string {
     const seconds = Math.max(0, Math.floor((now.getTime() - lookbackMs) / 1000));
@@ -66,7 +95,7 @@ export class SlackSource implements SourceAdapter {
     // held fixed (stored in `a`) while resuming a drain so the cursor stays valid.
     const afterDate = c ? (a ?? ymd((watermark - 86_400) * 1000)) : ymd((watermark - 86_400) * 1000);
 
-    const collected: Array<{ item: IngestionItem; ts: string }> = [];
+    const collected: ParsedSlackMessage[] = [];
     // Newest ts examined at/above the watermark — including skipped messages — so
     // a window of only skipped messages still moves the cursor forward. Never
     // advanced for below-watermark messages (that would move the cursor back).
@@ -91,8 +120,8 @@ export class SlackSource implements SourceAdapter {
       const matches = extractMatches(res.data);
       const nextCur = extractNextCursor(res.data);
       for (const raw of matches) {
-        const built = this.toItem(raw);
-        if (!built) {
+        const msg = parseMessage(raw);
+        if (!msg) {
           const ts = asString((raw as { ts?: unknown })?.ts);
           const n = Number(ts);
           if (ts && Number.isFinite(n) && n > lastSeenNum) {
@@ -101,15 +130,15 @@ export class SlackSource implements SourceAdapter {
           }
           continue;
         }
-        if (built.item.cursorValue < watermark) continue; // already processed
+        if (msg.tsNum < watermark) continue; // already processed
         if (collected.length >= opts.maxItems) {
           truncated = true;
           break;
         }
-        collected.push(built);
-        if (built.item.cursorValue > lastSeenNum) {
-          lastSeenNum = built.item.cursorValue;
-          lastSeenTs = built.ts;
+        collected.push(msg);
+        if (msg.tsNum > lastSeenNum) {
+          lastSeenNum = msg.tsNum;
+          lastSeenTs = msg.ts;
         }
       }
 
@@ -125,7 +154,7 @@ export class SlackSource implements SourceAdapter {
       resumeCursor = nextCur; // if we stop at the page cap, resume from the next page
     }
 
-    const items = collected.map((x) => x.item);
+    const items = await this.buildItems(collected);
     const hasMore = !exhausted;
     const nextCursor = exhausted
       ? serializeSlackCursor({ w: lastSeenTs, a: null, c: null }) // caught up: re-anchor next run
@@ -134,33 +163,100 @@ export class SlackSource implements SourceAdapter {
     return { items, nextCursor, hasMore };
   }
 
-  private toItem(raw: unknown): { item: IngestionItem; ts: string } | null {
-    if (!raw || typeof raw !== 'object') return null;
-    const m = raw as Record<string, unknown>;
-    if (m.subtype) return null; // skip join/leave/bot/system messages
+  /**
+   * Turn accepted messages into ingestion items. Each message becomes one line
+   * in a per-(channel, day) document (`merge: true`): search gives us no
+   * thread_ts to group true threads, so a channel's day is the coherent unit
+   * the store accumulates as replies arrive. `dedupRef` is the globally-unique
+   * channel+ts so every message re-enters exactly once and appends; `sourceRef`
+   * is the day bucket so they all land in — and upsert-merge into — one row.
+   * User ids are resolved to display names here (best-effort; falls back to ids).
+   */
+  private async buildItems(messages: ParsedSlackMessage[]): Promise<IngestionItem[]> {
+    if (messages.length === 0) return [];
 
-    const ts = asString(m.ts);
-    const text = asString(m.text);
-    if (!ts || !text) return null;
+    // Map each DM channel to its peer so the title reads "DM with Alice".
+    const imChannels = new Set<string>();
+    for (const m of messages) {
+      if (m.isIm) imChannels.add(m.channelId);
+    }
+    const peers = await this.conversationDirectory.peerIds(imChannels);
 
-    const channel = (m.channel && typeof m.channel === 'object' ? m.channel : {}) as Record<string, unknown>;
-    const channelId = asString(channel.id);
-    if (!channelId) return null;
+    // Resolve author ids, mention ids, and DM peer ids in one pass.
+    const ids = new Set<string>();
+    for (const m of messages) {
+      ids.add(m.userId);
+      for (const id of mentionIds(m.text)) ids.add(id);
+    }
+    for (const peer of peers.values()) ids.add(peer);
+    const names = await this.userDirectory.resolve(ids);
 
-    const tsNum = Number(ts);
-    if (!Number.isFinite(tsNum)) return null;
-    const occurredAt = new Date(tsNum * 1000).toISOString();
-    const label = channel.is_im
-      ? 'DM'
-      : channel.is_mpim
-        ? 'Group DM'
-        : `#${asString(channel.name) || channelId}`;
-    const user = asString(m.user) || asString(m.username) || 'unknown';
-    const content = `[${label}] ${user}: ${text}`.slice(0, this.contentLimit);
-
-    // channel + ts is globally unique (ts is only per-channel unique).
-    return { item: { sourceRef: `${channelId}.${ts}`, cursorValue: tsNum, occurredAt, content }, ts };
+    return messages.map((m) => {
+      const author = names.get(m.userId) ?? m.userId;
+      const text = replaceMentions(m.text, names);
+      const day = m.occurredAt.slice(0, 10) || 'undated';
+      const time = m.occurredAt.slice(11, 16) || '??:??';
+      return {
+        sourceRef: `${m.channelId}#${day}`,
+        dedupRef: `${m.channelId}.${m.ts}`,
+        cursorValue: m.tsNum,
+        occurredAt: m.occurredAt,
+        title: `${labelFor(m, peers, names)} ${day}`.trim(),
+        content: `[${time}] ${author}: ${text}`.slice(0, this.contentLimit),
+        merge: true,
+      };
+    });
   }
+}
+
+function parseMessage(raw: unknown): ParsedSlackMessage | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Record<string, unknown>;
+  if (m.subtype) return null; // skip join/leave/bot/system messages
+
+  const ts = asString(m.ts);
+  const text = asString(m.text);
+  if (!ts || !text) return null;
+
+  const channel = (m.channel && typeof m.channel === 'object' ? m.channel : {}) as Record<string, unknown>;
+  const channelId = asString(channel.id);
+  if (!channelId) return null;
+
+  const tsNum = Number(ts);
+  if (!Number.isFinite(tsNum)) return null;
+  const occurredAt = new Date(tsNum * 1000).toISOString();
+  const isIm = channel.is_im === true;
+  const label = isIm
+    ? 'DM'
+    : channel.is_mpim
+      ? 'Group DM'
+      : `#${asString(channel.name) || channelId}`;
+  const userId = asString(m.user) || asString(m.username) || 'unknown';
+
+  return { channelId, label, isIm, ts, tsNum, userId, text, occurredAt };
+}
+
+/** DM title becomes "DM with <peer>" when the peer resolves to a real name; otherwise the base label. */
+function labelFor(
+  m: ParsedSlackMessage,
+  peers: Map<string, string>,
+  names: Map<string, string>,
+): string {
+  if (!m.isIm) return m.label;
+  const peerId = peers.get(m.channelId);
+  const peerName = peerId ? names.get(peerId) : undefined;
+  return peerName && peerName !== peerId ? `DM with ${peerName}` : m.label;
+}
+
+// Slack wraps user mentions as <@U0A4NP3GTHU> or <@U0A4NP3GTHU|handle>.
+const MENTION_RE = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/g;
+
+function mentionIds(text: string): string[] {
+  return [...text.matchAll(MENTION_RE)].map((match) => match[1]);
+}
+
+function replaceMentions(text: string, names: Map<string, string>): string {
+  return text.replace(MENTION_RE, (_full, id: string) => `@${names.get(id) ?? id}`);
 }
 
 /** Tolerates the JSON cursor and a bare ts (seedCursor output / legacy rows). */

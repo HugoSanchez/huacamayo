@@ -20,6 +20,7 @@ describe('Hermes Chat Streaming', () => {
     VERSO_CHAT_STORE_PATH?: string;
     VERSO_HERMES_MANAGED?: string;
     VERSO_MEMORY_DB_PATH?: string;
+    VERSO_MEMORY_CHAT_CAPTURE?: string;
   } = {};
 
   beforeAll(async () => {
@@ -28,6 +29,7 @@ describe('Hermes Chat Streaming', () => {
       VERSO_CHAT_STORE_PATH: process.env.VERSO_CHAT_STORE_PATH,
       VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
       VERSO_MEMORY_DB_PATH: process.env.VERSO_MEMORY_DB_PATH,
+      VERSO_MEMORY_CHAT_CAPTURE: process.env.VERSO_MEMORY_CHAT_CAPTURE,
     };
 
     gateway = http.createServer((req, res) => {
@@ -161,8 +163,9 @@ describe('Hermes Chat Streaming', () => {
     process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-test-${process.pid}.sqlite`;
     process.env.VERSO_HERMES_MANAGED = 'false';
     // Memory defaults on; keep the test's SQLite store out of the real
-    // profile-sibling location.
+    // profile-sibling location. Chat capture is opt-in — this suite tests it.
     process.env.VERSO_MEMORY_DB_PATH = `/tmp/verso-memory-test-${process.pid}.sqlite`;
+    process.env.VERSO_MEMORY_CHAT_CAPTURE = '1';
 
     const result = await startServer({ port: 0 });
     server = result.server;
@@ -184,6 +187,8 @@ describe('Hermes Chat Streaming', () => {
     process.env.VERSO_HERMES_MANAGED = envSnapshot.VERSO_HERMES_MANAGED;
     if (envSnapshot.VERSO_MEMORY_DB_PATH === undefined) delete process.env.VERSO_MEMORY_DB_PATH;
     else process.env.VERSO_MEMORY_DB_PATH = envSnapshot.VERSO_MEMORY_DB_PATH;
+    if (envSnapshot.VERSO_MEMORY_CHAT_CAPTURE === undefined) delete process.env.VERSO_MEMORY_CHAT_CAPTURE;
+    else process.env.VERSO_MEMORY_CHAT_CAPTURE = envSnapshot.VERSO_MEMORY_CHAT_CAPTURE;
   });
 
   function url(pathname: string): string {
