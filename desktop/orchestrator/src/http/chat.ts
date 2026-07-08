@@ -18,6 +18,14 @@ import {
 import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts';
 import { type MemoryExtractionScheduler } from './memory-extraction.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
+import {
+  CentaurClient,
+  CentaurStreamTranslator,
+  threadKeyForSession,
+  type CentaurChatEvent,
+  type CentaurConfig,
+} from '../integrations/centaur-client.ts';
+import { CentaurThreadStore } from './centaur-thread-store.ts';
 
 type ChatStatus = 'idle' | 'running';
 
@@ -49,16 +57,45 @@ type HermesEventPayload = Record<string, unknown> | null;
 // per-session-streams spike).
 const activeRequests = new Map<string, ActiveChatRequest>();
 
+/**
+ * Spike-only cloud backend (VERSO_AGENT_BACKEND=centaur). When present, chat
+ * turns route to a Centaur instance instead of Hermes; when absent every code
+ * path below is unchanged and behaves exactly as main.
+ */
+export interface CentaurBackend {
+  client: CentaurClient;
+  threadStore: CentaurThreadStore;
+  harness: CentaurConfig['harness'];
+}
+
 export function buildChatRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
   managedBackend: ManagedBackendClient,
   memoryExtraction?: MemoryExtractionScheduler,
+  centaur?: CentaurBackend | null,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
-      const gateway = await hermes.getStatus();
       const activeSessionIds = Array.from(activeRequests.keys());
+      if (centaur) {
+        const reachable = await centaur.client.healthy();
+        return json(res, 200, {
+          status: activeRequests.size > 0 ? 'running' : 'idle',
+          provider: 'centaur',
+          hasActiveRequest: activeRequests.size > 0,
+          activeSessionIds,
+          sessionCount: store.listSessions().length,
+          gateway: {
+            url: centaur.client.endpoint,
+            reachable,
+            state: reachable ? 'ready' : 'error',
+            source: 'centaur',
+            launchConfigured: true,
+          },
+        });
+      }
+      const gateway = await hermes.getStatus();
       json(res, 200, {
         status: activeRequests.size > 0 ? 'running' : 'idle',
         provider: 'hermes',
@@ -174,7 +211,9 @@ export function buildChatRoutes(
       const reasoningEffort = parseReasoningEffort(body);
       const model = parseChatModel(body);
       let promptForHermes = content;
-      if (attached?.kind === 'cron') {
+      // Cron attach fetches state via the Hermes gateway, which isn't running
+      // in centaur mode — skip the enrichment and use the raw text there.
+      if (attached?.kind === 'cron' && !centaur) {
         // Fetch the cron's current state and prepend it as a system block so
         // the agent can reason about — and edit — the job via its `cronjob`
         // tool. If the fetch fails, fall through to the raw user text.
@@ -198,16 +237,25 @@ export function buildChatRoutes(
       });
 
       try {
-        await runHermesMessage({
-          session,
-          sessionRecord: record,
-          userPrompt: promptForHermes,
-          isFirstUserMessage,
-          reasoningEffort,
-          model,
-          res,
-          requestBaseUrl: requestBaseUrl(req),
-        }, store, hermes, managedBackend, memoryExtraction);
+        if (centaur) {
+          await runCentaurMessage({
+            session,
+            userPrompt: promptForHermes,
+            isFirstUserMessage,
+            res,
+          }, store, centaur, managedBackend);
+        } else {
+          await runHermesMessage({
+            session,
+            sessionRecord: record,
+            userPrompt: promptForHermes,
+            isFirstUserMessage,
+            reasoningEffort,
+            model,
+            res,
+            requestBaseUrl: requestBaseUrl(req),
+          }, store, hermes, managedBackend, memoryExtraction);
+        }
       } catch (error: unknown) {
         if (isAbortError(error)) {
           sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
@@ -428,6 +476,178 @@ function hydrateSessionSummaryRecord(
     messageCount: messages.length,
     lastMessagePreview: lastMessage ? preview(lastMessage.content) : null,
   };
+}
+
+/**
+ * Centaur turn: create-or-get the durable thread, persist the user message,
+ * execute a harness turn, then translate the SSE event stream into the same
+ * chat-ui frames `runHermesMessage` emits. Local ChatStore stays the message
+ * log (backend-agnostic); Hermes transcript reads are skipped in this mode.
+ */
+async function runCentaurMessage(
+  opts: {
+    session: ChatSessionSummary;
+    userPrompt: string;
+    isFirstUserMessage: boolean;
+    res: ServerResponse;
+  },
+  store: ChatStore,
+  centaur: CentaurBackend,
+  managedBackend: ManagedBackendClient,
+): Promise<void> {
+  const { client, threadStore, harness } = centaur;
+  const controller = new AbortController();
+  const threadKey = threadKeyForSession(opts.session.id);
+
+  const activeRequest: ActiveChatRequest = {
+    sessionId: opts.session.id,
+    responseId: null,
+    gatewayUrl: client.endpoint,
+    startedAt: Date.now(),
+    close: () => controller.abort(),
+  };
+  activeRequests.set(opts.session.id, activeRequest);
+
+  let toolCallCount = 0;
+  let streamedText = '';
+  let resultText = '';
+
+  const translator = new CentaurStreamTranslator();
+
+  const dispatch = (event: CentaurChatEvent) => {
+    switch (event.kind) {
+      case 'status':
+        sendSSE(opts.res, {
+          type: 'status',
+          provider: 'centaur',
+          session_id: opts.session.id,
+          message: event.message,
+        });
+        return;
+      case 'text_delta':
+        streamedText += event.text;
+        sendSSE(opts.res, {
+          type: 'content_block_delta',
+          session_id: opts.session.id,
+          delta: { text: event.text },
+        });
+        return;
+      case 'reasoning_delta':
+        sendSSE(opts.res, {
+          type: 'reasoning_delta',
+          session_id: opts.session.id,
+          delta: { text: event.text },
+        });
+        return;
+      case 'tool_use':
+        toolCallCount += 1;
+        sendSSE(opts.res, {
+          type: 'assistant',
+          session_id: opts.session.id,
+          message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: event.id, name: event.name, input: event.input }],
+          },
+        });
+        return;
+      case 'tool_result':
+        sendSSE(opts.res, {
+          type: 'user',
+          session_id: opts.session.id,
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: event.toolUseId, content: event.content }],
+          },
+        });
+        return;
+      case 'completed':
+        resultText = event.resultText;
+        return;
+      case 'error':
+        throw new Error(event.message);
+    }
+  };
+
+  try {
+    sendSSE(opts.res, {
+      type: 'status',
+      provider: 'centaur',
+      session_id: opts.session.id,
+      message: 'Contacting Centaur',
+    });
+
+    await client.ensureSession(threadKey, harness, controller.signal);
+    await client.appendMessage(threadKey, opts.userPrompt, controller.signal);
+    const { executionId } = await client.execute(threadKey, opts.userPrompt, {}, controller.signal);
+    threadStore.startExecution(opts.session.id, executionId);
+
+    // Replay from the last event we durably consumed; scope to this execution
+    // so a resumed stream never re-emits a prior turn's output.
+    const afterEventId = threadStore.getState(opts.session.id).lastEventId;
+    await client.streamEvents(
+      threadKey,
+      afterEventId,
+      executionId,
+      controller.signal,
+      (event) => {
+        if (typeof event.id === 'number') {
+          threadStore.recordEventId(opts.session.id, event.id);
+        }
+        for (const chatEvent of translator.handle(event)) {
+          dispatch(chatEvent);
+        }
+      },
+    );
+  } finally {
+    threadStore.clearActive(opts.session.id);
+    controller.abort();
+  }
+
+  const assistantText = translator.composedAnswer() || resultText || streamedText;
+
+  // Nothing streamed incrementally (e.g. a harness that only returns a terminal
+  // result_text) — surface the final answer as a single delta so the UI renders
+  // it instead of a blank bubble.
+  if (assistantText && !streamedText) {
+    sendSSE(opts.res, {
+      type: 'content_block_delta',
+      session_id: opts.session.id,
+      delta: { text: assistantText },
+    });
+  }
+
+  if (assistantText) {
+    store.appendMessage(opts.session.id, 'assistant', assistantText);
+  }
+  store.touchSession(opts.session.id);
+
+  managedBackend.recordAnalyticsEvent({
+    eventType: 'message_completed',
+    sessionId: opts.session.id,
+    toolCallCount,
+  });
+
+  if (opts.isFirstUserMessage && assistantText) {
+    const currentTitle = store.getSessionRecord(opts.session.id)?.title ?? '';
+    if (currentTitle === DEFAULT_SESSION_TITLE) {
+      const title = deriveTitleFromPrompt(opts.userPrompt);
+      if (title) {
+        store.renameSession(opts.session.id, title);
+        sendSSE(opts.res, { type: 'session_title', session_id: opts.session.id, title });
+      }
+    }
+  }
+
+  sendSSE(opts.res, { type: 'done', session_id: opts.session.id });
+}
+
+// No gateway to ask for a model-generated title in centaur mode, so derive a
+// cheap one from the opening user message.
+function deriveTitleFromPrompt(prompt: string): string | null {
+  const compact = prompt.replace(/\s+/g, ' ').trim();
+  if (!compact) return null;
+  const words = compact.split(' ').slice(0, 8).join(' ');
+  return words.length > 80 ? words.slice(0, 80) : words;
 }
 
 async function runHermesMessage(

@@ -34,6 +34,9 @@ import { ComposioBridgeService } from '../integrations/composio-bridge.ts';
 import { ConnectionsService } from '../integrations/composio.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 import { readRuntimeMode } from '../integrations/runtime-mode.ts';
+import { CentaurClient, readCentaurConfig } from '../integrations/centaur-client.ts';
+import { CentaurThreadStore } from './centaur-thread-store.ts';
+import type { CentaurBackend } from './chat.ts';
 import { buildManagedAccountRoutes } from './managed-account.ts';
 import { CodexAuthService, buildModelAuthRoutes } from './model-auth.ts';
 import { applyLocalStateIsolation, type LocalStateSnapshot } from './local-state.ts';
@@ -82,6 +85,17 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
   const hermes = new HermesSupervisor({ runtimeMode });
+  // Spike-only cloud backend. When VERSO_AGENT_BACKEND=centaur, chat routes to a
+  // Centaur instance and Hermes is never spawned; when unset this is null and
+  // every path below behaves exactly as main.
+  const centaurConfig = readCentaurConfig();
+  const centaur: CentaurBackend | null = centaurConfig
+    ? {
+      client: new CentaurClient(centaurConfig),
+      threadStore: new CentaurThreadStore(),
+      harness: centaurConfig.harness,
+    }
+    : null;
   // The one memory backend: an in-process SQLite FTS5 store, ready as soon
   // as the file opens. The local embedder upgrades search to hybrid
   // (BM25 + cosine, RRF-fused) once its model loads — it backfills in the
@@ -187,7 +201,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
     ...buildModelAuthRoutes(codexAuth),
-    ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction),
+    ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction, centaur),
   ];
 
   const server = http.createServer((req, res) => {
@@ -216,7 +230,9 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       const addr = server.address() as { port: number };
       const baseUrl = `http://127.0.0.1:${addr.port}`;
       hermes.setOrchestratorBaseUrl(baseUrl);
-      hermes.prepare();
+      // In centaur mode the cloud instance is the agent runtime — don't spawn
+      // the local Hermes gateway at all.
+      if (!centaur) hermes.prepare();
       // Open the memory store first so its instance token is available: if the
       // store was recreated since the last run, rebuild the ingested corpus
       // (re-seed cursors + clear the dedup ledger) before ingestion ticks, so a
