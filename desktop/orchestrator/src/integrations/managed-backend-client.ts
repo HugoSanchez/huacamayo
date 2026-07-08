@@ -179,6 +179,11 @@ export class ManagedBackendClient {
           Accept: 'application/json',
           Authorization: `Bearer ${stored.token}`,
         },
+        // A wedged backend (accepts the socket but never replies) would
+        // otherwise hang this request indefinitely — and with it the Settings
+        // page, whose only spinner is gated on /managed/account. Time out fast
+        // so the catch below degrades to `backend_unavailable` instead.
+        signal: AbortSignal.timeout(5000),
       });
 
       if (response.ok) {
@@ -229,6 +234,9 @@ export class ManagedBackendClient {
       response = await fetch(`${this.baseUrl}/v1/auth/revoke`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${stored.token}` },
+        // Same wedged-backend guard as getAccount: sign-out must not hang on
+        // an unresponsive backend. Callers clear the local session regardless.
+        signal: AbortSignal.timeout(5000),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
