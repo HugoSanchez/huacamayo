@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildTurnReminder,
   CentaurStreamTranslator,
   isCentaurBackend,
   readCentaurConfig,
@@ -56,6 +57,15 @@ describe('readCentaurConfig', () => {
 
   it('throws when the backend is on but the url is missing', () => {
     expect(() => readCentaurConfig({ VERSO_AGENT_BACKEND: 'centaur' })).toThrow(/VERSO_CENTAUR_URL/);
+  });
+});
+
+describe('buildTurnReminder', () => {
+  it('includes the entity id and the health warning', () => {
+    const text = buildTurnReminder('usr_x1');
+    expect(text).toContain("user_id='usr_x1'");
+    expect(text).toContain('composio health');
+    expect(text).not.toContain('centaur_tool_composio.client');
   });
 });
 

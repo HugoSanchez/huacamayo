@@ -68,6 +68,23 @@ export function readCentaurConfig(env: NodeJS.ProcessEnv = process.env): Centaur
   };
 }
 
+/**
+ * Compact reminder prepended to every NON-first message. The full preamble
+ * lives three-plus turns back by the time the user asks for a Slack action,
+ * and it demonstrably loses to the salient (broken) CLI tool inventory — the
+ * agent ran `slack --help` right past a "do NOT attempt" note. Repetition wins.
+ */
+export function buildTurnReminder(composioUserId: string | null): string {
+  const userId = composioUserId ?? "<ask the user for their Composio user id>";
+  return `<verso-reminder>
+For any action on the user's apps (Slack, Gmail, Calendar, Notion, ...), use the Composio
+Python client via the symlink pattern from the start of this session: search_tools(query,
+user_id) to find the tool slug, then execute(slug, args, user_id). ALWAYS pass
+user_id='${userId}'. Never use the first-party slack/linear/notion CLIs (broken on this
+instance), and never judge capabilities from \`composio health\` (github-only check).
+</verso-reminder>`;
+}
+
 export class CentaurHttpError extends Error {
   readonly status: number;
   readonly body: string;
@@ -127,6 +144,12 @@ WORKS on this instance:
     "
   Client methods: search_tools(query, user_id), list_tools(toolkit, user_id),
   get_tool_schema(tool_slug, user_id), execute(tool_slug, arguments, user_id).
+  The same client handles ALL the user's apps — e.g. for Slack, first
+  c.search_tools('send slack message', user_id='${userId}') to find the tool slug, then
+  c.execute(that_slug, {...}, user_id='${userId}'). Same for Calendar, Notion, etc.
+  WARNING: \`composio health\` output lists GITHUB_* actions only — it is a hardcoded
+  github connectivity check, NOT an inventory of available apps. Never conclude an app
+  is unavailable from health output; use search_tools.
   ALWAYS pass user_id='${userId}' — it scopes calls to this user's connected accounts.
 - Web research and general shell/python work in your sandbox.
 

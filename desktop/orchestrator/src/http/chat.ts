@@ -20,6 +20,7 @@ import { type MemoryExtractionScheduler } from './memory-extraction.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 import {
   buildSessionPreamble,
+  buildTurnReminder,
   CentaurClient,
   CentaurStreamTranslator,
   threadKeyForSession,
@@ -505,7 +506,7 @@ async function runCentaurMessage(
   // the clean prompt, so the UI never renders this block.
   const outboundPrompt = opts.isFirstUserMessage
     ? `${buildSessionPreamble(centaur.composioUserId)}\n\n${opts.userPrompt}`
-    : opts.userPrompt;
+    : `${buildTurnReminder(centaur.composioUserId)}\n\n${opts.userPrompt}`;
 
   const activeRequest: ActiveChatRequest = {
     sessionId: opts.session.id,
@@ -586,7 +587,14 @@ async function runCentaurMessage(
 
     await client.ensureSession(threadKey, harness, controller.signal);
     await client.appendMessage(threadKey, outboundPrompt, controller.signal);
-    const { executionId } = await client.execute(threadKey, outboundPrompt, {}, controller.signal);
+    // idle_timeout is ALSO the sandbox pause timer (a 60s value meant every
+    // conversational pause ate a ~9s resume). 5min idle / 10min hard cap.
+    const { executionId } = await client.execute(
+      threadKey,
+      outboundPrompt,
+      { idleTimeoutMs: 300_000, maxDurationMs: 600_000 },
+      controller.signal,
+    );
     threadStore.startExecution(opts.session.id, executionId);
 
     // Replay from the last event we durably consumed; scope to this execution

@@ -154,7 +154,12 @@ describe('Centaur backend chat', () => {
     expect(res2.status).toBe(200);
     await res2.text();
     expect(executeBodies.length).toBe(2);
+    // Non-first turns carry the compact reminder, not the full preamble.
     expect(executeBodies[1]).not.toContain('centaur_tool_composio.client');
+    expect(executeBodies[1]).toContain('verso-reminder');
+    expect(executeBodies[1]).toContain('usr_test123');
+    // idle_timeout doubles as the sandbox pause timer — must be the long value.
+    expect(executeBodies[0]).toContain('"idle_timeout_ms":300000');
   });
 });
 
