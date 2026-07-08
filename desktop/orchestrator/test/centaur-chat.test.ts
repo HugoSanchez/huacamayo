@@ -14,12 +14,14 @@ describe('Centaur backend chat', () => {
   let server: http.Server | null = null;
   let port = 0;
   const calls: string[] = [];
+  const executeBodies: string[] = [];
 
   const envKeys = [
     'VERSO_AGENT_BACKEND',
     'VERSO_CENTAUR_URL',
     'VERSO_CENTAUR_API_KEY',
     'VERSO_CENTAUR_HARNESS',
+    'VERSO_CENTAUR_COMPOSIO_USER_ID',
     'VERSO_CHAT_STORE_PATH',
     'VERSO_CENTAUR_STORE_PATH',
     'VERSO_HERMES_MANAGED',
@@ -36,7 +38,13 @@ describe('Centaur backend chat', () => {
       if (url === '/healthz') return sendJson(res, { ok: true });
 
       if (url.endsWith('/execute')) {
-        return sendJson(res, { ok: true, execution_id: 'exec-1', thread_key: 'verso:x', status: 'queued' });
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => {
+          executeBodies.push(body);
+          sendJson(res, { ok: true, execution_id: 'exec-1', thread_key: 'verso:x', status: 'queued' });
+        });
+        return;
       }
       if (url.endsWith('/messages')) {
         return sendJson(res, { ok: true, message_ids: ['m1'] });
@@ -64,6 +72,7 @@ describe('Centaur backend chat', () => {
     process.env.VERSO_AGENT_BACKEND = 'centaur';
     process.env.VERSO_CENTAUR_URL = `http://127.0.0.1:${mockPort}`;
     process.env.VERSO_CENTAUR_HARNESS = 'codex';
+    process.env.VERSO_CENTAUR_COMPOSIO_USER_ID = 'usr_test123';
     delete process.env.VERSO_CENTAUR_API_KEY;
     process.env.VERSO_HERMES_MANAGED = 'false';
     process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-centaur-chat-${process.pid}.sqlite`;
@@ -127,6 +136,25 @@ describe('Centaur backend chat', () => {
     const messages = await fetch(url(`/chat/sessions/${sessionId}/messages`)).then((r) => r.json());
     const assistant = messages.messages.find((m: any) => m.role === 'assistant');
     expect(assistant?.content).toBe('Hello from Centaur');
+
+    // First message carries the environment preamble (Composio guidance +
+    // entity id) on the OUTBOUND copy only — never in the local store.
+    expect(executeBodies.length).toBe(1);
+    expect(executeBodies[0]).toContain('centaur_tool_composio.client');
+    expect(executeBodies[0]).toContain('usr_test123');
+    const user = messages.messages.find((m: any) => m.role === 'user');
+    expect(user?.content).toBe('ping');
+
+    // Second turn: no preamble.
+    const res2 = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'ping again' }),
+    });
+    expect(res2.status).toBe(200);
+    await res2.text();
+    expect(executeBodies.length).toBe(2);
+    expect(executeBodies[1]).not.toContain('centaur_tool_composio.client');
   });
 });
 

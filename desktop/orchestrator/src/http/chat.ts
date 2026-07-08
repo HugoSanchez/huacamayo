@@ -19,6 +19,7 @@ import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts'
 import { type MemoryExtractionScheduler } from './memory-extraction.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 import {
+  buildSessionPreamble,
   CentaurClient,
   CentaurStreamTranslator,
   threadKeyForSession,
@@ -66,6 +67,7 @@ export interface CentaurBackend {
   client: CentaurClient;
   threadStore: CentaurThreadStore;
   harness: CentaurConfig['harness'];
+  composioUserId: string | null;
 }
 
 export function buildChatRoutes(
@@ -498,6 +500,12 @@ async function runCentaurMessage(
   const { client, threadStore, harness } = centaur;
   const controller = new AbortController();
   const threadKey = threadKeyForSession(opts.session.id);
+  // First message of a session carries the environment preamble (Composio
+  // usage notes). Only the outbound copy — the local ChatStore already holds
+  // the clean prompt, so the UI never renders this block.
+  const outboundPrompt = opts.isFirstUserMessage
+    ? `${buildSessionPreamble(centaur.composioUserId)}\n\n${opts.userPrompt}`
+    : opts.userPrompt;
 
   const activeRequest: ActiveChatRequest = {
     sessionId: opts.session.id,
@@ -577,8 +585,8 @@ async function runCentaurMessage(
     });
 
     await client.ensureSession(threadKey, harness, controller.signal);
-    await client.appendMessage(threadKey, opts.userPrompt, controller.signal);
-    const { executionId } = await client.execute(threadKey, opts.userPrompt, {}, controller.signal);
+    await client.appendMessage(threadKey, outboundPrompt, controller.signal);
+    const { executionId } = await client.execute(threadKey, outboundPrompt, {}, controller.signal);
     threadStore.startExecution(opts.session.id, executionId);
 
     // Replay from the last event we durably consumed; scope to this execution

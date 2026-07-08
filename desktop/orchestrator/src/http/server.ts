@@ -94,6 +94,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       client: new CentaurClient(centaurConfig),
       threadStore: new CentaurThreadStore(),
       harness: centaurConfig.harness,
+      composioUserId: centaurConfig.composioUserId,
     }
     : null;
   // The one memory backend: an in-process SQLite FTS5 store, ready as soon

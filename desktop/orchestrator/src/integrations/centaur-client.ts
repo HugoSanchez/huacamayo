@@ -27,6 +27,8 @@ export interface CentaurConfig {
   baseUrl: string;
   apiKey: string | null;
   harness: CentaurHarness;
+  /** Composio entity id (the user's Verso user id) — see buildSessionPreamble. */
+  composioUserId: string | null;
 }
 
 /**
@@ -62,6 +64,7 @@ export function readCentaurConfig(env: NodeJS.ProcessEnv = process.env): Centaur
     baseUrl: baseUrl.replace(/\/+$/, ''),
     apiKey: env.VERSO_CENTAUR_API_KEY?.trim() || null,
     harness,
+    composioUserId: env.VERSO_CENTAUR_COMPOSIO_USER_ID?.trim() || null,
   };
 }
 
@@ -86,6 +89,36 @@ export interface CentaurExecuteOptions {
 // are namespaced `<source>:<id>`; `verso:` is our source prefix.
 export function threadKeyForSession(sessionId: string): string {
   return `verso:${sessionId}`;
+}
+
+/**
+ * Environment notes injected ahead of the FIRST user message of each session.
+ *
+ * Why: the sandbox's `composio` CLI exposes only `health`; the real client is
+ * the Python module. Without this note the agent burns ~9 shell commands per
+ * session rediscovering that (measured 77s vs ~15s). Injecting it client-side
+ * is the spike-grade fix — the durable home for this text is an overlay-repo
+ * skill, at which point this preamble can be deleted.
+ *
+ * The preamble goes only to Centaur (appendMessage/execute); the local
+ * ChatStore keeps the user's clean prompt, so the UI never shows it.
+ */
+export function buildSessionPreamble(composioUserId: string | null): string {
+  const userIdNote = composioUserId
+    ? `Always pass user_id='${composioUserId}' — it scopes calls to this user's connected accounts.`
+    : `Pass the user's Composio user_id when known.`;
+  return [
+    '<verso-environment-notes>',
+    'Composio (SaaS integrations like Gmail, Slack, Notion): the `composio` CLI in this sandbox',
+    'only exposes `health`. For real use, call the Python client from the tool package, e.g.:',
+    '  cd /app/tools/productivity/composio && uv run python -c \\',
+    '    "from centaur_tool_composio.client import ComposioClient; c = ComposioClient(); \\',
+    '     print(c.execute(\'GMAIL_FETCH_EMAILS\', {\'max_results\': 1}, user_id=\'...\'))"',
+    'Methods: search_tools(query, user_id), list_tools(toolkit, user_id),',
+    'get_tool_schema(tool_slug, user_id), execute(tool_slug, arguments, user_id).',
+    userIdNote,
+    '</verso-environment-notes>',
+  ].join('\n');
 }
 
 /**

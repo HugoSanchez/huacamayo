@@ -26,6 +26,7 @@ describe('readCentaurConfig', () => {
     });
     expect(config).toEqual({
       baseUrl: 'http://127.0.0.1:18080',
+      composioUserId: null,
       apiKey: 'iak_test',
       harness: 'claudecode',
     });
@@ -42,6 +43,15 @@ describe('readCentaurConfig', () => {
       VERSO_CENTAUR_URL: 'http://h',
       VERSO_CENTAUR_HARNESS: 'nonsense',
     })?.harness).toBe('claudecode');
+  });
+
+  it('reads the composio entity id when set', () => {
+    const config = readCentaurConfig({
+      VERSO_AGENT_BACKEND: 'centaur',
+      VERSO_CENTAUR_URL: 'http://127.0.0.1:18080',
+      VERSO_CENTAUR_COMPOSIO_USER_ID: ' usr_abc ',
+    });
+    expect(config?.composioUserId).toBe('usr_abc');
   });
 
   it('throws when the backend is on but the url is missing', () => {
