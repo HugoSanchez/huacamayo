@@ -39,6 +39,7 @@ import { CentaurThreadStore } from './centaur-thread-store.ts';
 import type { CentaurBackend } from './chat.ts';
 import { buildManagedAccountRoutes } from './managed-account.ts';
 import { CodexAuthService, buildModelAuthRoutes } from './model-auth.ts';
+import { buildModelProviderRoutes } from './model-providers.ts';
 import { applyLocalStateIsolation, type LocalStateSnapshot } from './local-state.ts';
 
 function buildRoutes(
@@ -197,6 +198,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       },
     }),
     ...buildConnectionsRoutes(connections),
+    ...buildModelProviderRoutes(managedBackend),
     ...buildIngestionRoutes(sourceIngestion),
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),

@@ -20,6 +20,11 @@ const envSchema = z.object({
     (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
     z.string().url().optional(),
   ),
+  VERSO_CENTAUR_CONSOLE_API_URL: z.preprocess(
+    (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+    z.string().url().optional(),
+  ),
+  VERSO_CENTAUR_CONSOLE_API_KEY: optionalString(),
 });
 
 export type BackendConfig = z.infer<typeof envSchema> & {

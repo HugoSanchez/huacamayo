@@ -1,4 +1,4 @@
-import { integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
   id: text('id').primaryKey(),
@@ -49,6 +49,19 @@ export const analyticsEvents = pgTable('analytics_events', {
   toolCallCount: integer('tool_call_count'),
   occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
 });
+
+export const modelProviderConnections = pgTable('model_provider_connections', {
+  userId: text('user_id').notNull(),
+  provider: text('provider').notNull(),
+  status: text('status').notNull(),
+  keyLast4: text('key_last4').notNull(),
+  keySha256Prefix: text('key_sha256_prefix').notNull(),
+  centaurStaticSecretId: text('centaur_static_secret_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.userId, table.provider], name: 'model_provider_connections_user_provider_pk' }),
+}));
 
 // Legacy table retained for production data retention. No runtime code writes
 // managed inference requests after the desktop LLM proxy removal.

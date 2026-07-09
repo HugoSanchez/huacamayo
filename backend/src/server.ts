@@ -11,18 +11,46 @@ import { registerAuthRoutes } from './routes/auth.ts';
 import { registerComposioRoutes } from './routes/composio.ts';
 import { registerAnalyticsRoutes } from './routes/analytics.ts';
 import { ComposioService } from './composio/service.ts';
+import { registerModelProviderRoutes } from './routes/model-providers.ts';
+import {
+  DrizzleModelProviderConnectionStore,
+  EnvCentaurInstanceResolver,
+  MemoryModelProviderConnectionStore,
+  ModelProviderService,
+  type CentaurInstanceResolver,
+  type ModelProviderConnectionStore,
+} from './model-providers/service.ts';
 
 export interface BuildServerOptions {
   config?: BackendConfig;
   authService?: AuthService;
   authStore?: AuthStore;
   composioService?: ComposioService;
+  modelProviderStore?: ModelProviderConnectionStore;
+  centaurInstanceResolver?: CentaurInstanceResolver;
+  modelProviderService?: ModelProviderService;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
   const config = options.config ?? getConfig();
   const app = Fastify({
-    logger: config.NODE_ENV === 'development',
+    logger: config.NODE_ENV === 'development'
+      ? {
+        redact: [
+          'req.headers.authorization',
+          'req.body.apiKey',
+          'req.body.openaiApiKey',
+          'req.body.anthropicApiKey',
+          'req.body.secret',
+          'req.body.token',
+          'req.query.apiKey',
+          'req.query.openaiApiKey',
+          'req.query.anthropicApiKey',
+          'req.query.secret',
+          'req.query.token',
+        ],
+      }
+      : false,
   });
 
   await app.register(cors, {
@@ -42,6 +70,11 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await registerAuthRoutes(app, authService);
   const composioService = options.composioService ?? new ComposioService();
   await registerComposioRoutes(app, { authService, composioService });
+  const modelProviderStore = options.modelProviderStore ?? defaultModelProviderStore(config);
+  const centaurInstanceResolver = options.centaurInstanceResolver ?? new EnvCentaurInstanceResolver(config);
+  const modelProviderService = options.modelProviderService
+    ?? new ModelProviderService(modelProviderStore, centaurInstanceResolver);
+  await registerModelProviderRoutes(app, { authService, modelProviderService });
   await registerAnalyticsRoutes(app, { authService, config });
   return app;
 }
@@ -51,4 +84,11 @@ function defaultAuthStore(config: BackendConfig): AuthStore {
     return new DrizzleAuthStore(config.DATABASE_URL);
   }
   return new MemoryAuthStore();
+}
+
+function defaultModelProviderStore(config: BackendConfig): ModelProviderConnectionStore {
+  if (config.databaseConfigured && config.DATABASE_URL) {
+    return new DrizzleModelProviderConnectionStore(config.DATABASE_URL);
+  }
+  return new MemoryModelProviderConnectionStore();
 }

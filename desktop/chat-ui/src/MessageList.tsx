@@ -344,6 +344,7 @@ function AssistantActivity({
               key={i}
               step={step}
               isActiveReasoning={i === lastReasoningIndex}
+              liveTone={liveToneForStep(steps, i)}
               onConnect={onConnect}
               toolkits={toolkits}
             />
@@ -394,6 +395,16 @@ function findLastReasoningIndex(steps: ActivityStep[]): number {
     if (steps[index].type === 'reasoning') return index;
   }
   return -1;
+}
+
+type LiveStepTone = 'current' | 'stale' | 'settled';
+
+function liveToneForStep(steps: ActivityStep[], index: number): LiveStepTone {
+  const step = steps[index];
+  if (step?.type !== 'reasoning' && step?.type !== 'text') return 'settled';
+  const laterSteps = steps.length - index - 1;
+  if (laterSteps === 0) return 'current';
+  return laterSteps <= 2 ? 'stale' : 'settled';
 }
 
 function AssistantMessageActions({ message }: { message: ChatMessage }) {
@@ -572,31 +583,22 @@ function MessageCheckIcon() {
 function StepView({
   step,
   isActiveReasoning = false,
+  liveTone,
   onConnect,
   toolkits,
 }: {
   step: ActivityStep;
   isActiveReasoning?: boolean;
+  liveTone?: LiveStepTone;
   onConnect: (request: ConnectionRequestView) => void;
   toolkits: Map<string, ToolkitInfo>;
 }) {
   if (step.type === 'text') {
-    return (
-      <div style={{
-        color: 'var(--text-thinking)',
-        fontSize: '13px',
-        fontStyle: 'italic',
-        lineHeight: 1.5,
-        margin: '2px 0',
-        whiteSpace: 'pre-wrap',
-      }}>
-        {step.text.trim()}
-      </div>
-    );
+    return <ActivityTextStep text={step.text} liveTone={liveTone} />;
   }
 
   if (step.type === 'reasoning') {
-    return <ReasoningStep text={step.text} isActive={isActiveReasoning} />;
+    return <ReasoningStep text={step.text} isActive={isActiveReasoning} liveTone={liveTone} />;
   }
 
   // Connection cards are pulled out of `steps` upstream and rendered next to
@@ -612,14 +614,55 @@ function StepView({
   return <ToolStep step={step} toolkits={toolkits} />;
 }
 
-function ReasoningStep({ text, isActive }: { text: string; isActive: boolean }) {
+function ActivityTextStep({
+  text,
+  liveTone,
+}: {
+  text: string;
+  liveTone?: LiveStepTone;
+}) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
   return (
-    <div className={`reasoning-step${isActive ? ' is-active' : ''}`}>
-      <div className="message-content reasoning-markdown">
+    <div className={activityTextClassName(liveTone)}>
+      <div className="message-content activity-message-markdown">
+        <MarkdownContent content={trimmed} />
+      </div>
+    </div>
+  );
+}
+
+function ReasoningStep({
+  text,
+  isActive,
+  liveTone,
+}: {
+  text: string;
+  isActive: boolean;
+  liveTone?: LiveStepTone;
+}) {
+  return (
+    <div className={reasoningStepClassName(isActive, liveTone)}>
+      <div className="message-content reasoning-markdown activity-message-markdown">
         <MarkdownContent content={text} />
       </div>
     </div>
   );
+}
+
+function activityTextClassName(liveTone: LiveStepTone | undefined): string {
+  return [
+    'activity-message-step',
+    liveTone ? `is-${liveTone}` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function reasoningStepClassName(isActive: boolean, liveTone: LiveStepTone | undefined): string {
+  return [
+    'reasoning-step',
+    isActive ? 'is-active' : '',
+    liveTone ? `is-${liveTone}` : '',
+  ].filter(Boolean).join(' ');
 }
 
 function MarkdownContent({ content }: { content: string }) {

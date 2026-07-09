@@ -36,6 +36,17 @@ export interface ManagedBackendSessionView {
   expiresAt: string;
 }
 
+export type ModelProvider = 'openai' | 'anthropic';
+export type ModelProviderStatus = 'connected' | 'needs_attention' | 'not_connected';
+
+export interface ModelProviderConnectionView {
+  provider: ModelProvider;
+  status: ModelProviderStatus;
+  keyLast4: string | null;
+  keySha256Prefix: string | null;
+  updatedAt: string | null;
+}
+
 export type ManagedAccountState =
   | 'signed_out'
   | 'expired'
@@ -283,6 +294,92 @@ export class ManagedBackendClient {
         console.error(`[managed-backend] analytics event failed: ${message}`);
       });
   }
+
+  async listModelProviders(): Promise<ModelProviderConnectionView[]> {
+    const stored = this.requireActiveSession();
+    const response = await this.fetchJson('/v1/model-providers', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${stored.token}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await response.json() as { providers?: ModelProviderConnectionView[] };
+    return Array.isArray(body.providers) ? body.providers : [];
+  }
+
+  async saveModelProviderKey(provider: ModelProvider, apiKey: string): Promise<ModelProviderConnectionView> {
+    assertProvider(provider);
+    assertSecureProviderKeyTransport(this.baseUrl);
+    const stored = this.requireActiveSession();
+    const response = await this.fetchJson(`/v1/model-providers/${encodeURIComponent(provider)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${stored.token}`,
+      },
+      body: JSON.stringify({ apiKey }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = await response.json() as { provider?: ModelProviderConnectionView };
+    if (!body.provider) {
+      throw new ManagedBackendError(502, 'bad_response', 'Managed backend returned an invalid provider response.');
+    }
+    return body.provider;
+  }
+
+  async deleteModelProviderKey(provider: ModelProvider): Promise<ModelProviderConnectionView> {
+    assertProvider(provider);
+    assertSecureProviderKeyTransport(this.baseUrl);
+    const stored = this.requireActiveSession();
+    const response = await this.fetchJson(`/v1/model-providers/${encodeURIComponent(provider)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${stored.token}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = await response.json() as { provider?: ModelProviderConnectionView };
+    if (!body.provider) {
+      throw new ManagedBackendError(502, 'bad_response', 'Managed backend returned an invalid provider response.');
+    }
+    return body.provider;
+  }
+
+  private requireActiveSession(): ManagedSessionRecord {
+    const stored = this.currentSession;
+    if (!stored) {
+      throw new ManagedBackendError(401, 'missing_session', 'No managed session is loaded.');
+    }
+    if (isIsoExpired(stored.expiresAt)) {
+      throw new ManagedBackendError(401, 'expired_session', 'Managed session has expired locally.');
+    }
+    return stored;
+  }
+
+  private async fetchJson(path: string, init: RequestInit): Promise<Response> {
+    if (!this.configured) {
+      throw new ManagedBackendError(503, 'backend_unavailable', 'Managed backend URL is not configured.');
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, init);
+    } catch (error) {
+      throw new ManagedBackendError(
+        502,
+        'backend_unreachable',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    if (!response.ok) {
+      const body = await readErrorBody(response);
+      throw new ManagedBackendError(
+        response.status,
+        body.error ?? 'backend_error',
+        body.message ?? `Managed backend returned HTTP ${response.status}.`,
+      );
+    }
+
+    return response;
+  }
 }
 
 export type AnalyticsEventInput =
@@ -321,4 +418,27 @@ function isIsoExpired(value: string): boolean {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) return false;
   return timestamp <= Date.now();
+}
+
+function assertProvider(provider: string): asserts provider is ModelProvider {
+  if (provider !== 'openai' && provider !== 'anthropic') {
+    throw new ManagedBackendError(400, 'invalid_provider', 'Provider must be "openai" or "anthropic".');
+  }
+}
+
+function assertSecureProviderKeyTransport(baseUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new ManagedBackendError(400, 'invalid_backend_url', 'Managed backend URL is invalid.');
+  }
+
+  if (url.protocol === 'https:') return;
+  if (url.protocol === 'http:' && ['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) return;
+  throw new ManagedBackendError(
+    400,
+    'insecure_transport',
+    'Model provider keys can only be sent to HTTPS managed backends.',
+  );
 }

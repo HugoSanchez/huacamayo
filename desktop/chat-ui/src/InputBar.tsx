@@ -1,9 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect, type CSSProperties } from 'react';
 import { getSkills } from './chat';
-import type { AttachedContext, ChatModel, ReasoningEffort, SkillSummaryView } from './types';
+import type { AttachedContext, HarnessModelOption, ReasoningEffort, SkillSummaryView } from './types';
 import {
-  CHAT_MODELS,
-  CHAT_MODEL_LABELS,
+  HARNESS_MODEL_GROUPS,
   REASONING_EFFORTS,
   REASONING_EFFORT_LABELS,
 } from './types';
@@ -17,8 +16,8 @@ interface Props {
   onStop: () => void;
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
-  model: ChatModel;
-  onModelChange: (model: ChatModel) => void;
+  selectedModel: HarnessModelOption;
+  onSelectedModelChange: (model: HarnessModelOption) => void;
   isStreaming: boolean;
   disabled: boolean;
   focusRecoveryEnabled: boolean;
@@ -36,8 +35,8 @@ export function InputBar({
   onStop,
   reasoningEffort,
   onReasoningEffortChange,
-  model,
-  onModelChange,
+  selectedModel,
+  onSelectedModelChange,
   isStreaming,
   disabled,
   focusRecoveryEnabled,
@@ -367,7 +366,11 @@ export function InputBar({
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <ModelCycler value={model} onChange={onModelChange} disabled={disabled} />
+            <HarnessModelSelector
+              value={selectedModel}
+              onChange={onSelectedModelChange}
+              disabled={disabled}
+            />
             <ReasoningEffortCycler
               value={reasoningEffort}
               onChange={onReasoningEffortChange}
@@ -471,7 +474,7 @@ function EffortBars({ level }: { level: number }) {
   );
 }
 
-// OpenAI/Codex-ish spark glyph for the model cycler.
+// Spark glyph for the model selector.
 function SparkGlyph() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
@@ -480,9 +483,85 @@ function SparkGlyph() {
   );
 }
 
-// Shared styling for the footer cycle buttons. Clicking advances to the next
-// option; the tooltip names the control. No menu — matching the lightweight
-// Cursor/Claude footer affordance the user asked for.
+function CheckGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="2,6.5 4.7,9 10,3" />
+    </svg>
+  );
+}
+
+function StarGlyph() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+      <path d="M6 1.2 7.4 4.3 10.8 4.7 8.3 7 9 10.4 6 8.7 3 10.4 3.7 7 1.2 4.7 4.6 4.3 6 1.2Z" />
+    </svg>
+  );
+}
+
+function HelpGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="4.2" />
+      <path d="M4.8 4.7a1.35 1.35 0 0 1 2.45.8c0 .9-1.25 1.05-1.25 1.85" />
+      <path d="M6 8.8h.01" />
+    </svg>
+  );
+}
+
+function ExternalArrowGlyph() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7 7 3" />
+      <path d="M4.4 3H7v2.6" />
+    </svg>
+  );
+}
+
+function ChevronRightGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4.5 2.5 8 6l-3.5 3.5" />
+    </svg>
+  );
+}
+
+function ProviderLogo({ harnessType }: { harnessType: HarnessModelOption['harnessType'] }) {
+  if (harnessType === 'codex') {
+    return (
+      <svg className="harness-model-logo-svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2.9c2.1 0 3.3 1.1 4.1 2.6 1.7-.1 3.2.6 4.1 2.2 1 1.8.6 3.5-.4 4.8.9 1.4 1 3.1 0 4.8-1.1 1.8-2.7 2.4-4.3 2.2-.8 1.5-2 2.6-4.1 2.6s-3.3-1.1-4.1-2.6c-1.7.1-3.2-.6-4.1-2.2-1-1.8-.6-3.5.4-4.8-.9-1.4-1-3.1 0-4.8C4.2 6.1 5.8 5.5 7.5 5.6 8.3 4 9.7 2.9 12 2.9Z" />
+        <path d="M7.5 5.6 12 8.2l4.1-2.7" />
+        <path d="M3.6 12.5 8 10v-4" />
+        <path d="M7.3 19.5V14l-3.7-1.5" />
+        <path d="M15.5 19.5 12 16l-4.7 3.5" />
+        <path d="M19.8 12.5 16 14v5.5" />
+        <path d="M16.1 5.5V10l3.7 2.5" />
+        <path d="M8 10l4 2.3 4-2.3" />
+        <path d="M12 12.3V16" />
+      </svg>
+    );
+  }
+
+  if (harnessType === 'amp') {
+    return (
+      <svg className="harness-model-logo-svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4.5 18 9.4 5.8c.2-.5.9-.5 1.1 0L15.4 18" />
+        <path d="M7 13h6" />
+        <path d="M16 6v12" />
+        <path d="M19.5 8.5v7" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg className="harness-model-logo-svg" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+      <path d="M12 1.8 13.25 8.25 18 3.7 15.25 9.65 21.7 8.4 16.2 12 21.7 15.6 15.25 14.35 18 20.3 13.25 15.75 12 22.2 10.75 15.75 6 20.3 8.75 14.35 2.3 15.6 7.8 12 2.3 8.4 8.75 9.65 6 3.7 10.75 8.25 12 1.8Z" />
+    </svg>
+  );
+}
+
+// Shared styling for the footer controls.
 function footerCycleStyle(disabled: boolean): CSSProperties {
   return {
     display: 'flex',
@@ -529,26 +608,124 @@ function ReasoningEffortCycler({
   );
 }
 
-function ModelCycler({
+function HarnessModelSelector({
   value,
   onChange,
   disabled,
 }: {
-  value: ChatModel;
-  onChange: (model: ChatModel) => void;
+  value: HarnessModelOption;
+  onChange: (model: HarnessModelOption) => void;
   disabled: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && rootRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || event.metaKey || event.ctrlKey) return;
+      const match = HARNESS_MODEL_GROUPS
+        .flatMap((group) => group.options)
+        .find((option) => option.shortcut === event.key);
+      if (!match) return;
+      event.preventDefault();
+      onChange(match);
+      setOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onChange, open]);
+
   return (
-    <button
-      type="button"
-      onClick={() => onChange(cycleNext(CHAT_MODELS, value))}
-      disabled={disabled}
-      aria-label={`Model: ${CHAT_MODEL_LABELS[value]} (click to change)`}
-      title="Model"
-      style={footerCycleStyle(disabled)}
-    >
-      <SparkGlyph />
-      <span>{CHAT_MODEL_LABELS[value]}</span>
-    </button>
+    <div ref={rootRef} className="harness-selector-root">
+      {open && (
+        <div className="harness-model-popover" role="listbox" aria-label="Agent model">
+          {HARNESS_MODEL_GROUPS.map((group) => (
+            <div className="harness-model-group" key={group.id}>
+              <div className="harness-model-group-label">
+                <span className="harness-model-logo">
+                  <ProviderLogo harnessType={group.id} />
+                </span>
+                <span>{group.label}</span>
+                <span className="harness-model-help" title={`${group.label} harness`}>
+                  <HelpGlyph />
+                </span>
+              </div>
+              {group.options.map((option) => {
+                const selected = option.id === value.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`harness-model-row${selected ? ' is-selected' : ''}`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onChange(option);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="harness-model-logo">
+                      <ProviderLogo harnessType={option.harnessType} />
+                    </span>
+                    <span className="harness-model-title">
+                      <span className="harness-model-name">{option.label}</span>
+                      {option.harnessType === 'claudecode' && (
+                        <span className="harness-model-external">
+                          <ExternalArrowGlyph />
+                        </span>
+                      )}
+                    </span>
+                    <span className="harness-model-badge-slot">
+                      {option.badge && <span className="harness-model-badge">{option.badge}</span>}
+                    </span>
+                    <span className="harness-model-check">{selected ? <CheckGlyph /> : null}</span>
+                    <span className="harness-model-star" title={option.favorite ? 'Favorite' : undefined}>
+                      {option.favorite ? <StarGlyph /> : null}
+                    </span>
+                    <span className="harness-model-shortcut">{option.shortcut ?? ''}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          <div className="harness-model-footer">
+            <span>Harnesses</span>
+            <ChevronRightGlyph />
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen((next) => !next)}
+        disabled={disabled}
+        aria-label={`Model: ${value.label}`}
+        aria-expanded={open}
+        title="Model"
+        style={footerCycleStyle(disabled)}
+      >
+        <SparkGlyph />
+        <span>{value.label}</span>
+      </button>
+    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { MessageList } from './MessageList';
 import { InputBar } from './InputBar';
 import { CatalogOverlay } from './CatalogOverlay';
@@ -31,13 +31,14 @@ import type {
   ChatSSEEvent,
   ActivityStep,
   ChatSessionSummary,
-  ChatModel,
+  HarnessModelOption,
   ConnectionRequestView,
   ConnectionView,
   ReasoningEffort,
   StoredChatMessage,
   ToolkitView,
 } from './types';
+import { DEFAULT_HARNESS_MODEL_ID, getHarnessModelOption } from './types';
 import type { ShellAction, ShellState } from './shell-protocol';
 import { useBrowserShellHost } from './browser-shell-host';
 
@@ -58,11 +59,35 @@ declare global {
 }
 
 const SESSION_STORAGE_KEY = 'verso.chat.sessionId';
+const HARNESS_MODEL_STORAGE_KEY = 'verso.chat.harnessModelId';
+const HARNESS_MODEL_BY_SESSION_STORAGE_KEY = 'verso.chat.harnessModelBySession';
 
 // Bucket key for messages typed before a session exists. `adoptSession` migrates
 // this bucket onto the real session id once `createChatSession` resolves so the
 // user's first message survives the round-trip without flicker.
 const PENDING_SESSION_KEY = '__pending__';
+
+function readStoredHarnessModelId(): string {
+  if (typeof window === 'undefined') return DEFAULT_HARNESS_MODEL_ID;
+  return window.localStorage.getItem(HARNESS_MODEL_STORAGE_KEY) ?? DEFAULT_HARNESS_MODEL_ID;
+}
+
+function readStoredHarnessModelBySession(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(HARNESS_MODEL_BY_SESSION_STORAGE_KEY) ?? '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const entries = Object.entries(parsed)
+      .filter((entry): entry is [string, string] => typeof entry[0] === 'string' && typeof entry[1] === 'string');
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredHarnessModelBySession(value: Record<string, string>): void {
+  window.localStorage.setItem(HARNESS_MODEL_BY_SESSION_STORAGE_KEY, JSON.stringify(value));
+}
 
 // Hermes surfaces a CLI-flavoured error when there are no Codex creds. We
 // match liberally — any of "no codex credentials", "hermes auth", or
@@ -120,9 +145,8 @@ export function App() {
   // global model/effort footer in Cursor/Claude). 'medium' mirrors the gateway
   // config default so the visible selection and actual behaviour line up.
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
-  // Codex model for the next message. Sticky across sessions, like the effort
-  // selector. 'gpt-5.5' mirrors the gateway config default.
-  const [model, setModel] = useState<ChatModel>('gpt-5.5');
+  const [fallbackHarnessModelId, setFallbackHarnessModelId] = useState(readStoredHarnessModelId);
+  const [harnessModelBySession, setHarnessModelBySession] = useState<Record<string, string>>(readStoredHarnessModelBySession);
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const sessionIdRef = useRef<string | null>(null);
   // Per-session streams: one stream per session, multiple sessions can stream
@@ -133,6 +157,23 @@ export function App() {
   const idCounter = useRef(0);
   const hydrateTokenRef = useRef(0);
   const connectionPollers = useRef<Map<string, number>>(new Map());
+
+  const selectedHarnessModel = useMemo(() => {
+    const sessionModelId = selectedSessionId ? harnessModelBySession[selectedSessionId] : null;
+    return getHarnessModelOption(sessionModelId ?? fallbackHarnessModelId);
+  }, [fallbackHarnessModelId, harnessModelBySession, selectedSessionId]);
+
+  const handleHarnessModelChange = useCallback((next: HarnessModelOption) => {
+    setFallbackHarnessModelId(next.id);
+    window.localStorage.setItem(HARNESS_MODEL_STORAGE_KEY, next.id);
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    setHarnessModelBySession((prev) => {
+      const updated = { ...prev, [sessionId]: next.id };
+      writeStoredHarnessModelBySession(updated);
+      return updated;
+    });
+  }, []);
 
   // In browser mode this hook plays Swift's role: owns the sessions list,
   // dispatches `verso:shell-state` snapshots, and handles `verso:shell-action`
@@ -819,7 +860,12 @@ export function App() {
   // Wires up the SSE handlers for an assistant placeholder that's already in
   // the pending/current bucket. Shared by the normal send path and the
   // post-connect replay so both flows produce identical streaming behaviour.
-  const streamInto = useCallback((assistantId: string, text: string, attached: AttachedContext | null) => {
+  const streamInto = useCallback((
+    assistantId: string,
+    text: string,
+    attached: AttachedContext | null,
+    modelForSend: HarnessModelOption,
+  ) => {
     // Bucket the placeholder lives in *right now*. Used only by the
     // pre-ensureSession error path; once ensureSession resolves, all SSE writes
     // target the real session id captured below.
@@ -828,6 +874,12 @@ export function App() {
     void (async () => {
       try {
         const sessionId = await ensureSession();
+        setHarnessModelBySession((prev) => {
+          if (prev[sessionId] === modelForSend.id) return prev;
+          const updated = { ...prev, [sessionId]: modelForSend.id };
+          writeStoredHarnessModelBySession(updated);
+          return updated;
+        });
         // adoptSession migrated PENDING → sessionId if the placeholder came
         // through there, so every SSE update from here on targets `sessionId`
         // — even if the user navigates away mid-stream.
@@ -912,7 +964,7 @@ export function App() {
             postShellAction({ kind: 'session-mutated', id: sessionId });
             notifyNativeResponseReady(isNativeShell);
           },
-          { attached, reasoningEffort, model },
+          { attached, reasoningEffort, model: modelForSend },
         );
 
         // Register the stream now that we have both the sessionId and the
@@ -949,7 +1001,7 @@ export function App() {
         }
       }
     })();
-  }, [ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, model, reasoningEffort, updateSessionMessages]);
+  }, [ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, reasoningEffort, updateSessionMessages]);
 
   const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
     const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
@@ -969,7 +1021,7 @@ export function App() {
     // Hermes — it'll just error with a CLI-flavoured "no credentials"
     // message that doesn't help our users. Stash the user's message on the
     // synthetic widget so we can replay the send once they finish auth.
-    if (codexConnected === false) {
+    if (codexConnected === false && selectedHarnessModel.harnessType === 'codex') {
       const userMsg: ChatMessage = { id: nextId(), role: 'user', content: displayText };
       const widgetMsg: ChatMessage = {
         id: nextId(),
@@ -994,8 +1046,8 @@ export function App() {
     };
 
     updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, assistantMsg]);
-    streamInto(assistantMsg.id, text, attached);
-  }, [codexConnected, connected, streamInto, streamingSessions, updateSessionMessages]);
+    streamInto(assistantMsg.id, text, attached, selectedHarnessModel);
+  }, [codexConnected, connected, selectedHarnessModel, streamInto, streamingSessions, updateSessionMessages]);
 
   const handleCodexConnected = useCallback((widgetId: string) => {
     setCodexConnected(true);
@@ -1024,8 +1076,8 @@ export function App() {
       startedAt: Date.now(),
     };
     updateSessionMessages(sessionKey, (prev) => prev.map((m) => m.id === widgetId ? assistantMsg : m));
-    streamInto(assistantMsg.id, pendingText, pendingAttached);
-  }, [messagesBySession, streamInto, updateSessionMessages]);
+    streamInto(assistantMsg.id, pendingText, pendingAttached, selectedHarnessModel);
+  }, [messagesBySession, selectedHarnessModel, streamInto, updateSessionMessages]);
 
   const handleOpenSkillInNewSession = useCallback((slug: string) => {
     // Per-session streams: opens a brand new session, no conflict with
@@ -1191,8 +1243,8 @@ export function App() {
             onStop={handleStop}
             reasoningEffort={reasoningEffort}
             onReasoningEffortChange={setReasoningEffort}
-            model={model}
-            onModelChange={setModel}
+            selectedModel={selectedHarnessModel}
+            onSelectedModelChange={handleHarnessModelChange}
             isStreaming={selectedSessionId !== null && streamingSessions.has(selectedSessionId)}
             disabled={!connected || isHydratingSession || !!selectedSession?.archivedAt}
             focusRecoveryEnabled={!isCatalogOpen && !isSkillsCatalogOpen}

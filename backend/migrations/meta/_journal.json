@@ -15,6 +15,13 @@
       "when": 1780318664967,
       "tag": "0001_silent_pyro",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783596939958,
+      "tag": "0002_model_provider_connections",
+      "breakpoints": true
     }
   ]
 }

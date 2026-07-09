@@ -102,7 +102,7 @@ export function streamChatMessage(
   options: {
     attached?: import('./types').AttachedContext | null;
     reasoningEffort?: string | null;
-    model?: string | null;
+    model?: import('./types').HarnessModelOption | null;
   } = {},
 ): () => void {
   const controller = new AbortController();
@@ -117,7 +117,11 @@ export function streamChatMessage(
   const requestBody: Record<string, unknown> = { content };
   if (attached) requestBody.attached = attached;
   if (options.reasoningEffort) requestBody.reasoningEffort = options.reasoningEffort;
-  if (options.model) requestBody.model = options.model;
+  if (options.model) {
+    requestBody.harnessType = options.model.harnessType;
+    if (options.model.model) requestBody.model = options.model.model;
+    if (options.model.provider) requestBody.provider = options.model.provider;
+  }
 
   (async () => {
     try {
@@ -486,6 +490,17 @@ export interface CodexStatus {
   count: number;
 }
 
+export type ModelProvider = 'openai' | 'anthropic';
+export type ModelProviderStatus = 'connected' | 'needs_attention' | 'not_connected';
+
+export interface ModelProviderConnectionView {
+  provider: ModelProvider;
+  status: ModelProviderStatus;
+  keyLast4: string | null;
+  keySha256Prefix: string | null;
+  updatedAt: string | null;
+}
+
 export async function getCodexStatus(): Promise<CodexStatus> {
   const res = await fetch(`${baseURL()}/model-auth/codex/status`);
   if (!res.ok) {
@@ -504,6 +519,42 @@ export async function disconnectCodex(): Promise<{ removed: number }> {
 
 export function codexConnectUrl(): string {
   return `${baseURL()}/model-auth/codex/start`;
+}
+
+export async function getModelProviders(): Promise<ModelProviderConnectionView[]> {
+  const res = await fetch(`${baseURL()}/model-providers`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load model providers'));
+  }
+  const body = await res.json() as { providers?: ModelProviderConnectionView[] };
+  return Array.isArray(body.providers) ? body.providers : [];
+}
+
+export async function saveModelProviderKey(
+  provider: ModelProvider,
+  apiKey: string,
+): Promise<ModelProviderConnectionView> {
+  const res = await fetch(`${baseURL()}/model-providers/${encodeURIComponent(provider)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to save model provider key'));
+  }
+  const body = await res.json() as { provider: ModelProviderConnectionView };
+  return body.provider;
+}
+
+export async function deleteModelProviderKey(provider: ModelProvider): Promise<ModelProviderConnectionView> {
+  const res = await fetch(`${baseURL()}/model-providers/${encodeURIComponent(provider)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to remove model provider key'));
+  }
+  const body = await res.json() as { provider: ModelProviderConnectionView };
+  return body.provider;
 }
 
 // Generic draft channel — the agent picks whatever toolkit slug it wants

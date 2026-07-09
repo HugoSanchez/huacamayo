@@ -77,6 +77,21 @@
             value = "dev-supermemory"
             isEnabled = "YES">
          </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "VERSO_AGENT_BACKEND"
+            value = "centaur"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "VERSO_CENTAUR_URL"
+            value = "http://127.0.0.1:18080"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+         <EnvironmentVariable
+            key = "VERSO_CENTAUR_COMPOSIO_USER_ID"
+            value = "usr_8b3e0d8f3020f8d86e9e"
+            isEnabled = "YES">
+         </EnvironmentVariable>
       </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction

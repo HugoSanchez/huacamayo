@@ -207,12 +207,13 @@ export function buildChatRoutes(
       const priorMessageCount = store.getMessages(params.id)?.length ?? 0;
       const isFirstUserMessage = priorMessageCount === 0;
 
-      store.appendMessage(params.id, 'user', content);
+      const storedUserMessage = store.appendMessage(params.id, 'user', content);
       managedBackend.recordAnalyticsEvent({ eventType: 'message_sent', sessionId: params.id });
 
       const attached = parseAttached(body);
       const reasoningEffort = parseReasoningEffort(body);
       const model = parseChatModel(body);
+      const centaurModel = centaur ? parseCentaurModelSelection(body, centaur.harness) : null;
       let promptForHermes = content;
       // Cron attach fetches state via the Hermes gateway, which isn't running
       // in centaur mode — skip the enrichment and use the raw text there.
@@ -244,6 +245,8 @@ export function buildChatRoutes(
           await runCentaurMessage({
             session,
             userPrompt: promptForHermes,
+            selectedModel: centaurModel ?? { harnessType: centaur.harness, model: null, provider: null },
+            messageId: storedUserMessage?.id ?? randomUUID(),
             isFirstUserMessage,
             res,
           }, store, centaur, managedBackend);
@@ -347,6 +350,67 @@ function parseChatModel(body: unknown): ChatModel | null {
   const value = raw.trim().toLowerCase();
   return (VALID_CHAT_MODELS as readonly string[]).includes(value)
     ? (value as ChatModel)
+    : null;
+}
+
+interface CentaurModelSelection {
+  harnessType: CentaurConfig['harness'];
+  model: string | null;
+  provider: string | null;
+}
+
+const CENTAUR_MODEL_OPTIONS: CentaurModelSelection[] = [
+  { harnessType: 'claudecode', model: 'claude-sonnet-5', provider: 'anthropic' },
+  { harnessType: 'claudecode', model: 'claude-fable-5', provider: 'anthropic' },
+  { harnessType: 'claudecode', model: 'claude-opus-4-8[1m]', provider: 'anthropic' },
+  { harnessType: 'claudecode', model: 'claude-opus-4-7[1m]', provider: 'anthropic' },
+  { harnessType: 'claudecode', model: 'claude-opus-4-6[1m]', provider: 'anthropic' },
+  { harnessType: 'claudecode', model: 'claude-sonnet-4-6[1m]', provider: 'anthropic' },
+  { harnessType: 'claudecode', model: 'claude-sonnet-4-6', provider: 'anthropic' },
+  { harnessType: 'claudecode', model: 'claude-haiku-4-5', provider: 'anthropic' },
+  { harnessType: 'codex', model: 'gpt-5.5', provider: 'openai' },
+  { harnessType: 'codex', model: 'gpt-5.4', provider: 'openai' },
+  { harnessType: 'amp', model: 'deep', provider: 'amp' },
+  { harnessType: 'amp', model: 'smart', provider: 'amp' },
+  { harnessType: 'amp', model: 'rush', provider: 'amp' },
+];
+
+function parseCentaurModelSelection(
+  body: unknown,
+  fallbackHarness: CentaurConfig['harness'],
+): CentaurModelSelection {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { harnessType: fallbackHarness, model: null, provider: null };
+  }
+
+  const record = body as Record<string, unknown>;
+  const harnessType = normalizeCentaurHarness(record.harnessType) ?? fallbackHarness;
+  const model = typeof record.model === 'string' ? record.model.trim() : '';
+  const provider = typeof record.provider === 'string' ? record.provider.trim() : '';
+
+  if (!model) {
+    return { harnessType, model: null, provider: provider || null };
+  }
+
+  const catalogMatch = CENTAUR_MODEL_OPTIONS.find((option) =>
+    option.harnessType === harnessType && option.model === model,
+  );
+  if (!catalogMatch) {
+    return { harnessType, model: null, provider: null };
+  }
+
+  return {
+    harnessType,
+    model: catalogMatch.model,
+    provider: provider || catalogMatch.provider,
+  };
+}
+
+function normalizeCentaurHarness(value: unknown): CentaurConfig['harness'] | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'codex' || normalized === 'claudecode' || normalized === 'amp'
+    ? normalized
     : null;
 }
 
@@ -491,6 +555,8 @@ async function runCentaurMessage(
   opts: {
     session: ChatSessionSummary;
     userPrompt: string;
+    selectedModel: CentaurModelSelection;
+    messageId: string;
     isFirstUserMessage: boolean;
     res: ServerResponse;
   },
@@ -498,7 +564,7 @@ async function runCentaurMessage(
   centaur: CentaurBackend,
   managedBackend: ManagedBackendClient,
 ): Promise<void> {
-  const { client, threadStore, harness } = centaur;
+  const { client, threadStore } = centaur;
   const controller = new AbortController();
   const threadKey = threadKeyForSession(opts.session.id);
   // First message of a session carries the environment preamble (Composio
@@ -585,14 +651,20 @@ async function runCentaurMessage(
       message: 'Contacting Centaur',
     });
 
-    await client.ensureSession(threadKey, harness, controller.signal);
-    await client.appendMessage(threadKey, outboundPrompt, controller.signal);
+    await client.ensureSession(threadKey, opts.selectedModel.harnessType, controller.signal);
+    await client.appendMessage(threadKey, outboundPrompt, opts.messageId, controller.signal);
     // idle_timeout is ALSO the sandbox pause timer (a 60s value meant every
     // conversational pause ate a ~9s resume). 5min idle / 10min hard cap.
     const { executionId } = await client.execute(
       threadKey,
       outboundPrompt,
-      { idleTimeoutMs: 300_000, maxDurationMs: 600_000 },
+      {
+        idempotencyKey: opts.messageId,
+        idleTimeoutMs: 300_000,
+        maxDurationMs: 600_000,
+        model: opts.selectedModel.model,
+        provider: opts.selectedModel.provider,
+      },
       controller.signal,
     );
     threadStore.startExecution(opts.session.id, executionId);

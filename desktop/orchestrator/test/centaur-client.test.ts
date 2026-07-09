@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCentaurInputLine,
   buildTurnReminder,
   CentaurStreamTranslator,
   isCentaurBackend,
@@ -72,6 +73,27 @@ describe('buildTurnReminder', () => {
 describe('threadKeyForSession', () => {
   it('namespaces the session under the verso source', () => {
     expect(threadKeyForSession('abc-123')).toBe('verso:abc-123');
+  });
+});
+
+describe('buildCentaurInputLine', () => {
+  it('puts thread key, model and provider inside the JSON input line', () => {
+    const line = buildCentaurInputLine({
+      threadKey: 'verso:abc',
+      text: 'hello',
+      model: 'gpt-5.5',
+      provider: 'openai',
+    });
+    expect(JSON.parse(line)).toEqual({
+      type: 'user',
+      thread_key: 'verso:abc',
+      model: 'gpt-5.5',
+      provider: 'openai',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'hello' }],
+      },
+    });
   });
 });
 

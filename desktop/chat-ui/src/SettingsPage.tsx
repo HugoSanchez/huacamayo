@@ -3,10 +3,15 @@ import {
   disconnectCodex,
   getCodexStatus,
   getIngestionSources,
+  getModelProviders,
   getSidecarPort,
+  saveModelProviderKey,
+  deleteModelProviderKey,
   toggleIngestionSource,
   type CodexStatus,
   type IngestionSourceView,
+  type ModelProvider,
+  type ModelProviderConnectionView,
 } from './chat';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
 
@@ -151,6 +156,8 @@ export function SettingsPage({ onBack }: Props) {
 
           <CodexSection />
 
+          <ModelProvidersSection />
+
           <IngestionSection />
 
           <section className="settings-section settings-section-signout">
@@ -197,6 +204,171 @@ function timeAgo(iso: string): string {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.round(hrs / 24)}d ago`;
+}
+
+const MODEL_PROVIDER_LABELS: Record<ModelProvider, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+};
+
+function ModelProvidersSection() {
+  const [providers, setProviders] = useState<ModelProviderConnectionView[]>([]);
+  const [inputs, setInputs] = useState<Record<ModelProvider, string>>({ openai: '', anthropic: '' });
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+
+  useEffect(() => { void refresh(); }, []);
+
+  async function refresh() {
+    try {
+      setProviders(normalizeProviders(await getModelProviders()));
+      setError(null);
+    } catch (err) {
+      setProviders(normalizeProviders([]));
+      setError(formatModelProviderError(err));
+    }
+  }
+
+  async function handleSave(provider: ModelProvider) {
+    if (pending) return;
+    const apiKey = inputs[provider].trim();
+    if (!apiKey) {
+      setError(`${MODEL_PROVIDER_LABELS[provider]} key must not be empty.`);
+      return;
+    }
+    setPending(`${provider}:save`);
+    try {
+      const updated = await saveModelProviderKey(provider, apiKey);
+      setProviders((prev) => normalizeProviders(prev.map((item) => item.provider === provider ? updated : item)));
+      setInputs((prev) => ({ ...prev, [provider]: '' }));
+      setError(null);
+    } catch (err) {
+      setError(formatModelProviderError(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function handleRemove(provider: ModelProvider) {
+    if (pending) return;
+    setPending(`${provider}:remove`);
+    try {
+      const updated = await deleteModelProviderKey(provider);
+      setProviders((prev) => normalizeProviders(prev.map((item) => item.provider === provider ? updated : item)));
+      setInputs((prev) => ({ ...prev, [provider]: '' }));
+      setError(null);
+    } catch (err) {
+      setError(formatModelProviderError(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h2>Model Providers</h2>
+      {error ? <p className="settings-footnote codex-error">{error}</p> : null}
+      {normalizeProviders(providers).map((provider) => {
+        const connected = provider.status !== 'not_connected';
+        const isSaving = pending === `${provider.provider}:save`;
+        const isRemoving = pending === `${provider.provider}:remove`;
+        return (
+          <form
+            className="settings-row model-provider-row"
+            key={provider.provider}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSave(provider.provider);
+            }}
+          >
+            <span className="settings-label model-provider-label">
+              <ProviderLogo provider={provider.provider} />
+              <span className="model-provider-text">
+                <span className="model-provider-title">{MODEL_PROVIDER_LABELS[provider.provider]}</span>
+                <span className="model-provider-meta">
+                  {providerStatusLabel(provider.status)}
+                  {provider.keyLast4 ? ` · ...${provider.keyLast4}` : ''}
+                  {provider.updatedAt ? ` · updated ${timeAgo(provider.updatedAt)}` : ''}
+                </span>
+              </span>
+            </span>
+            <span className="model-provider-controls">
+              <input
+                className="model-provider-key-input"
+                type="password"
+                value={inputs[provider.provider]}
+                onChange={(event) => setInputs((prev) => ({ ...prev, [provider.provider]: event.target.value }))}
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="API key"
+                disabled={Boolean(pending)}
+              />
+              <button
+                type="submit"
+                className="settings-button settings-button-primary"
+                disabled={Boolean(pending) || inputs[provider.provider].trim().length === 0}
+              >
+                {isSaving ? 'Saving...' : connected ? 'Rotate' : 'Save'}
+              </button>
+              <button
+                type="button"
+                className="settings-button settings-button-danger"
+                onClick={() => { void handleRemove(provider.provider); }}
+                disabled={!connected || Boolean(pending)}
+              >
+                {isRemoving ? 'Removing...' : 'Remove'}
+              </button>
+            </span>
+          </form>
+        );
+      })}
+    </section>
+  );
+}
+
+function ProviderLogo({ provider }: { provider: ModelProvider }) {
+  if (provider === 'openai') {
+    return (
+      <span className="model-provider-logo" aria-hidden="true">
+        <CodexMark size={16} />
+      </span>
+    );
+  }
+
+  return (
+    <span className="model-provider-logo" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" focusable="false">
+        <path d="M13.74 3.5h-3.48L3.75 20.5h3.18l1.32-3.69h7.5l1.32 3.69h3.18L13.74 3.5Zm-4.5 10.56L12 6.35l2.76 7.71H9.24Z" />
+      </svg>
+    </span>
+  );
+}
+
+function normalizeProviders(providers: ModelProviderConnectionView[]): ModelProviderConnectionView[] {
+  return (['openai', 'anthropic'] as ModelProvider[]).map((provider) => (
+    providers.find((item) => item.provider === provider) ?? {
+      provider,
+      status: 'not_connected',
+      keyLast4: null,
+      keySha256Prefix: null,
+      updatedAt: null,
+    }
+  ));
+}
+
+function providerStatusLabel(status: ModelProviderConnectionView['status']): string {
+  if (status === 'connected') return 'Connected';
+  if (status === 'needs_attention') return 'Needs attention';
+  return 'Not connected';
+}
+
+function formatModelProviderError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('/v1/model-providers') && message.toLowerCase().includes('not found')) {
+    return 'Model provider settings are not available from the current backend. Restart or update the managed backend, then retry.';
+  }
+  return message;
 }
 
 function IngestionSection() {

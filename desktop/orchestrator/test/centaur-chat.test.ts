@@ -15,6 +15,8 @@ describe('Centaur backend chat', () => {
   let port = 0;
   const calls: string[] = [];
   const executeBodies: string[] = [];
+  const createSessionBodies: string[] = [];
+  const messageBodies: string[] = [];
 
   const envKeys = [
     'VERSO_AGENT_BACKEND',
@@ -47,7 +49,13 @@ describe('Centaur backend chat', () => {
         return;
       }
       if (url.endsWith('/messages')) {
-        return sendJson(res, { ok: true, message_ids: ['m1'] });
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => {
+          messageBodies.push(body);
+          sendJson(res, { ok: true, message_ids: ['m1'] });
+        });
+        return;
       }
       if (url.includes('/events')) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -65,7 +73,13 @@ describe('Centaur backend chat', () => {
         return res.end();
       }
       // create-or-get session
-      return sendJson(res, { thread_key: 'verso:x', harness_type: 'claudecode', status: 'active', harness_switched: false });
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        createSessionBodies.push(body);
+        sendJson(res, { thread_key: 'verso:x', harness_type: 'claudecode', status: 'active', harness_switched: false });
+      });
+      return;
     });
     mockPort = await listen(mock);
 
@@ -115,7 +129,12 @@ describe('Centaur backend chat', () => {
     const res = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: 'ping' }),
+      body: JSON.stringify({
+        content: 'ping',
+        harnessType: 'codex',
+        model: 'gpt-5.5',
+        provider: 'openai',
+      }),
     });
     expect(res.status).toBe(200);
     const stream = await res.text();
@@ -131,6 +150,16 @@ describe('Centaur backend chat', () => {
     expect(calls).toContain('POST /api/session/verso:' + sessionId);
     expect(calls).toContain('POST /api/session/verso:' + sessionId + '/messages');
     expect(calls).toContain('POST /api/session/verso:' + sessionId + '/execute');
+    expect(calls).toContain('GET /api/session/verso:' + sessionId + '/events');
+    expect(calls.some((call) => call.includes('/agent/'))).toBe(false);
+
+    const firstCreate = JSON.parse(createSessionBodies[0]) as Record<string, unknown>;
+    expect(firstCreate).toMatchObject({
+      harness_type: 'codex',
+      persona_id: null,
+      metadata: { source: 'verso' },
+      on_harness_conflict: 'restart',
+    });
 
     // Assistant reply persisted to the local ChatStore.
     const messages = await fetch(url(`/chat/sessions/${sessionId}/messages`)).then((r) => r.json());
@@ -142,6 +171,22 @@ describe('Centaur backend chat', () => {
     expect(executeBodies.length).toBe(1);
     expect(executeBodies[0]).toContain('centaur_tool_composio.client');
     expect(executeBodies[0]).toContain('usr_test123');
+    const firstMessage = JSON.parse(messageBodies[0]) as { messages: Array<{ client_message_id: string }> };
+    const firstExecute = JSON.parse(executeBodies[0]) as {
+      idempotency_key: string;
+      input_lines: string[];
+      model?: string;
+      provider?: string;
+    };
+    expect(firstMessage.messages[0].client_message_id).toBe(firstExecute.idempotency_key);
+    expect(firstExecute.model).toBeUndefined();
+    expect(firstExecute.provider).toBeUndefined();
+    expect(JSON.parse(firstExecute.input_lines[0])).toMatchObject({
+      type: 'user',
+      thread_key: `verso:${sessionId}`,
+      model: 'gpt-5.5',
+      provider: 'openai',
+    });
     const user = messages.messages.find((m: any) => m.role === 'user');
     expect(user?.content).toBe('ping');
 
@@ -160,6 +205,72 @@ describe('Centaur backend chat', () => {
     expect(executeBodies[1]).toContain('usr_test123');
     // idle_timeout doubles as the sandbox pause timer — must be the long value.
     expect(executeBodies[0]).toContain('"idle_timeout_ms":300000');
+  });
+
+  it('honors claudecode and amp selections in the session API payloads', async () => {
+    const createdClaude = await fetch(url('/chat/sessions'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then((r) => r.json());
+    const claudeSessionId = createdClaude.session.id as string;
+
+    const startCreateCount = createSessionBodies.length;
+    const startExecuteCount = executeBodies.length;
+    const claudeRes = await fetch(url(`/chat/sessions/${claudeSessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'claude ping',
+        harnessType: 'claudecode',
+        model: 'claude-sonnet-4-6[1m]',
+        provider: 'anthropic',
+      }),
+    });
+    expect(claudeRes.status).toBe(200);
+    await claudeRes.text();
+
+    expect(JSON.parse(createSessionBodies[startCreateCount])).toMatchObject({
+      harness_type: 'claudecode',
+      on_harness_conflict: 'restart',
+    });
+    expect(JSON.parse(JSON.parse(executeBodies[startExecuteCount]).input_lines[0])).toMatchObject({
+      thread_key: `verso:${claudeSessionId}`,
+      model: 'claude-sonnet-4-6[1m]',
+      provider: 'anthropic',
+    });
+
+    const createdAmp = await fetch(url('/chat/sessions'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then((r) => r.json());
+    const ampSessionId = createdAmp.session.id as string;
+
+    const ampCreateIndex = createSessionBodies.length;
+    const ampExecuteIndex = executeBodies.length;
+    const ampRes = await fetch(url(`/chat/sessions/${ampSessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'amp ping',
+        harnessType: 'amp',
+        model: 'deep',
+        provider: 'amp',
+      }),
+    });
+    expect(ampRes.status).toBe(200);
+    await ampRes.text();
+
+    expect(JSON.parse(createSessionBodies[ampCreateIndex])).toMatchObject({
+      harness_type: 'amp',
+      on_harness_conflict: 'restart',
+    });
+    expect(JSON.parse(JSON.parse(executeBodies[ampExecuteIndex]).input_lines[0])).toMatchObject({
+      thread_key: `verso:${ampSessionId}`,
+      model: 'deep',
+      provider: 'amp',
+    });
   });
 });
 
