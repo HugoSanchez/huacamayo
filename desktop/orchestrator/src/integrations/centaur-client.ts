@@ -82,6 +82,11 @@ Python client via the symlink pattern from the start of this session: search_too
 user_id) to find the tool slug, then execute(slug, args, user_id). ALWAYS pass
 user_id='${userId}'. Never use the first-party slack/linear/notion CLIs (broken on this
 instance), and never judge capabilities from \`composio health\` (github-only check).
+For questions about the user's history, work, contacts, or preferences, search personal
+memory FIRST (before web/Composio): symlink
+/home/agent/github/HugoSanchez/centaur/tools/productivity/memory as "memory" in a tmpdir,
+then \`python -m memory.cli search "..."\` via the same uv --no-project pattern. Save
+durable new facts with \`memory.cli write\` (search first; update, don't duplicate).
 </verso-reminder>`;
 }
 
@@ -100,12 +105,33 @@ export class CentaurHttpError extends Error {
 export interface CentaurExecuteOptions {
   idleTimeoutMs?: number;
   maxDurationMs?: number;
+  idempotencyKey?: string | null;
+  model?: string | null;
+  provider?: string | null;
 }
 
 // Verso session id → durable Centaur thread. api-rs validates that thread keys
 // are namespaced `<source>:<id>`; `verso:` is our source prefix.
 export function threadKeyForSession(sessionId: string): string {
   return `verso:${sessionId}`;
+}
+
+export function buildCentaurInputLine(opts: {
+  threadKey: string;
+  text: string;
+  model?: string | null;
+  provider?: string | null;
+}): string {
+  return JSON.stringify({
+    type: 'user',
+    thread_key: opts.threadKey,
+    ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.provider ? { provider: opts.provider } : {}),
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: opts.text }],
+    },
+  });
 }
 
 /**
@@ -129,6 +155,22 @@ cloud agent instance. Identity: you are Verso's assistant — do NOT describe yo
 without running any commands.
 
 WORKS on this instance:
+- Personal memory — the user's own history (Slack, Google Docs, meeting notes, past
+  chats), searchable and writable. Check it FIRST for anything touching the user's work,
+  projects, contacts, or preferences — before web search and before Composio. Invocation
+  (same symlink rule as Composio; the import name only resolves through the symlink):
+    TMPD=$(mktemp -d)
+    ln -s /home/agent/github/HugoSanchez/centaur/tools/productivity/memory "$TMPD/memory"
+    cd "$TMPD" && PYTHONPATH="$TMPD:/opt/centaur" uv run --no-project \\
+      --with 'asyncpg>=0.30.0' --with 'python-dotenv>=1.0.0' \\
+      --with 'rich>=13.0.0' --with 'typer>=0.12.0' python -m memory.cli \\
+      search "kinexys rpc" --limit 5
+  Commands: search QUERY [--limit N] [--source slack|gdrive|granola|chat] [--json],
+  page <slug or doc:ID>, write SLUG --title T --content "...", list, status.
+  If a search misses, reword it once (synonyms, or the other language) and retry before
+  concluding memory has nothing. Save durable new facts about the user as pages with
+  \`write\` — search first and UPDATE an existing page rather than creating a
+  near-duplicate. Mention which page/doc informed your answer.
 - Composio — the user's own connected apps (Gmail, Slack, Google Calendar, Notion, ...).
   This is THE way to read or act on the user's personal apps. The \`composio\` CLI exposes
   only \`health\`; call the Python client with this exact pattern (the import name only
@@ -222,10 +264,15 @@ export class CentaurClient {
   }
 
   /** Persist the user turn before executing (mirrors ask.sh). */
-  async appendMessage(threadKey: string, text: string, signal?: AbortSignal): Promise<void> {
+  async appendMessage(
+    threadKey: string,
+    text: string,
+    clientMessageId: string | null = null,
+    signal?: AbortSignal,
+  ): Promise<void> {
     await this.postJson(`/api/session/${encodeURIComponent(threadKey)}/messages`, {
       messages: [{
-        client_message_id: null,
+        client_message_id: clientMessageId,
         role: 'user',
         parts: [{ type: 'text', text }],
         metadata: { source: 'verso' },
@@ -245,9 +292,14 @@ export class CentaurClient {
     opts: CentaurExecuteOptions = {},
     signal?: AbortSignal,
   ): Promise<{ executionId: string }> {
-    const block = JSON.stringify({ type: 'user', content: [{ type: 'text', text }] });
+    const block = buildCentaurInputLine({
+      threadKey,
+      text,
+      model: opts.model,
+      provider: opts.provider,
+    });
     const body = await this.postJson(`/api/session/${encodeURIComponent(threadKey)}/execute`, {
-      idempotency_key: null,
+      idempotency_key: opts.idempotencyKey ?? null,
       metadata: { source: 'verso' },
       input_lines: [block],
       idle_timeout_ms: opts.idleTimeoutMs ?? 60_000,
