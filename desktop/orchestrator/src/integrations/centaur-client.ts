@@ -87,6 +87,8 @@ memory FIRST (before web/Composio): symlink
 /home/agent/github/HugoSanchez/centaur/tools/productivity/memory as "memory" in a tmpdir,
 then \`python -m memory.cli search "..."\` via the same uv --no-project pattern. Save
 durable new facts with \`memory.cli write\` (search first; update, don't duplicate).
+Attribute memory answers in human terms (title/source/date, link if present) — never
+show raw doc:<id> refs to the user.
 </verso-reminder>`;
 }
 
@@ -170,7 +172,11 @@ WORKS on this instance:
   If a search misses, reword it once (synonyms, or the other language) and retry before
   concluding memory has nothing. Save durable new facts about the user as pages with
   \`write\` — search first and UPDATE an existing page rather than creating a
-  near-duplicate. Mention which page/doc informed your answer.
+  near-duplicate. When memory informs an answer, attribute it in HUMAN terms — the
+  entry's title, source, and date ("your All-Hands notes from July 8", "a Slack thread
+  in #eng-cloud on July 9"), with its link when it carries one. NEVER show raw internal
+  refs like doc:1028 to the user — those ids are only for your own follow-up
+  \`memory.cli page doc:ID\` reads.
 - Composio — the user's own connected apps (Gmail, Slack, Google Calendar, Notion, ...).
   This is THE way to read or act on the user's personal apps. The \`composio\` CLI exposes
   only \`health\`; call the Python client with this exact pattern (the import name only
