@@ -19,6 +19,11 @@ export interface ComposioNativeToolManifestTool {
   name: string;
   description: string | null;
   inputParameters: Record<string, unknown>;
+  // How the tool earned its manifest slot: 'usage' = ranked by successful
+  // use (the hot set — pinned-tool selection reads this), 'toolkit' =
+  // materialized wholesale from a connected toolkit. Absent in manifests
+  // written before this field existed.
+  origin?: 'usage' | 'toolkit';
 }
 
 export interface ComposioNativeToolManifest {
@@ -142,10 +147,12 @@ export class ComposioToolUsageStore {
     const active = normalizeToolkitSet(activeToolkitSlugs);
     const connectedMaterializedTools = materializedTools
       .filter((tool) => active.has(tool.toolkitSlug.trim().toLowerCase()))
-      .map(normalizeManifestTool);
+      .map((tool) => ({ ...normalizeManifestTool(tool), origin: 'toolkit' as const }));
 
+    // Usage-ranked entries come first, so dedupe keeps the 'usage' origin
+    // for tools that also appear in the materialized set.
     const tools = dedupeManifestTools([
-      ...this.listManifestTools(active, limit),
+      ...this.listManifestTools(active, limit).map((tool) => ({ ...tool, origin: 'usage' as const })),
       ...connectedMaterializedTools,
     ]);
     const manifest: ComposioNativeToolManifest = {
