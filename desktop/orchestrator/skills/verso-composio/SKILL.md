@@ -11,7 +11,7 @@ metadata:
 
 # Verso Composio Integration
 
-External-service tools in verso come through the `verso` MCP server. The Composio API key stays on the backend. Hermes should use native connected-app tools first; the generic Composio bridge tools are fallback only.
+External-service tools in verso come through the `verso` MCP server. The Composio API key stays on the backend. Hermes uses the native `mcp_verso_*` connected-app tools, discovered through Hermes tool search when not directly visible.
 
 ## Cardinal Rule
 
@@ -23,13 +23,13 @@ For anything that touches a connected third-party app, use the verso Composio br
 2. If the right tool is not visible, call Hermes `tool_search` with the app and action, for example `tool_search({ query: "gmail send email" })`.
 3. Use `tool_describe({ name: "<returned tool name>" })` before calling a deferred tool whose arguments are not already known.
 4. Invoke the deferred native tool with `tool_call({ name: "<returned tool name>", arguments: { ... } })`.
-5. Use `mcp_verso_search_composio_tools`, `mcp_verso_get_composio_tool_schemas`, and `mcp_verso_execute_composio_tool` only when no native connected-app tool is available or the native manifest appears stale.
+5. If no native tool exists for the app, the user likely has not connected it — check `mcp_verso_list_connections` and use the connection flow below.
 
 Do not invent arguments. Use the native tool schema from the visible tool list or `tool_describe`.
 
 ## Reuse Within a Conversation
 
-Discovery is expensive. Before calling `tool_search`, `tool_describe`, or the generic fallback bridge tools, check earlier tool results in this conversation:
+Discovery is expensive. Before calling `tool_search` or `tool_describe`, check earlier tool results in this conversation:
 
 - If you already used or described a native tool, reuse that tool name and argument schema.
 - If you already saw `mcp_verso_list_connections` output, do not call it again unless the user asks about connection state, a connection just changed, or a tool failed with a missing-connection error.
@@ -65,20 +65,9 @@ To check state without starting a flow, call `mcp_verso_list_connections` or `mc
 
 If the user names a service that is not in this table, resolve it with `mcp_verso_search_toolkits({ query: "<service name>" })`.
 
-## Fallback Bridge Tools
-
-Only use this flow when native discovery does not surface the needed connected-app tool:
-
-1. `mcp_verso_search_composio_tools({ query: "<specific use case>", toolkits: ["<slug>"] })`
-2. `mcp_verso_get_composio_tool_schemas({ tool_slugs: ["<returned slug>"] })`
-3. `mcp_verso_execute_composio_tool({ tool_slug: "<returned slug>", arguments: { ... } })`
-
-Do not call fallback search or schema lookup repeatedly for the same slug in one conversation.
-
 ## What Not To Do
 
 - Do not call Composio hosted MCP helper tools such as `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_GET_TOOL_SCHEMAS`, `COMPOSIO_MULTI_EXECUTE_TOOL`, `COMPOSIO_MANAGE_CONNECTIONS`, or `COMPOSIO_INITIATE_CONNECTION`.
-- Do not use the fallback bridge flow when a native connected-app tool is visible or discoverable through `tool_search`.
 - Do not fabricate tool names or slugs.
 - Do not execute a tool with `{}` when the schema has required fields.
 - Do not retry the same failed tool call with the same arguments.
@@ -88,8 +77,6 @@ Do not call fallback search or schema lookup repeatedly for the same slug in one
 
 | Error | Cause | Fix |
 |---|---|---|
-| `Missing "query"` | A fallback search call was empty | Retry once with a concrete use case |
-| `Missing "toolSlugs"` | Fallback schema lookup had no slug | Use a slug returned by fallback search |
 | `Missing required argument "X"` | Execution skipped a required schema field | Fill that exact field from the schema and retry once |
 | `No Active connection for toolkit=X` | User has not connected the toolkit | Call `mcp_verso_request_connection({ toolkit: "X" })` |
 | `Rate limit exceeded` | Composio throttled the call | Back off once; do not loop |

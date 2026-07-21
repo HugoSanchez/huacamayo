@@ -46,10 +46,10 @@ describe('Chat HTTP Endpoints', () => {
   });
 
   it('reports composio tool bridge as unauthenticated when no managed session is loaded', async () => {
-    const { status, body } = await fetchJson('/composio/tools/search', {
+    const { status, body } = await fetchJson('/composio/tools/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: 'send email' }),
+      body: JSON.stringify({ toolSlug: 'GMAIL_SEND_EMAIL', arguments: {} }),
     });
     expect(status).toBe(401);
     expect(body.error).toBe('request_failed');
