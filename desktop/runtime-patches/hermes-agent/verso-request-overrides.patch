@@ -1,15 +1,15 @@
 --- a/gateway/platforms/api_server.py
 +++ b/gateway/platforms/api_server.py
-@@ -1026,6 +1026,8 @@
+@@ -1753,6 +1753,8 @@
          tool_start_callback=None,
          tool_complete_callback=None,
          reasoning_callback=None,
 +        reasoning_effort_override: Optional[str] = None,
 +        model_override: Optional[str] = None,
          gateway_session_key: Optional[str] = None,
+         route: Optional[Dict[str, Any]] = None,
      ) -> Any:
-         """
-@@ -1055,7 +1057,20 @@
+@@ -1788,7 +1790,20 @@
  
          runtime_kwargs = _resolve_runtime_agent_kwargs()
          reasoning_config = GatewayRunner._load_reasoning_config()
@@ -29,9 +29,9 @@
 +        else:
 +            model = _resolve_gateway_model()
  
-         user_config = _load_gateway_config()
-         enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))
-@@ -2854,6 +2869,23 @@
+         # When the primary provider's auth fails (expired token / 429 quota
+         # cap), _resolve_runtime_agent_kwargs() falls through to the fallback
+@@ -3825,6 +3840,23 @@
          previous_response_id = body.get("previous_response_id")
          conversation = body.get("conversation")
          store = _coerce_request_bool(body.get("store"), default=True)
@@ -55,7 +55,7 @@
  
          # conversation and previous_response_id are mutually exclusive
          if conversation and previous_response_id:
-@@ -2993,6 +3025,8 @@
+@@ -3967,6 +3999,8 @@
                  tool_start_callback=_on_tool_start,
                  tool_complete_callback=_on_tool_complete,
                  reasoning_callback=_on_reasoning,
@@ -63,17 +63,17 @@
 +                model_override=model_override,
                  agent_ref=agent_ref,
                  gateway_session_key=gateway_session_key,
-             ))
-@@ -3027,6 +3061,8 @@
-                 conversation_history=conversation_history,
-                 ephemeral_system_prompt=instructions,
+                 route=route,
+@@ -3993,6 +4027,8 @@
+                 conversation=conversation,
+                 store=store,
                  session_id=session_id,
 +                reasoning_effort_override=reasoning_effort_override,
 +                model_override=model_override,
                  gateway_session_key=gateway_session_key,
              )
  
-@@ -3600,6 +3636,8 @@
+@@ -4651,6 +4687,8 @@
          tool_start_callback=None,
          tool_complete_callback=None,
          reasoning_callback=None,
@@ -81,13 +81,13 @@
 +        model_override: Optional[str] = None,
          agent_ref: Optional[list] = None,
          gateway_session_key: Optional[str] = None,
-     ) -> tuple:
-@@ -3634,6 +3672,8 @@
-                     tool_start_callback=tool_start_callback,
-                     tool_complete_callback=tool_complete_callback,
-                     reasoning_callback=reasoning_callback,
-+                    reasoning_effort_override=reasoning_effort_override,
-+                    model_override=model_override,
-                     gateway_session_key=gateway_session_key,
-                 )
-                 if agent_ref is not None:
+         route: Optional[Dict[str, Any]] = None,
+@@ -4694,6 +4732,8 @@
+                         tool_start_callback=tool_start_callback,
+                         tool_complete_callback=tool_complete_callback,
+                         reasoning_callback=reasoning_callback,
++                        reasoning_effort_override=reasoning_effort_override,
++                        model_override=model_override,
+                         gateway_session_key=gateway_session_key,
+                         route=route,
+                     )
