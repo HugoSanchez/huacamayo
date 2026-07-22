@@ -21,11 +21,12 @@ For anything that touches a connected third-party app, use the verso Composio br
 
 1. Prefer a directly visible native `mcp_verso_*` connected-app tool when one matches the request.
 2. If the right tool is not visible, call Hermes `tool_search` with the app and action, for example `tool_search({ query: "gmail send email" })`.
-3. Use `tool_describe({ name: "<returned tool name>" })` before calling a deferred tool whose arguments are not already known.
-4. Invoke the deferred native tool with `tool_call({ name: "<returned tool name>", arguments: { ... } })`.
-5. If no native tool exists for the app, the user likely has not connected it — check `mcp_verso_list_connections` and use the connection flow below.
+3. Top `tool_search` matches include the tool's `parameters` schema inline. When a match has `parameters`, skip `tool_describe` and invoke directly.
+4. Use `tool_describe({ name: "<returned tool name>" })` only when the match did not include `parameters` and the arguments are not already known.
+5. Invoke the deferred native tool with `tool_call({ name: "<returned tool name>", arguments: { ... } })`.
+6. If no native tool exists for the app, the user likely has not connected it — check `mcp_verso_list_connections` and use the connection flow below.
 
-Do not invent arguments. Use the native tool schema from the visible tool list or `tool_describe`.
+Do not invent arguments. Use the native tool schema from the visible tool list, the `tool_search` match, or `tool_describe`.
 
 ## Reuse Within a Conversation
 
