@@ -1,14 +1,14 @@
 --- a/gateway/platforms/api_server.py
 +++ b/gateway/platforms/api_server.py
-@@ -1025,6 +1025,7 @@
+@@ -1752,6 +1752,7 @@
          tool_progress_callback=None,
          tool_start_callback=None,
          tool_complete_callback=None,
 +        reasoning_callback=None,
          gateway_session_key: Optional[str] = None,
+         route: Optional[Dict[str, Any]] = None,
      ) -> Any:
-         """
-@@ -1079,6 +1080,7 @@
+@@ -1869,6 +1870,7 @@
              tool_progress_callback=tool_progress_callback,
              tool_start_callback=tool_start_callback,
              tool_complete_callback=tool_complete_callback,
@@ -16,7 +16,7 @@
              session_db=self._ensure_session_db(),
              fallback_model=fallback_model,
              reasoning_config=reasoning_config,
-@@ -2246,6 +2248,8 @@
+@@ -3215,6 +3217,8 @@
          - ``response.output_item.added`` with
            ``item.type == "function_call_output"`` — tool result with
            ``{call_id, output, status}``
@@ -25,10 +25,11 @@
          - ``response.completed`` — terminal event carrying the full
            response object with all output items + usage (same payload
            shape as the non-streaming path for parity)
-@@ -2420,6 +2424,15 @@
+@@ -3389,6 +3393,15 @@
+                     "content_index": 0,
                      "delta": delta_text,
                      "logprobs": [],
-                 })
++                })
 +
 +            async def _emit_reasoning_delta(delta_text: str) -> None:
 +                if not delta_text:
@@ -37,11 +38,10 @@
 +                    "type": "hermes.reasoning.delta",
 +                    "delta": delta_text,
 +                    "item_id": message_item_id,
-+                })
+                 })
  
              async def _emit_tool_started(payload: Dict[str, Any]) -> str:
-                 """Emit response.output_item.added for a function_call.
-@@ -2534,9 +2547,9 @@
+@@ -3503,9 +3516,9 @@
  
                  Plain strings are text deltas — they are batched (50ms)
                  to reduce Open WebUI re-render storms.  Tagged tuples
@@ -54,7 +54,7 @@
                  """
                  nonlocal _batch_timer
                  if isinstance(it, tuple) and len(it) == 2 and isinstance(it[0], str):
-@@ -2548,6 +2561,8 @@
+@@ -3517,6 +3530,8 @@
                          await _emit_tool_started(payload)
                      elif tag == "__tool_completed__":
                          await _emit_tool_completed(payload)
@@ -63,41 +63,39 @@
                  elif isinstance(it, str):
                      # Batch text deltas — append to buffer, flush on timer
                      _batch_buf.append(it)
-@@ -2944,6 +2959,11 @@
+@@ -3918,6 +3933,11 @@
+                 so progress events are currently ignored here.
                  """
                  return
--
--            def _on_tool_start(tool_call_id, function_name, function_args):
 +
 +            def _on_reasoning(delta):
 +                """Queue streamed reasoning for clients that can display it."""
 +                if delta:
 +                    _stream_q.put(("__reasoning_delta__", delta))
-+
-+            def _on_tool_start(tool_call_id, function_name, function_args):
+ 
+             def _on_tool_start(tool_call_id, function_name, function_args):
                  """Queue a started tool for live function_call streaming."""
-                 _stream_q.put(("__tool_started__", {
-@@ -2972,6 +2992,7 @@
+@@ -3946,6 +3966,7 @@
                  tool_progress_callback=_on_tool_progress,
                  tool_start_callback=_on_tool_start,
                  tool_complete_callback=_on_tool_complete,
 +                reasoning_callback=_on_reasoning,
                  agent_ref=agent_ref,
                  gateway_session_key=gateway_session_key,
-             ))
-@@ -3577,6 +3598,7 @@
+                 route=route,
+@@ -4629,6 +4650,7 @@
          tool_progress_callback=None,
          tool_start_callback=None,
          tool_complete_callback=None,
 +        reasoning_callback=None,
          agent_ref: Optional[list] = None,
          gateway_session_key: Optional[str] = None,
-     ) -> tuple:
-@@ -3611,6 +3633,7 @@
-                     tool_progress_callback=tool_progress_callback,
-                     tool_start_callback=tool_start_callback,
-                     tool_complete_callback=tool_complete_callback,
-+                    reasoning_callback=reasoning_callback,
-                     gateway_session_key=gateway_session_key,
-                 )
-                 if agent_ref is not None:
+         route: Optional[Dict[str, Any]] = None,
+@@ -4671,6 +4693,7 @@
+                         tool_progress_callback=tool_progress_callback,
+                         tool_start_callback=tool_start_callback,
+                         tool_complete_callback=tool_complete_callback,
++                        reasoning_callback=reasoning_callback,
+                         gateway_session_key=gateway_session_key,
+                         route=route,
+                     )
