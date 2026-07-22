@@ -178,20 +178,6 @@ export class ComposioBridgeService {
     };
   }
 
-  async searchTools(query: string, toolkits?: string[]): Promise<ComposioBridgeSearchToolView[]> {
-    this.assertConfigured();
-    const normalizedQuery = query.trim();
-    if (!normalizedQuery) throw new ComposioBridgeHttpError(400, 'Missing "query"');
-
-    try {
-      const results = await this.bridgeClient.searchTools(normalizedQuery, toolkits);
-      results.forEach((tool) => this.rememberToolMetadata(tool));
-      return results;
-    } catch (error) {
-      throw mapRemoteBridgeError(error);
-    }
-  }
-
   async listTools(toolkits: string[]): Promise<ComposioBridgeSearchToolView[]> {
     this.assertConfigured();
     const normalizedToolkits = Array.from(new Set(toolkits.map((toolkit) => toolkit.trim()).filter(Boolean)));
