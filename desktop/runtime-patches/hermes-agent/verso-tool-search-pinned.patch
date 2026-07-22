@@ -1,0 +1,96 @@
+--- a/tools/tool_search.py
++++ b/tools/tool_search.py
+@@ -68,6 +68,11 @@
+     threshold_pct: float  # 0..100 — only used when enabled == "auto"
+     search_default_limit: int
+     max_search_limit: int
++    # Tool names that stay in the model-visible tools array even when tool
++    # search activates. A pinned name that matches no registered tool is
++    # inert; pinned tools are excluded from the deferred catalog and from
++    # the auto-mode threshold estimate.
++    pinned: Tuple[str, ...] = ()
+ 
+     @classmethod
+     def from_raw(cls, raw: Any) -> "ToolSearchConfig":
+@@ -111,7 +116,33 @@
+             threshold_pct=threshold_pct,
+             search_default_limit=search_default_limit,
+             max_search_limit=max_search_limit,
++            pinned=_parse_pinned(raw.get("pinned")),
+         )
++
++
++def _parse_pinned(value: Any) -> Tuple[str, ...]:
++    """Parse ``tools.tool_search.pinned`` into a validated name tuple.
++
++    Malformed entries are dropped rather than raising, matching the rest of
++    the config parsing: a typo in user config must not break the agent.
++    Bridge tool names can never be pinned, and the list is capped so a
++    pathological config cannot defeat deferral wholesale.
++    """
++    if not isinstance(value, (list, tuple)):
++        return ()
++    names: List[str] = []
++    seen: set[str] = set()
++    for item in value:
++        if not isinstance(item, str):
++            continue
++        name = item.strip()
++        if not name or name in seen or name in BRIDGE_TOOL_NAMES:
++            continue
++        seen.add(name)
++        names.append(name)
++        if len(names) >= 100:
++            break
++    return tuple(names)
+ 
+ 
+ def _safe_int(value: Any, fallback: int) -> int:
+@@ -186,12 +217,15 @@
+         return False
+ 
+ 
+-def classify_tools(tool_defs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
++def classify_tools(
++    tool_defs: List[Dict[str, Any]],
++    pinned: frozenset[str] = frozenset(),
++) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+     """Split a tool-defs list into (visible, deferrable).
+ 
+     ``visible`` retains every tool that must stay in the model-facing array:
+-    every core tool, plus any tool we can't classify. ``deferrable`` is the
+-    candidate set for catalog entry.
++    every core tool, every pinned tool, plus any tool we can't classify.
++    ``deferrable`` is the candidate set for catalog entry.
+     """
+     visible: List[Dict[str, Any]] = []
+     deferrable: List[Dict[str, Any]] = []
+@@ -202,7 +236,9 @@
+             # Should never happen — bridge tools are added after classification —
+             # but be defensive.
+             continue
+-        if is_deferrable_tool_name(name):
++        if name in pinned:
++            visible.append(td)
++        elif is_deferrable_tool_name(name):
+             deferrable.append(td)
+         else:
+             visible.append(td)
+@@ -551,7 +587,7 @@
+     incoming = [td for td in tool_defs
+                 if (td.get("function") or {}).get("name") not in BRIDGE_TOOL_NAMES]
+ 
+-    visible, deferrable = classify_tools(incoming)
++    visible, deferrable = classify_tools(incoming, pinned=frozenset(config.pinned))
+     if not deferrable:
+         return AssemblyResult(tool_defs=incoming, activated=False)
+ 
+@@ -619,7 +655,7 @@
+     else:
+         limit = max(1, min(config.max_search_limit, _safe_int(raw_limit, config.search_default_limit)))
+ 
+-    _, deferrable = classify_tools(current_tool_defs)
++    _, deferrable = classify_tools(current_tool_defs, pinned=frozenset(config.pinned))
+     catalog = build_catalog(deferrable)
+     hits = search_catalog(catalog, query, limit=limit)
+     return json.dumps({
