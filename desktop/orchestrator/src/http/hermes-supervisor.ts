@@ -859,7 +859,7 @@ export class HermesSupervisor {
       ...toolSearch,
       enabled: 'on',
       // Hot set that skips the tool_search bridge. Honored by the
-      // verso-tool-search-pinned runtime patch; older unpatched Hermes
+      // verso-tool-search runtime patch; older unpatched Hermes
       // builds ignore the unknown key.
       pinned: computePinnedToolNames(this.composioToolsManifestPath, {
         includeMemoryTools: memoryToolsActive,
