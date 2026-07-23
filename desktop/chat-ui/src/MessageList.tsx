@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Brain } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -308,11 +309,16 @@ function AssistantActivity({
 }) {
   const steps = activityStepsWithReasoningFallback(message.steps ?? [], message.reasoning);
   const hasReasoning = steps.some((step) => step.type === 'reasoning');
-  const hasActivity = hasReasoning || steps.length > 0;
-  const hasFinalAnswerStarted = message.content.trim().length > 0;
-  const [expanded, setExpanded] = useState<boolean>(!!message.isStreaming && !hasFinalAnswerStarted);
+  const hasActivity = steps.length > 0;
 
-  // When streaming stops, auto-collapse
+  // The process (thinking + tool calls + interim output) stays open as a live
+  // transcript while the turn streams, then collapses behind a summary header
+  // once it's done — leaving just the final answer below. Collapse is driven
+  // purely by streaming state, never by whether `content` currently holds text.
+  // That's the key: interim outputs land in `content` and then move into the
+  // stream, but because we no longer collapse on "content appeared", the tool
+  // calls don't flip closed and reopen every time the model resumes.
+  const [expanded, setExpanded] = useState<boolean>(false);
   const wasStreaming = useRef<boolean>(!!message.isStreaming);
   useEffect(() => {
     if (wasStreaming.current && !message.isStreaming) {
@@ -321,21 +327,11 @@ function AssistantActivity({
     wasStreaming.current = !!message.isStreaming;
   }, [message.isStreaming]);
 
-  const hadFinalAnswerStarted = useRef<boolean>(hasFinalAnswerStarted);
-  useEffect(() => {
-    if (!hadFinalAnswerStarted.current && hasFinalAnswerStarted) {
-      setExpanded(false);
-    }
-    hadFinalAnswerStarted.current = hasFinalAnswerStarted;
-  }, [hasFinalAnswerStarted]);
-
   if (!hasActivity) return null;
 
   const toolCount = steps.filter(s => s.type === 'tool').length;
-  const msgCount = steps.filter(s => s.type === 'text').length + (hasFinalAnswerStarted ? 1 : 0);
-  const lastReasoningIndex = findLastReasoningIndex(steps);
 
-  if (message.isStreaming && !hasFinalAnswerStarted) {
+  if (message.isStreaming) {
     return (
       <div className="assistant-activity-wrap">
         <div className="assistant-activity-live">
@@ -343,7 +339,6 @@ function AssistantActivity({
             <StepView
               key={i}
               step={step}
-              isActiveReasoning={i === lastReasoningIndex}
               onConnect={onConnect}
               toolkits={toolkits}
             />
@@ -358,18 +353,16 @@ function AssistantActivity({
       <ActivityHeader
         message={message}
         toolCount={toolCount}
-        msgCount={msgCount}
         hasReasoning={hasReasoning}
         expanded={expanded}
         onToggle={() => setExpanded(e => !e)}
       />
-      {expanded && hasActivity && (
+      {expanded && (
         <div className="assistant-activity-details">
           {steps.map((step, i) => (
             <StepView
               key={i}
               step={step}
-              isActiveReasoning={message.isStreaming && i === lastReasoningIndex}
               onConnect={onConnect}
               toolkits={toolkits}
             />
@@ -387,13 +380,6 @@ function activityStepsWithReasoningFallback(
   const text = reasoning?.trim();
   if (!text || steps.some((step) => step.type === 'reasoning')) return steps;
   return [{ type: 'reasoning', text }, ...steps];
-}
-
-function findLastReasoningIndex(steps: ActivityStep[]): number {
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    if (steps[index].type === 'reasoning') return index;
-  }
-  return -1;
 }
 
 function AssistantMessageActions({ message }: { message: ChatMessage }) {
@@ -424,20 +410,19 @@ function ResponseTime({ message }: { message: ChatMessage }) {
 }
 
 function ActivityHeader({
-  message, toolCount, msgCount, hasReasoning, expanded, onToggle,
+  message, toolCount, hasReasoning, expanded, onToggle,
 }: {
   message: ChatMessage;
   toolCount: number;
-  msgCount: number;
   hasReasoning: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const hasActivity = hasReasoning || toolCount > 0 || msgCount > 0;
+  const hasActivity = hasReasoning || toolCount > 0;
   const summary = [
     toolCount ? `${toolCount} tool call${toolCount === 1 ? '' : 's'}` : '',
-    msgCount ? `${msgCount} message${msgCount === 1 ? '' : 's'}` : '',
-  ].filter(Boolean).join(', ') || 'activity';
+    hasReasoning ? 'thinking' : '',
+  ].filter(Boolean).join(' · ') || 'activity';
 
   return (
     <button
@@ -571,32 +556,29 @@ function MessageCheckIcon() {
 
 function StepView({
   step,
-  isActiveReasoning = false,
   onConnect,
   toolkits,
 }: {
   step: ActivityStep;
-  isActiveReasoning?: boolean;
   onConnect: (request: ConnectionRequestView) => void;
   toolkits: Map<string, ToolkitInfo>;
 }) {
   if (step.type === 'text') {
+    // Interim assistant prose the model emits between tool calls. It's a real
+    // output, so render it with the same styling as the final answer — it sits
+    // in the live stream in chronological order, then folds into the collapsed
+    // process once the turn finishes.
+    const body = step.text.trim();
+    if (!body) return null;
     return (
-      <div style={{
-        color: 'var(--text-thinking)',
-        fontSize: '13px',
-        fontStyle: 'italic',
-        lineHeight: 1.5,
-        margin: '2px 0',
-        whiteSpace: 'pre-wrap',
-      }}>
-        {step.text.trim()}
+      <div className="message-content assistant-message-content">
+        <MarkdownContent content={body} />
       </div>
     );
   }
 
   if (step.type === 'reasoning') {
-    return <ReasoningStep text={step.text} isActive={isActiveReasoning} />;
+    return <ThinkingStep text={step.text} />;
   }
 
   // Connection cards are pulled out of `steps` upstream and rendered next to
@@ -612,14 +594,59 @@ function StepView({
   return <ToolStep step={step} toolkits={toolkits} />;
 }
 
-function ReasoningStep({ text, isActive }: { text: string; isActive: boolean }) {
+// Thinking renders as a collapsed chip in the same visual family as a tool
+// call: a brain icon + "Thinking" label that expands to reveal the model's
+// reasoning summary. Keeps the low-signal scratchpad out of the way while still
+// letting the curious peek.
+function ThinkingStep({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const body = normalizeThinking(text);
+  const hasDetails = body.length > 0;
+
   return (
-    <div className={`reasoning-step${isActive ? ' is-active' : ''}`}>
-      <div className="message-content reasoning-markdown">
-        <MarkdownContent content={text} />
-      </div>
+    <div className="tool-step">
+      <button
+        type="button"
+        className="tool-step-row thinking-row"
+        onClick={hasDetails ? () => setExpanded((value) => !value) : undefined}
+        disabled={!hasDetails}
+      >
+        <BrainIcon />
+        <span className="tool-step-name">Thinking</span>
+        {hasDetails && (
+          <svg
+            className="tool-step-chevron"
+            width="9" height="9" viewBox="0 0 9 9"
+            fill="none" stroke="currentColor" strokeWidth="1.5"
+            strokeLinecap="round" strokeLinejoin="round"
+            style={{ transform: expanded ? 'rotate(90deg)' : undefined }}
+            aria-hidden="true"
+          >
+            <polyline points="3,2 6,4.5 3,7" />
+          </svg>
+        )}
+      </button>
+      {expanded && hasDetails && (
+        <div className="tool-step-details">
+          <div className="message-content reasoning-markdown">
+            <MarkdownContent content={body} />
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function BrainIcon() {
+  return <Brain size={13} strokeWidth={1.75} className="tool-step-icon" aria-hidden="true" />;
+}
+
+// Reasoning summaries stream as consecutive parts, each starting with a bold
+// **Title**. Parts frequently arrive with no separator between them
+// ("**A****B**"), which markdown renders as a literal "****" run. Re-insert a
+// paragraph break at each part boundary so every title starts its own line.
+function normalizeThinking(text: string): string {
+  return text.replace(/\*\*\*\*/g, '**\n\n**').trim();
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -1191,13 +1218,14 @@ function truncate(value: string, max: number): string {
 }
 
 function ToolStep({
-  step,
+  step: rawStep,
   toolkits,
 }: {
   step: Extract<ActivityStep, { type: 'tool' }>;
   toolkits: Map<string, ToolkitInfo>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const step = unwrapToolCall(rawStep);
   const composio = parseComposioExecute(step, toolkits);
   const friendlyName = composio ? composio.toolkitName : friendlyToolName(step.name);
   const inputPreview = composio ? composio.actionLabel : previewInput(step.input);
@@ -1259,6 +1287,30 @@ interface ComposioExecuteView {
   toolkitName: string;
   logoUrl: string | null;
   actionLabel: string;
+}
+
+// The agent invokes MCP/composio tools through a `tool_call` wrapper whose real
+// target and arguments live in the payload, e.g.
+//   { name: "tool_call",
+//     input: { name: "mcp_verso_slack_list_unread_channel_messages",
+//              arguments: { channel: "…", limit: 5 } } }
+// Both the live stream and reconstructed history use this shape. Unwrap it to
+// the real tool so the row shows the toolkit logo, friendly name and actual
+// arguments instead of a generic "Tool call".
+function unwrapToolCall(
+  step: Extract<ActivityStep, { type: 'tool' }>,
+): Extract<ActivityStep, { type: 'tool' }> {
+  if (stripNamespace(step.name).toLowerCase() !== 'tool_call') return step;
+  const input = step.input;
+  if (!input || typeof input !== 'object') return step;
+  const inner = input as Record<string, unknown>;
+  const innerName = inner.name;
+  if (typeof innerName !== 'string' || innerName.length === 0) return step;
+  return {
+    ...step,
+    name: innerName,
+    input: 'arguments' in inner ? inner.arguments : input,
+  };
 }
 
 function parseComposioExecute(
