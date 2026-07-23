@@ -64,15 +64,15 @@
                  agent_ref=agent_ref,
                  gateway_session_key=gateway_session_key,
                  route=route,
-@@ -3993,6 +4027,8 @@
-                 conversation=conversation,
-                 store=store,
+@@ -4002,6 +4036,8 @@
+                 conversation_history=conversation_history,
+                 ephemeral_system_prompt=instructions,
                  session_id=session_id,
 +                reasoning_effort_override=reasoning_effort_override,
 +                model_override=model_override,
                  gateway_session_key=gateway_session_key,
+                 route=route,
              )
- 
 @@ -4651,6 +4687,8 @@
          tool_start_callback=None,
          tool_complete_callback=None,
