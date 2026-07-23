@@ -107,17 +107,30 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     manifestPath: hermes.composioToolsManifestPath,
     getActiveToolkitSlugs: () => activeToolkitSlugs(connectionsStore),
   });
+  let composioToolsRefreshQueue = Promise.resolve();
   const refreshComposioToolsManifest = () => {
-    void composioBridge
-      .refreshNativeToolManifest(activeToolkitSlugs(connectionsStore))
+    composioToolsRefreshQueue = composioToolsRefreshQueue
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await composioBridge.refreshNativeToolManifest(activeToolkitSlugs(connectionsStore));
+        } catch (error) {
+          console.warn(
+            '[composio-tools] native manifest refresh failed; writing learned-tools fallback:',
+            error instanceof Error ? error.message : String(error),
+          );
+          composioToolUsage.writeManifest(
+            hermes.composioToolsManifestPath,
+            activeToolkitSlugs(connectionsStore),
+          );
+        }
+
+        await hermes.reloadManagedRuntime();
+      })
       .catch((error) => {
         console.warn(
-          '[composio-tools] native manifest refresh failed; writing learned-tools fallback:',
+          '[composio-tools] managed Hermes reload failed:',
           error instanceof Error ? error.message : String(error),
-        );
-        composioToolUsage.writeManifest(
-          hermes.composioToolsManifestPath,
-          activeToolkitSlugs(connectionsStore),
         );
       });
   };

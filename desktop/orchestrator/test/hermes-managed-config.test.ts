@@ -223,6 +223,48 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.mcp_servers?.gbrain).toBeUndefined();
   });
 
+  it('writes the pinned tool_search hot set from the native tool manifest', () => {
+    mkdirSync(managedHome, { recursive: true });
+    writeFileSync(path.join(managedHome, 'verso-composio-tools.json'), JSON.stringify({
+      version: 1,
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      tools: [
+        {
+          nativeName: 'slack_search_messages',
+          toolSlug: 'SLACK_SEARCH_MESSAGES',
+          toolkitSlug: 'slack',
+          name: 'Search messages',
+          description: null,
+          inputParameters: { type: 'object', properties: {} },
+          origin: 'usage',
+        },
+        {
+          nativeName: 'slack_kick_user',
+          toolSlug: 'SLACK_KICK_USER',
+          toolkitSlug: 'slack',
+          name: 'Kick user',
+          description: null,
+          inputParameters: { type: 'object', properties: {} },
+          origin: 'toolkit',
+        },
+      ],
+    }), 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      tools?: { tool_search?: { enabled?: string; pinned?: string[] } };
+    };
+    expect(parsed.tools?.tool_search?.enabled).toBe('on');
+    const pinned = parsed.tools?.tool_search?.pinned ?? [];
+    expect(pinned).toContain('mcp_verso_search_memory');
+    expect(pinned).toContain('mcp_verso_request_connection');
+    expect(pinned).toContain('mcp_verso_slack_search_messages');
+    expect(pinned).not.toContain('mcp_verso_slack_kick_user');
+  });
+
   it('exposes the full memory tool surface through the verso bridge env by default', () => {
     // Make resolveHermesPython resolve inside the temp template home so the
     // verso bridge block is generated in this test environment.

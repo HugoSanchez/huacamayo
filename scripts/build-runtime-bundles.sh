@@ -41,9 +41,12 @@ PBS_TAG="20260510"
 PYTHON_VERSION="3.11.15"
 
 # NousResearch/hermes-agent commit to snapshot. Pin to a specific SHA so
-# Release builds don't drift with upstream main. Bump intentionally.
+# Release builds don't drift with upstream main. Bump intentionally, and
+# regenerate desktop/runtime-patches/hermes-agent/*.patch against the new
+# ref in the same change — the install step aborts if any patch fails.
+# 3ef6bbd2 = v0.19.0 (2026-07-20).
 HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
-HERMES_REF="2bd1977d8fad185c9b4be47884f7e87f1add0ce3"
+HERMES_REF="3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 
 # Optional extras to install with Hermes. Keep lean — voice/messaging are huge
 # and not needed for the macOS UI flow.
@@ -329,10 +332,20 @@ for arch in "${SUPPORTED_ARCHES[@]}"; do
     rm -rf "${venv_tmp}"
     ${prefix} "${arch_python}" -m venv "${venv_tmp}"
     ${prefix} "${venv_tmp}/bin/pip" install --quiet --upgrade pip
+    # Install hermes-agent from the snapshot wheel BY PATH, not by name.
+    # `--find-links` alone does not pin: PyPI stays enabled and pip happily
+    # resolves "hermes-agent" to a newer PyPI release, silently defeating
+    # HERMES_REF (this shipped 0.19.0 while the pin said 0.17.0). The
+    # PEP 508 direct reference keeps hermes itself from the local wheel
+    # while extras' dependencies still resolve from PyPI.
+    hermes_wheel_file="$(find "${hermes_wheel_tmp}" -name 'hermes_agent-*.whl' -print -quit)"
+    if [ -z "${hermes_wheel_file}" ]; then
+        echo "[bundle] ERROR: no hermes_agent wheel in ${hermes_wheel_tmp}" >&2
+        exit 1
+    fi
     ${prefix} "${venv_tmp}/bin/pip" install \
         --quiet \
-        --find-links "${hermes_wheel_tmp}" \
-        "hermes-agent[${HERMES_EXTRAS}]" \
+        "hermes-agent[${HERMES_EXTRAS}] @ file://${hermes_wheel_file}" \
         "${HERMES_EXTRA_PINS[@]}"
 
     # Copy the venv's site-packages out flat. Use rsync so we preserve perms /

@@ -81,6 +81,7 @@ export class ConnectionsService {
 
   async listConnections(): Promise<ConnectionView[]> {
     try {
+      const previousToolAvailability = toolAvailabilitySignature(this.store.listConnections());
       const remote = await this.bridgeClient.listConnections();
       // Composio's delete is soft + eventually consistent: an account we
       // just disconnected can still come back in the list for a few
@@ -89,7 +90,9 @@ export class ConnectionsService {
       // pop back with an "Active" tag right after the user removes it.
       const filtered = remote.filter((item) => !this.store.isTombstoned(item.connectedAccountId));
       syncRemoteConnectionsIntoStore(this.store, filtered);
-      this.notifyConnectionsChanged();
+      if (previousToolAvailability !== toolAvailabilitySignature(this.store.listConnections())) {
+        this.notifyConnectionsChanged();
+      }
       return mergeConnectionViews(filtered, this.store.listConnections().map(toConnectionView));
     } catch {
       return this.store.listConnections().map(toConnectionView);
@@ -125,7 +128,12 @@ export class ConnectionsService {
     }
 
     try {
+      const previousToolAvailability = toolAvailabilitySignature(this.store.listConnections());
       await this.bridgeClient.deleteConnection(trimmedId);
+      this.store.deleteConnection(trimmedId);
+      if (previousToolAvailability !== toolAvailabilitySignature(this.store.listConnections())) {
+        this.notifyConnectionsChanged();
+      }
     } catch (error) {
       if (!(error instanceof RemoteBridgeHttpError && error.status === 404)) {
         throw mapRemoteBridgeError(error);
@@ -133,19 +141,24 @@ export class ConnectionsService {
       // DELETE is idempotent from the sidebar's point of view. If the
       // backend no longer finds the account for this user, remove any stale
       // local cache row so an old persisted connection cannot keep showing.
+      const previousToolAvailability = toolAvailabilitySignature(this.store.listConnections());
+      this.store.deleteConnection(trimmedId);
+      if (previousToolAvailability !== toolAvailabilitySignature(this.store.listConnections())) {
+        this.notifyConnectionsChanged();
+      }
     }
-
-    this.store.deleteConnection(trimmedId);
-    this.notifyConnectionsChanged();
   }
 
   async requestConnection(toolkitSlug: string, baseUrl: string): Promise<ConnectionRequestView> {
     this.assertConfigured();
 
     try {
+      const previousToolAvailability = toolAvailabilitySignature(this.store.listConnections());
       const request = await this.bridgeClient.requestConnection(toolkitSlug, `${baseUrl}/connections/callback`);
       syncRemoteRequestIntoStore(this.store, request);
-      this.notifyConnectionsChanged();
+      if (previousToolAvailability !== toolAvailabilitySignature(this.store.listConnections())) {
+        this.notifyConnectionsChanged();
+      }
       return request;
     } catch (error) {
       throw mapRemoteBridgeError(error);
@@ -154,6 +167,7 @@ export class ConnectionsService {
 
   async getRequest(requestId: string): Promise<ConnectionRequestView | null> {
     try {
+      const previousToolAvailability = toolAvailabilitySignature(this.store.listConnections());
       const beforeIds = new Set(this.store.listConnections().map((c) => c.connectedAccountId));
       const request = await this.bridgeClient.getRequest(requestId);
       syncRemoteRequestIntoStore(this.store, request);
@@ -162,7 +176,9 @@ export class ConnectionsService {
           this.managedBackend.recordAnalyticsEvent({ eventType: 'connection_added' });
         }
       }
-      this.notifyConnectionsChanged();
+      if (previousToolAvailability !== toolAvailabilitySignature(this.store.listConnections())) {
+        this.notifyConnectionsChanged();
+      }
       return request;
     } catch {
       const cached = this.store.getRequest(requestId);
@@ -339,4 +355,15 @@ function matchesStoredConnectionQuery(connection: ConnectionView, normalizedQuer
     connection.toolkitName.toLowerCase(),
   ];
   return haystacks.some((value) => value.includes(normalizedQuery) || value.includes(compactQuery));
+}
+
+function toolAvailabilitySignature(records: ConnectionRecord[]): string {
+  return records
+    .filter((record) => record.status === 'active')
+    .map((record) => [
+      record.connectedAccountId,
+      record.toolkitSlug,
+    ].join('\t'))
+    .sort()
+    .join('\n');
 }

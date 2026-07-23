@@ -1285,7 +1285,7 @@ export function App() {
 function ChatHeaderScaffold({ title }: { title?: string }) {
   return (
     <div className="chat-header-scaffold">
-      <div className="chat-header-band-top">
+      <div className="chat-header-band-top" data-window-drag>
         {title && <span className="chat-header-title">{title}</span>}
       </div>
       {/* Second band (tabs) is hidden for launch — bring back when tabs ship.

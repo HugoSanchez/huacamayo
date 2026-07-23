@@ -10,7 +10,6 @@
   --text: rgba(255, 255, 255, 0.88);
   --text-dim: rgba(255, 255, 255, 0.52);
   --text-thinking: rgba(255, 255, 255, 0.38);
-  --text-thinking-active: rgba(255, 255, 255, 0.68);
   --accent: #6eb5ff;
   --user-bubble: #2A2D31;
   --user-bubble-text: rgba(255, 255, 255, 0.88);
@@ -374,6 +373,18 @@ textarea {
   flex-shrink: 0;
 }
 
+/* Thinking is secondary to tool calls — render its icon, label and chevron in
+   a lighter, muted tone so it reads as a quiet aside in the stream. */
+.thinking-row .tool-step-icon,
+.thinking-row .tool-step-name,
+.thinking-row .tool-step-chevron {
+  color: var(--text-thinking);
+}
+
+.thinking-row .tool-step-name {
+  font-weight: 400;
+}
+
 .tool-step-preview {
   color: var(--text-dim);
   font-family: 'SF Mono', monospace;
@@ -461,7 +472,6 @@ textarea {
     --text: rgba(0, 0, 0, 0.85);
     --text-dim: rgba(0, 0, 0, 0.52);
     --text-thinking: rgba(0, 0, 0, 0.38);
-    --text-thinking-active: rgba(0, 0, 0, 0.68);
     --accent: #0066cc;
     --user-bubble: #E2E6EB;
     --user-bubble-text: rgba(0, 0, 0, 0.85);
@@ -679,16 +689,16 @@ textarea {
   font-weight: 600;
 }
 
-.reasoning-step {
-  color: var(--text-thinking);
-  font-size: 14px;
-  line-height: 1.5;
-  margin: 0;
-  transition: color 520ms ease, opacity 520ms ease;
+/* Expanded thinking is secondary content — dim it and read it as plain prose,
+   flattening the bold "title" markers the provider emits so we don't get heavy
+   headings inside the reasoning. */
+.message-content.reasoning-markdown {
+  color: var(--text-dim);
+  font-size: 13px;
 }
 
-.reasoning-step.is-active {
-  color: var(--text-thinking-active);
+.message-content.reasoning-markdown strong {
+  font-weight: inherit;
 }
 
 .message-content.reasoning-markdown h1,

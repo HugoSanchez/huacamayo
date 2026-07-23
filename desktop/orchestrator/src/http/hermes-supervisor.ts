@@ -15,6 +15,7 @@ import {
 } from './runtime-bootstrap.ts';
 import { isMemoryEnabled } from './lexical-provider.ts';
 import { applyMemorySoulSection } from './memory-soul.ts';
+import { computePinnedToolNames } from './hermes-pinned-tools.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -386,6 +387,18 @@ export class HermesSupervisor {
 
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
     this.source = 'none';
+  }
+
+  async reloadManagedRuntime(): Promise<void> {
+    if (this.manualMode || !this.launch.command) return;
+    await this.ensureResolvedBaseUrl();
+    if (this.startPromise) {
+      await this.startPromise.catch(() => undefined);
+    }
+    if (!this.isChildRunning()) return;
+
+    await this.shutdown();
+    await this.ensureReady();
   }
 
   private async ensureResolvedBaseUrl(): Promise<void> {
@@ -857,6 +870,12 @@ export class HermesSupervisor {
     tools.tool_search = {
       ...toolSearch,
       enabled: 'on',
+      // Hot set that skips the tool_search bridge. Honored by the
+      // verso-tool-search runtime patch; older unpatched Hermes
+      // builds ignore the unknown key.
+      pinned: computePinnedToolNames(this.composioToolsManifestPath, {
+        includeMemoryTools: memoryToolsActive,
+      }),
     };
 
     // Teach the visible agent that the memory tools ARE its memory —

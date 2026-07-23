@@ -19,7 +19,7 @@ function fixtureConnection(overrides: Partial<ConnectionRecord> = {}): Connectio
   };
 }
 
-function setupService(): { service: ConnectionsService; store: ConnectionsStore } {
+function setupService(onConnectionsChanged: () => void = () => undefined): { service: ConnectionsService; store: ConnectionsStore } {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'verso-connections-service-'));
   const store = new ConnectionsStore(
     path.join(tempDir, 'connections.json'),
@@ -34,7 +34,7 @@ function setupService(): { service: ConnectionsService; store: ConnectionsStore 
     displayName: null,
     receivedAt: new Date().toISOString(),
   });
-  return { service: new ConnectionsService(managedBackend, store), store };
+  return { service: new ConnectionsService(managedBackend, store, onConnectionsChanged), store };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -57,6 +57,70 @@ describe('ConnectionsService', () => {
     await expect(service.listConnections()).resolves.toEqual([]);
 
     expect(store.listConnections()).toEqual([]);
+  });
+
+  it('does not notify for pending connection request polling', async () => {
+    const onConnectionsChanged = vi.fn();
+    const { service, store } = setupService(onConnectionsChanged);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      request: {
+        id: 'req_123',
+        toolkitSlug: 'gmail',
+        toolkitName: 'Gmail',
+        logoUrl: null,
+        status: 'pending',
+        redirectUrl: 'https://composio.example/auth',
+        connectedAccountId: null,
+        errorMessage: null,
+      },
+    }));
+
+    await expect(service.getRequest('req_123')).resolves.toMatchObject({
+      id: 'req_123',
+      status: 'pending',
+      connectedAccountId: null,
+    });
+
+    expect(store.listConnections()).toEqual([]);
+    expect(onConnectionsChanged).not.toHaveBeenCalled();
+  });
+
+  it('notifies when a connection request completes into a new active toolkit', async () => {
+    const onConnectionsChanged = vi.fn();
+    const { service, store } = setupService(onConnectionsChanged);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/v1/analytics/event')) {
+        return jsonResponse({});
+      }
+      return jsonResponse({
+        request: {
+          id: 'req_123',
+          toolkitSlug: 'gmail',
+          toolkitName: 'Gmail',
+          logoUrl: 'https://example.com/gmail.png',
+          status: 'connected',
+          redirectUrl: null,
+          connectedAccountId: 'ca_gmail',
+          errorMessage: null,
+        },
+      });
+    });
+
+    await expect(service.getRequest('req_123')).resolves.toMatchObject({
+      id: 'req_123',
+      status: 'connected',
+      connectedAccountId: 'ca_gmail',
+    });
+
+    expect(store.listConnections()).toEqual([
+      expect.objectContaining({
+        connectedAccountId: 'ca_gmail',
+        toolkitSlug: 'gmail',
+        status: 'active',
+      }),
+    ]);
+    expect(onConnectionsChanged).toHaveBeenCalledTimes(1);
   });
 
   it('treats backend 404 on delete as already disconnected locally', async () => {
