@@ -7,6 +7,16 @@ extension Notification.Name {
 }
 
 private final class FocusableWKWebView: WKWebView {
+    // Rectangles the user can press to drag the window, minus any holes that
+    // must stay clickable. Kept in sync from JS via the `windowDragRegions`
+    // bridge message. Coordinates are top-left CSS points (matching
+    // getBoundingClientRect), which map 1:1 onto this view's AppKit points.
+    // The WKWebView otherwise swallows the mouse events that
+    // `NSWindow.isMovableByWindowBackground` would use, so dragging the window
+    // from web content (e.g. the chat header) needs this explicit handoff.
+    var windowDragRects: [CGRect] = []
+    var windowNoDragRects: [CGRect] = []
+
     override var acceptsFirstResponder: Bool {
         true
     }
@@ -15,7 +25,23 @@ private final class FocusableWKWebView: WKWebView {
         true
     }
 
+    private func isInWindowDragRegion(_ event: NSEvent) -> Bool {
+        guard !windowDragRects.isEmpty else { return false }
+        let local = convert(event.locationInWindow, from: nil)
+        // getBoundingClientRect measures y from the top; AppKit points measure
+        // from the bottom unless the view is flipped. Normalise to top-left.
+        let point = isFlipped ? local : CGPoint(x: local.x, y: bounds.height - local.y)
+        guard windowDragRects.contains(where: { $0.contains(point) }) else { return false }
+        return !windowNoDragRects.contains(where: { $0.contains(point) })
+    }
+
     override func mouseDown(with event: NSEvent) {
+        if isInWindowDragRegion(event) {
+            // Hand the press straight to the window manager so the drag tracks
+            // exactly like a native title bar (and never selects text).
+            window?.performDrag(with: event)
+            return
+        }
         window?.makeFirstResponder(self)
         super.mouseDown(with: event)
     }
@@ -716,6 +742,16 @@ struct ChatWebView: NSViewRepresentable {
                 return
             }
 
+            if type == "windowDragRegions" {
+                // Runs on the main thread (WKScriptMessageHandler callback), so
+                // it's safe to mutate the view's drag rects directly.
+                if let webView = webView as? FocusableWKWebView {
+                    webView.windowDragRects = Coordinator.parseRects(body["drag"])
+                    webView.windowNoDragRects = Coordinator.parseRects(body["noDrag"])
+                }
+                return
+            }
+
             if type == "notifyResponseReady" {
                 DispatchQueue.main.async {
                     AppDelegate.shared?.notifyResponseReady()
@@ -733,6 +769,21 @@ struct ChatWebView: NSViewRepresentable {
                     onShellAction?(action)
                 }
                 return
+            }
+        }
+
+        /// Decodes an array of `{x, y, width, height}` objects (JS numbers
+        /// arrive as `NSNumber`) into `CGRect`s. Malformed entries are skipped.
+        static func parseRects(_ raw: Any?) -> [CGRect] {
+            guard let array = raw as? [[String: Any]] else { return [] }
+            return array.compactMap { dict in
+                guard let x = (dict["x"] as? NSNumber)?.doubleValue,
+                      let y = (dict["y"] as? NSNumber)?.doubleValue,
+                      let width = (dict["width"] as? NSNumber)?.doubleValue,
+                      let height = (dict["height"] as? NSNumber)?.doubleValue else {
+                    return nil
+                }
+                return CGRect(x: x, y: y, width: width, height: height)
             }
         }
 
