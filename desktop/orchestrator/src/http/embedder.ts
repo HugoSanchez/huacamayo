@@ -127,6 +127,14 @@ export class LocalEmbedder implements EmbedderLike {
     return this.embed(texts.map((text) => `passage: ${text}`));
   }
 
+  /**
+   * Embed texts exactly as given, without e5 prefixes. For TEI-compatible
+   * `/embed` HTTP callers, which add their own `query: `/`passage: ` prefixes.
+   */
+  embedRaw(texts: string[]): Promise<Float32Array[]> {
+    return this.embed(texts);
+  }
+
   private async embed(texts: string[]): Promise<Float32Array[]> {
     if (!this.extractor) {
       throw new Error(`Embedder is not ready (state: ${this.state})`);

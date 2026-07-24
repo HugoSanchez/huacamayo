@@ -95,6 +95,8 @@ export class SourceIngestionScheduler {
       runIngestion?: IngestionRunner;
       enabled?: () => boolean;
       lookbackMs?: number;
+      /** Per-source re-check cadence once caught up. Defaults to the local-politeness 2h; headless deployments may run tighter. */
+      sourceIntervalMs?: number;
     } = {},
   ) {
     this.store = store;
@@ -116,9 +118,10 @@ export class SourceIngestionScheduler {
     // enabled. Every source is single-stream (one watermark per source). Also
     // reconcile the interval so rows created by an earlier build adopt the
     // current cadence (ensureIngestionSource won't overwrite an existing row).
+    const sourceIntervalMs = opts.sourceIntervalMs ?? DEFAULT_SOURCE_INTERVAL_MS;
     for (const adapter of adapters) {
-      this.store.ensureIngestionSource(adapter.source, adapter.defaultStream, DEFAULT_SOURCE_INTERVAL_MS);
-      this.store.setSourceInterval(adapter.source, adapter.defaultStream, DEFAULT_SOURCE_INTERVAL_MS);
+      this.store.ensureIngestionSource(adapter.source, adapter.defaultStream, sourceIntervalMs);
+      this.store.setSourceInterval(adapter.source, adapter.defaultStream, sourceIntervalMs);
     }
   }
 
