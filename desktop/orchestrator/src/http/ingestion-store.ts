@@ -358,6 +358,30 @@ export class IngestionStore {
     return Number(row?.n ?? 0);
   }
 
+  /** Test/support cleanup: disable a source, clear its cursor, and wipe its item ledger. */
+  resetSourceData(source: string, now = new Date()): { source: string; itemRowsDeleted: number; stateRowsReset: number } {
+    const nowIso = now.toISOString();
+    const itemResult = this.db.prepare('DELETE FROM ingestion_items WHERE source = ?').run(source);
+    const stateResult = this.db.prepare(`
+      UPDATE ingestion_state
+      SET enabled = 0,
+          status = 'idle',
+          cursor = NULL,
+          next_due_at = NULL,
+          running_started_at = NULL,
+          last_completed_at = NULL,
+          last_error = NULL,
+          fail_count = 0,
+          updated_at = ?
+      WHERE source = ?
+    `).run(nowIso, source);
+    return {
+      source,
+      itemRowsDeleted: Number(itemResult.changes),
+      stateRowsReset: Number(stateResult.changes),
+    };
+  }
+
   getConfig(key: string): string | null {
     const row = this.db.prepare(`SELECT value FROM ingestion_config WHERE key = ?`).get(key) as { value: string } | undefined;
     return row ? row.value : null;

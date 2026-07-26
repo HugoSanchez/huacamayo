@@ -1,5 +1,6 @@
 import { json, route, type Route } from './router.ts';
 import type { SourceIngestionScheduler } from './source-ingestion.ts';
+import type { MemoryProvider } from './memory-provider.ts';
 
 /**
  * Settings → Ingestion routes. These manage per-source state and work
@@ -7,7 +8,7 @@ import type { SourceIngestionScheduler } from './source-ingestion.ts';
  * whether the background loop runs) — so the UI can list and toggle sources
  * even while the feature is globally gated.
  */
-export function buildIngestionRoutes(scheduler: SourceIngestionScheduler): Route[] {
+export function buildIngestionRoutes(scheduler: SourceIngestionScheduler, memoryProvider?: MemoryProvider): Route[] {
   return [
     route('GET', '/ingestion/sources', async (_req, res) => {
       json(res, 200, { sources: scheduler.listSources() });
@@ -30,6 +31,27 @@ export function buildIngestionRoutes(scheduler: SourceIngestionScheduler): Route
 
       scheduler.setSourceEnabled(params.slug, next);
       json(res, 200, { source: scheduler.getSourceView(params.slug) });
+    }),
+
+    route('POST', '/ingestion/sources/:slug/reset', async (_req, res, params, body) => {
+      const current = scheduler.getSourceView(params.slug);
+      if (!current) {
+        return json(res, 404, { error: 'not_found', message: `Unknown ingestion source: ${params.slug}` });
+      }
+
+      const confirm = (body as { confirm?: unknown } | null)?.confirm;
+      if (confirm !== 'delete-source') {
+        return json(res, 400, {
+          error: 'bad_request',
+          message: 'Set confirm to "delete-source" to reset ingestion state and delete passive memory documents for this source.',
+        });
+      }
+
+      const ingestion = scheduler.resetSourceData(params.slug);
+      const memory = memoryProvider?.deleteSourceDocuments
+        ? await memoryProvider.deleteSourceDocuments(params.slug)
+        : null;
+      json(res, 200, { ingestion, memory });
     }),
   ];
 }
