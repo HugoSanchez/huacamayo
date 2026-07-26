@@ -74,7 +74,7 @@
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "VERSO_BUNDLE_VERSION"
-            value = "dev-supermemory"
+            value = "dev"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>

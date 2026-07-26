@@ -3,12 +3,12 @@
  * It teaches the visible agent that the memory tools ARE its memory — without
  * it the model pattern-matches "what do you know about X" to web search.
  *
- * The markers keep the historical `gbrain` name on purpose: they are what
- * lets existing installs swap section text cleanly in place. Don't rename.
+ * The markers let existing installs swap section text cleanly in place, so
+ * don't rename them once shipped.
  */
 
-const MEMORY_SOUL_START = '<!-- verso:gbrain-memory:start -->';
-const MEMORY_SOUL_END = '<!-- verso:gbrain-memory:end -->';
+const MEMORY_SOUL_START = '<!-- verso:memory:start -->';
+const MEMORY_SOUL_END = '<!-- verso:memory:end -->';
 
 const MEMORY_SOUL_SECTION = [
   '## Your memory',
