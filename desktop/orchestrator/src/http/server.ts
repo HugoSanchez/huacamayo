@@ -14,6 +14,7 @@ import { IngestionStore } from './ingestion-store.ts';
 import { GdriveSource } from './gdrive-source.ts';
 import { GmailSource } from './gmail-source.ts';
 import { GranolaSource } from './granola-source.ts';
+import { ClickupSource } from './clickup-source.ts';
 import { SlackSource } from './slack-source.ts';
 import { ComposioSlackUserDirectory } from './slack-users.ts';
 import { ComposioSlackConversationDirectory } from './slack-conversations.ts';
@@ -138,6 +139,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
         conversationDirectory: new ComposioSlackConversationDirectory(composioBridge),
       }),
       new GdriveSource(composioBridge),
+      new ClickupSource(composioBridge),
     ],
     {
       extractionGate,
@@ -182,7 +184,7 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
       },
     }),
     ...buildConnectionsRoutes(connections),
-    ...buildIngestionRoutes(sourceIngestion),
+    ...buildIngestionRoutes(sourceIngestion, memoryProvider),
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),

@@ -497,6 +497,27 @@ describe('LexicalMemoryProvider merge-on-upsert (grouped sources)', () => {
     const page = await provider.getPage('doc:1');
     expect(page?.content).toBe('v2');
   });
+
+  it('deletes passive documents for one source without touching other sources or pages', async () => {
+    await provider.putPage('people/ada', '# Ada');
+    await provider.ingestSourceBatch({
+      source: 'clickup',
+      stream: '',
+      items: [{ sourceRef: 'comment-1', content: 'private ClickUp nuance' }],
+    });
+    await provider.ingestSourceBatch({
+      source: 'slack',
+      stream: '',
+      items: [{ sourceRef: 'msg-1', content: 'Slack context' }],
+    });
+
+    const result = await provider.deleteSourceDocuments('clickup');
+
+    expect(result).toEqual({ source: 'clickup', documentsDeleted: 1 });
+    expect((await provider.search('private ClickUp nuance', 5))).toHaveLength(0);
+    expect((await provider.search('Slack context', 5))).toHaveLength(1);
+    expect(await provider.getPage('people/ada')).toMatchObject({ slug: 'people/ada' });
+  });
 });
 
 describe('isChatCaptureEnabled', () => {

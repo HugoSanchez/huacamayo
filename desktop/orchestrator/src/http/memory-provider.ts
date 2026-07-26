@@ -66,6 +66,9 @@ export interface MemoryProvider {
     stream: string;
     items: Array<{ sourceRef: string; occurredAt?: string; title?: string; content: string; merge?: boolean }>;
   }): Promise<void>;
+
+  /** Delete passive documents for one connected source. Curated pages are never affected. */
+  deleteSourceDocuments?(source: string): Promise<{ source: string; documentsDeleted: number }>;
 }
 
 export interface MemoryWriteProvider extends MemoryProvider {

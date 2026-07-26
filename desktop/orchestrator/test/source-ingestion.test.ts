@@ -181,6 +181,21 @@ describe('SourceIngestionScheduler', () => {
     expect(s.nextDueAt).toBe(at(MIN + 120 * MIN).toISOString());
   });
 
+  it('defers unknown source rows without recording a failure', async () => {
+    const { store, adapter, runs, scheduler } = setup({
+      behavior: () => ({ items: [item('m1', 100)], nextCursor: '100', hasMore: false }),
+    });
+    store.enableSource('clickup', '', { seedCursor: '0', intervalMs: 2 * 60 * 60 * 1000 }, t0);
+
+    await scheduler.tick(at(MIN));
+
+    expect(adapter.calls).toBe(0);
+    expect(runs).toHaveLength(0);
+    const s = store.getSource('clickup', '')!;
+    expect(s).toMatchObject({ status: 'idle', cursor: '0', failCount: 0, lastError: null });
+    expect(s.nextDueAt).toBe(at(MIN + 120 * MIN).toISOString());
+  });
+
   it('backs off on a fetch error without advancing the cursor', async () => {
     const { store, runs, scheduler } = setup({
       behavior: () => { throw new Error('rate limited'); },

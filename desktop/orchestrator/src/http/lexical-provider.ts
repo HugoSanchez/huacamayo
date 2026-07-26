@@ -490,6 +490,17 @@ export class LexicalMemoryProvider implements MemoryWriteProvider {
     }
   }
 
+  async deleteSourceDocuments(source: string): Promise<{ source: string; documentsDeleted: number }> {
+    const cleanSource = source.trim();
+    if (!cleanSource) throw new Error('source is required');
+    const db = this.requireDb();
+    const rows = db.prepare('SELECT id FROM documents WHERE source = ?').all(cleanSource) as Array<{ id: number }>;
+    const deleteEmbedding = db.prepare("DELETE FROM embeddings WHERE kind = 'doc' AND ref = ?");
+    for (const row of rows) deleteEmbedding.run(String(row.id));
+    const result = db.prepare('DELETE FROM documents WHERE source = ?').run(cleanSource);
+    return { source: cleanSource, documentsDeleted: Number(result.changes) };
+  }
+
   private upsertDocument(doc: {
     source: string;
     stream: string | null;

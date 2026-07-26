@@ -183,6 +183,20 @@ export class SourceIngestionScheduler {
     return adapter ? this.viewForAdapter(adapter) : null;
   }
 
+  resetSourceData(source: string, now = new Date()): {
+    source: string;
+    itemRowsDeleted: number;
+    stateRowsReset: number;
+    sourceView: IngestionSourceView | null;
+  } | null {
+    const adapter = this.adapters.get(source);
+    if (!adapter) return null;
+    const result = this.store.resetSourceData(source, now);
+    this.store.ensureIngestionSource(adapter.source, adapter.defaultStream, DEFAULT_SOURCE_INTERVAL_MS, now);
+    this.store.setSourceInterval(adapter.source, adapter.defaultStream, DEFAULT_SOURCE_INTERVAL_MS, now);
+    return { ...result, sourceView: this.getSourceView(source) };
+  }
+
   private viewForAdapter(adapter: SourceAdapter): IngestionSourceView {
     const state = this.store.getSource(adapter.source, adapter.defaultStream)
       ?? this.store.ensureIngestionSource(adapter.source, adapter.defaultStream);
@@ -233,7 +247,11 @@ export class SourceIngestionScheduler {
 
       const adapter = this.adapters.get(claim.source);
       if (!adapter) {
-        this.store.failIngestion(claim.source, claim.stream, `No adapter registered for source "${claim.source}".`, this.backoffAt(now, claim.failCount), now);
+        // Older sidecars can share the same ingestion DB with a newer build
+        // that registered additional sources. Treat those rows like inactive
+        // connections: leave their cursor intact and try again later instead
+        // of poisoning the source with a failure the newer build then shows.
+        this.store.deferIngestion(claim.source, claim.stream, this.intervalAt(now, claim.intervalMs), now);
         return;
       }
 
