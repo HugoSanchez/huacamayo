@@ -3,6 +3,15 @@
     <channel>
         <title>verso</title>
         <item>
+            <title>1.0.15</title>
+            <pubDate>Sun, 26 Jul 2026 20:28:33 +0200</pubDate>
+            <sparkle:version>16</sparkle:version>
+            <sparkle:shortVersionString>1.0.15</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.15/verso-1.0.15.dmg" length="303323119" type="application/octet-stream" sparkle:edSignature="5jA/1Tq7xW7NcKpgqgg3iSIdCmW2SNA2RiV6vk+inchstb1RgmuQCiy+3UDSxOF8Cck+cP9JGVjgvAQqTQhGBg=="/>
+        </item>
+        <item>
             <title>1.0.14</title>
             <pubDate>Wed, 08 Jul 2026 10:12:00 +0200</pubDate>
             <sparkle:version>15</sparkle:version>
