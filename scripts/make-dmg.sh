@@ -63,6 +63,38 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${REPO_ROOT}/dist"
 DMG_PATH="${DIST_DIR}/verso-${VERSION}.dmg"
 
+# ── Smoke gate ──────────────────────────────────────────────────────────────
+# Refuse to package an .app whose embedded Hermes bundle never passed
+# smoke-test-hermes-bundle.sh. The venv stage's .stamp is copied into the
+# .app by the Bundle Runtime Components phase; the smoke test writes a
+# .smoke-pass marker (same content) next to the repo bundle's stamp when a
+# streaming /v1/responses answers 200 + SSE. A stamp with no matching pass
+# means these exact bytes were never booted — the hole 1.0.15 shipped
+# through. Accept the marker from inside the .app (smoke ran before the
+# build embedded it) or from the repo bundle (smoke ran after).
+APP_STAMP="${APP_PATH}/Contents/Resources/site-packages/arm64/.stamp"
+if [ ! -f "${APP_STAMP}" ]; then
+    echo "error: ${APP_STAMP} missing — was this .app built with the Bundle Runtime Components phase?" >&2
+    exit 1
+fi
+smoke_ok=false
+for marker in \
+    "${APP_PATH}/Contents/Resources/site-packages/arm64/.smoke-pass" \
+    "${REPO_ROOT}/desktop/runtime-bundles/site-packages/arm64/.smoke-pass"; do
+    if [ -f "${marker}" ] && [ "$(cat "${marker}")" = "$(cat "${APP_STAMP}")" ]; then
+        smoke_ok=true
+        break
+    fi
+done
+if [ "${smoke_ok}" != "true" ]; then
+    echo "error: no smoke pass recorded for the Hermes bundle inside this .app." >&2
+    echo "       Run ./scripts/smoke-test-hermes-bundle.sh (it must PASS) and retry." >&2
+    echo "       If the repo bundle was rebuilt since this .app was built, rebuild the" >&2
+    echo "       Release .app too — the packaged bytes must be the smoke-tested bytes." >&2
+    exit 1
+fi
+echo "[make-dmg] smoke gate OK — embedded bundle has a matching smoke pass"
+
 mkdir -p "${DIST_DIR}"
 rm -f "${DMG_PATH}"
 

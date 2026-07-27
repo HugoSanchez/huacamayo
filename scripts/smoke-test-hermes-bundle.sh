@@ -123,3 +123,14 @@ fi
 terminal="$(grep -Eo "^event: response\.(completed|failed)" "${response_file}" | tail -1)"
 echo "[smoke] PASS: HTTP 200, SSE stream terminated with ${terminal#event: }"
 echo "[smoke] (response.failed is expected without model credentials — the handler is healthy either way)"
+
+# Record the pass, keyed to the exact site-packages build we just validated.
+# The marker is a copy of the venv stage's .stamp; a rebuild wipes the arch
+# dir (marker included), so a stale pass can never vouch for new bytes.
+# make-dmg.sh refuses to package an .app whose embedded stamp has no
+# matching smoke pass.
+stamp_file="${BUNDLE_DIR}/site-packages/${ARCH}/.stamp"
+if [ -f "${stamp_file}" ]; then
+    cp "${stamp_file}" "${BUNDLE_DIR}/site-packages/${ARCH}/.smoke-pass"
+    echo "[smoke] recorded pass marker for bundle stamp"
+fi

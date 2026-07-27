@@ -468,3 +468,19 @@ echo "node=${NODE_VERSION} python=${PYTHON_VERSION} hermes=${HERMES_REF} extras=
 
 bundle_size=$(du -sh "${BUNDLE_DIR}" | cut -f1)
 echo "[bundle] done — desktop/runtime-bundles/ is ${bundle_size}"
+
+# ── Smoke gate ──────────────────────────────────────────────────────────────
+# Boot the bundle we just built and require a streaming /v1/responses to
+# answer 200 + SSE. "Patches apply + byte-compile" misses runtime breakage
+# (see the 1.0.15 every-chat-500s incident); this catches it before anything
+# gets packaged. Runs even when the venv stage no-oped — it's ~30s and also
+# re-validates a cached bundle after an interrupted earlier run.
+#
+# Opt out with VERSO_SKIP_BUNDLE_SMOKE=1 (e.g. offline) — but make-dmg.sh
+# refuses to package an .app whose bundle has no matching smoke pass, so
+# the skip only defers the check, it can't ship around it.
+if [ "${VERSO_SKIP_BUNDLE_SMOKE:-0}" = "1" ]; then
+    echo "[bundle] WARNING: skipping bundle smoke test (VERSO_SKIP_BUNDLE_SMOKE=1)"
+else
+    "${SCRIPT_DIR}/smoke-test-hermes-bundle.sh"
+fi
