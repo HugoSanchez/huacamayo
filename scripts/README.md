@@ -40,12 +40,14 @@ password.
 
 ```bash
 # 1) Rebuild the runtime bundle if Node/Python/Hermes/deps changed.
+#    Ends with the Hermes smoke gate: boots the bundle and requires a
+#    streaming /v1/responses to answer 200 + SSE (catches mis-applied
+#    runtime patches that survive "applies cleanly + byte-compiles" — see
+#    the 1.0.15 every-chat-500s incident). A pass writes a .smoke-pass
+#    marker that make-dmg.sh checks; there is no shipping around a failed
+#    or skipped smoke test. Re-run standalone any time:
+#    ./scripts/smoke-test-hermes-bundle.sh
 ./scripts/build-runtime-bundles.sh
-
-# 1b) Smoke-test the bundled Hermes gateway (catches mis-applied runtime
-#     patches that survive "applies cleanly + byte-compiles" — see the
-#     1.0.15 every-chat-500s incident). No credentials needed, ~30s.
-./scripts/smoke-test-hermes-bundle.sh
 
 # 2) Build the signed Release .app.
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
@@ -72,10 +74,16 @@ even offline.
 | Script | When it runs | What it does |
 |---|---|---|
 | `build-runtime-bundles.sh` | Manually, after deps or pins change | Populates `desktop/runtime-bundles/` with universal Node, both-arch Python, Hermes snapshot, pre-downloaded wheels, default configs |
-| `smoke-test-hermes-bundle.sh` | Manually, after every bundle rebuild | Boots the bundled gateway with a throwaway home and asserts a streaming `/v1/responses` returns 200 + SSE (no model creds needed) |
+| `smoke-test-hermes-bundle.sh` | Automatically at the end of every bundle build (or manually) | Boots the bundled gateway with a throwaway home, asserts a streaming `/v1/responses` returns 200 + SSE (no model creds needed), records a `.smoke-pass` marker keyed to the bundle stamp |
 | `copy-runtime-bundles.sh` | Xcode Run Script phase (Release only) | `rsync desktop/runtime-bundles/* verso.app/Contents/Resources/` |
 | `sign-bundle-binaries.sh` | Xcode Run Script phase (Release only) | Signs every Mach-O under `Resources/` with Developer ID + hardened runtime |
 | `notarize-app.sh` | Manually, after Release build | Ditto-zips → submits to Apple → staples ticket |
+
+CI (`.github/workflows/ci.yml`) runs on every PR: the orchestrator vitest
+suite on macOS, plus a Linux job that installs Hermes at the pinned ref with
+all runtime patches applied and runs the same boot-and-stream smoke check —
+so a mis-anchored patch fails at PR time, months before it can reach a
+release build.
 
 ## Smoke-testing the signed bundle
 
