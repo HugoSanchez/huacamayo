@@ -42,6 +42,11 @@ password.
 # 1) Rebuild the runtime bundle if Node/Python/Hermes/deps changed.
 ./scripts/build-runtime-bundles.sh
 
+# 1b) Smoke-test the bundled Hermes gateway (catches mis-applied runtime
+#     patches that survive "applies cleanly + byte-compiles" — see the
+#     1.0.15 every-chat-500s incident). No credentials needed, ~30s.
+./scripts/smoke-test-hermes-bundle.sh
+
 # 2) Build the signed Release .app.
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -project verso.xcodeproj -scheme verso -configuration Release build
@@ -67,6 +72,7 @@ even offline.
 | Script | When it runs | What it does |
 |---|---|---|
 | `build-runtime-bundles.sh` | Manually, after deps or pins change | Populates `desktop/runtime-bundles/` with universal Node, both-arch Python, Hermes snapshot, pre-downloaded wheels, default configs |
+| `smoke-test-hermes-bundle.sh` | Manually, after every bundle rebuild | Boots the bundled gateway with a throwaway home and asserts a streaming `/v1/responses` returns 200 + SSE (no model creds needed) |
 | `copy-runtime-bundles.sh` | Xcode Run Script phase (Release only) | `rsync desktop/runtime-bundles/* verso.app/Contents/Resources/` |
 | `sign-bundle-binaries.sh` | Xcode Run Script phase (Release only) | Signs every Mach-O under `Resources/` with Developer ID + hardened runtime |
 | `notarize-app.sh` | Manually, after Release build | Ditto-zips → submits to Apple → staples ticket |
