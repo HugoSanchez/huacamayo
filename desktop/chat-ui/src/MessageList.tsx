@@ -15,6 +15,7 @@ import {
 } from './chat';
 import { useIsSystemAsleep } from './useSystemSleep';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
+import { toolStepPreview } from './tool-preview';
 
 interface DraftOverlayItem {
   step: Extract<ActivityStep, { type: 'tool' }>;
@@ -601,6 +602,10 @@ function StepView({
     return <ReasoningStep text={step.text} isActive={isActiveReasoning} liveTone={liveTone} />;
   }
 
+  if (step.type === 'status') {
+    return <StatusStep step={step} />;
+  }
+
   // Connection cards are pulled out of `steps` upstream and rendered next to
   // the assistant's response, not inside the activity collapsible. Anything
   // still tagged with a connection here is unexpected — fall through to the
@@ -646,6 +651,26 @@ function ReasoningStep({
       <div className="message-content reasoning-markdown activity-message-markdown">
         <MarkdownContent content={text} />
       </div>
+    </div>
+  );
+}
+
+function StatusStep({ step }: { step: Extract<ActivityStep, { type: 'status' }> }) {
+  const suffix = step.source === 'cold_create'
+    ? 'cold start'
+    : step.source === 'reused' || step.source === 'warm_pool'
+      ? 'warm'
+      : '';
+  const timing = typeof step.durationMs === 'number' && step.durationMs > 0
+    ? formatElapsed(step.durationMs)
+    : '';
+  const meta = [suffix, timing].filter(Boolean).join(' · ');
+
+  return (
+    <div className="activity-status-step">
+      <span className="activity-status-spinner" aria-hidden="true" />
+      <span className="activity-status-label">{step.label}</span>
+      {meta && <span className="activity-status-meta">{meta}</span>}
     </div>
   );
 }
@@ -1242,11 +1267,13 @@ function ToolStep({
 }) {
   const [expanded, setExpanded] = useState(false);
   const composio = parseComposioExecute(step, toolkits);
-  const friendlyName = composio ? composio.toolkitName : friendlyToolName(step.name);
-  const inputPreview = composio ? composio.actionLabel : previewInput(step.input);
+  const friendlyName = step.label ?? (composio ? composio.toolkitName : friendlyToolName(step.name));
+  const inputPreview = step.summary ?? (step.label ? '' : composio ? composio.actionLabel : toolStepPreview(step));
   const hasInput = step.input != null && step.input !== '';
   const hasResult = typeof step.result === 'string' && step.result.length > 0;
-  const hasDetails = hasInput || hasResult;
+  const hasDetail = step.detail != null && step.detail !== '' && step.detail !== step.input;
+  const hasDetails = hasInput || hasDetail || hasResult;
+  const status = step.status ?? (hasResult ? 'ok' : 'running');
 
   return (
     <div className="tool-step">
@@ -1256,7 +1283,11 @@ function ToolStep({
         onClick={hasDetails ? () => setExpanded((value) => !value) : undefined}
         disabled={!hasDetails}
       >
-        {composio ? (
+        {step.icon?.type === 'url' ? (
+          <ToolkitMark name={step.icon.fallback} logoUrl={step.icon.url} />
+        ) : step.icon?.type === 'glyph' ? (
+          <ToolIcon kind={iconKindFromGlyph(step.icon.name)} />
+        ) : composio ? (
           <ToolkitMark name={composio.toolkitName} logoUrl={composio.logoUrl} />
         ) : (
           <ToolIcon kind={iconForTool(step.name)} />
@@ -1265,6 +1296,7 @@ function ToolStep({
         {inputPreview && !expanded && (
           <span className="tool-step-preview">{inputPreview}</span>
         )}
+        <ToolStatusIcon status={status} />
         {hasDetails && (
           <svg
             className="tool-step-chevron"
@@ -1284,6 +1316,12 @@ function ToolStep({
             <pre className="tool-step-payload">
               <span className="tool-step-payload-label">Input</span>
               {prettyValue(step.input)}
+            </pre>
+          )}
+          {hasDetail && (
+            <pre className="tool-step-payload">
+              <span className="tool-step-payload-label">Detail</span>
+              {prettyValue(step.detail)}
             </pre>
           )}
           {hasResult && (
@@ -1395,7 +1433,7 @@ function ToolkitMark({ name, logoUrl }: { name: string; logoUrl: string | null }
   );
 }
 
-type ToolIconKind = 'search' | 'terminal' | 'pencil' | 'trash' | 'link' | 'fetch' | 'dot';
+type ToolIconKind = 'search' | 'terminal' | 'pencil' | 'trash' | 'link' | 'fetch' | 'dot' | 'memory' | 'file' | 'git' | 'globe';
 
 function ToolIcon({ kind }: { kind: ToolIconKind }) {
   return (
@@ -1451,8 +1489,62 @@ function ToolIcon({ kind }: { kind: ToolIconKind }) {
       {kind === 'dot' && (
         <circle cx="6.5" cy="6.5" r="1.25" fill="currentColor" />
       )}
+      {kind === 'memory' && (
+        <>
+          <path d="M4 2.5 C2.7 2.5 2 3.5 2 4.6 C2 5.3 2.3 5.8 2.8 6.1 C2.3 6.5 2 7 2 7.7 C2 8.8 2.8 10 4.1 10 C4.8 10 5.4 9.7 6 9.1 L6 3.3 C5.5 2.8 4.8 2.5 4 2.5 Z" />
+          <path d="M9 2.5 C10.3 2.5 11 3.5 11 4.6 C11 5.3 10.7 5.8 10.2 6.1 C10.7 6.5 11 7 11 7.7 C11 8.8 10.2 10 8.9 10 C8.2 10 7.6 9.7 7 9.1 L7 3.3 C7.5 2.8 8.2 2.5 9 2.5 Z" />
+        </>
+      )}
+      {kind === 'file' && (
+        <>
+          <path d="M3.5 1.8 H7.8 L10 4 V11.2 H3.5 Z" />
+          <path d="M7.8 1.8 V4 H10" />
+        </>
+      )}
+      {kind === 'git' && (
+        <>
+          <circle cx="3.5" cy="3.5" r="1.2" />
+          <circle cx="9.5" cy="3.5" r="1.2" />
+          <circle cx="6.5" cy="9.5" r="1.2" />
+          <path d="M4.6 4.1 L5.9 5.4 C6.3 5.8 6.5 6.3 6.5 6.9 V8.2" />
+          <path d="M8.4 4.1 L7.1 5.4" />
+        </>
+      )}
+      {kind === 'globe' && (
+        <>
+          <circle cx="6.5" cy="6.5" r="4.7" />
+          <path d="M2 6.5 H11" />
+          <path d="M6.5 1.8 C8 3.1 8.7 4.7 8.7 6.5 C8.7 8.3 8 9.9 6.5 11.2 C5 9.9 4.3 8.3 4.3 6.5 C4.3 4.7 5 3.1 6.5 1.8 Z" />
+        </>
+      )}
     </svg>
   );
+}
+
+function ToolStatusIcon({ status }: { status: 'running' | 'ok' | 'error' }) {
+  if (status === 'running') return <span className="tool-step-spinner" aria-hidden="true" />;
+  return (
+    <svg
+      className={`tool-step-status is-${status}`}
+      width="13" height="13" viewBox="0 0 13 13"
+      fill="none" stroke="currentColor" strokeWidth="1.7"
+      strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {status === 'ok' ? <polyline points="2.5,6.8 5.3,9.4 10.5,3.6" /> : (
+        <>
+          <line x1="3.5" y1="3.5" x2="9.5" y2="9.5" />
+          <line x1="9.5" y1="3.5" x2="3.5" y2="9.5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function iconKindFromGlyph(name: string): ToolIconKind {
+  if (name === 'memory' || name === 'file' || name === 'git' || name === 'globe') return name;
+  if (name === 'search' || name === 'pencil' || name === 'terminal') return name;
+  return 'terminal';
 }
 
 const SEARCH_VERBS = new Set(['search', 'find', 'list', 'get', 'read', 'look', 'lookup', 'query', 'inspect', 'show', 'view', 'check']);
@@ -1571,31 +1663,6 @@ function formatElapsed(ms: number): string {
   const min = Math.floor(totalSec / 60);
   const sec = (totalSec - min * 60).toFixed(1);
   return `${min}m ${sec}s`;
-}
-
-function previewInput(input: unknown): string {
-  if (input == null) return '';
-  if (typeof input === 'string') return input;
-  if (typeof input === 'number' || typeof input === 'boolean') return String(input);
-  if (Array.isArray(input)) {
-    return `${input.length} item${input.length === 1 ? '' : 's'}`;
-  }
-  if (typeof input === 'object') {
-    const obj = input as Record<string, unknown>;
-    for (const key of [
-      'command', 'file_path', 'path', 'query', 'pattern', 'url',
-      'name', 'slug', 'toolkit', 'search', 'title', 'message',
-    ]) {
-      const value = obj[key];
-      if (typeof value === 'string' && value.length > 0) return value;
-    }
-    for (const value of Object.values(obj)) {
-      if (typeof value === 'string' && value.length > 0) return value;
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    }
-    try { return JSON.stringify(obj).slice(0, 120); } catch { return ''; }
-  }
-  return '';
 }
 
 const SLASH_SKILL_MATCH = /^\/([a-z0-9][a-z0-9_-]*)\b\s*/i;

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCentaurInputLine,
   buildTurnReminder,
+  classifyToolCall,
   CentaurStreamTranslator,
   isCentaurBackend,
   readCentaurConfig,
+  summarizeToolResult,
   threadKeyForSession,
   type CentaurRawEvent,
 } from '../src/integrations/centaur-client.ts';
@@ -102,7 +104,7 @@ describe('CentaurStreamTranslator', () => {
     const t = new CentaurStreamTranslator();
 
     const started = t.handle({ id: 0, event: 'session.execution_started', data: '{}' });
-    expect(started).toEqual([{ kind: 'status', message: 'Agent starting' }]);
+    expect(started).toEqual([{ kind: 'status', statusKind: 'sandbox_starting', message: 'Starting workspace' }]);
 
     const d1 = t.handle(outputLine({ method: 'item/agentMessage/delta', params: { itemId: 'i1', delta: 'Hel' } }));
     const d2 = t.handle(outputLine({ method: 'item/agentMessage/delta', params: { itemId: 'i1', delta: 'lo' } }));
@@ -147,7 +149,14 @@ describe('CentaurStreamTranslator', () => {
     }));
     expect(events).toEqual([
       { kind: 'text_delta', text: 'On it' },
-      { kind: 'tool_use', id: 'tu1', name: 'search', input: { q: 'x' } },
+      {
+        kind: 'tool_call_started',
+        callId: 'tu1',
+        tool: 'search',
+        icon: { type: 'glyph', name: 'search' },
+        label: 'Searching files',
+        detail: { q: 'x' },
+      },
     ]);
   });
 
@@ -178,19 +187,80 @@ describe('CentaurStreamTranslator', () => {
     expect(t.composedAnswer()).toBe('Intro.\n\nFinal.');
   });
 
-  it('maps command executions to tool_use and tool_result (normalized dialect)', () => {
+  it('does not re-emit the answer when a completed frame carries a drifted id', () => {
+    // Regression: long multi-phase answers rendered as two interleaved copies
+    // because a completed frame whose id didn't match the streamed deltas
+    // re-emitted the full text on top of what was already on screen.
+    const t = new CentaurStreamTranslator();
+    t.handle(outputLine({ method: 'item/agentMessage/delta', params: { itemId: 'i1', delta: 'The full answer.' } }));
+    const completed = t.handle(outputLine({
+      method: 'item/completed',
+      // Note: id 'i1-final' differs from the delta's 'i1'.
+      params: { itemId: 'i1-final', item: { id: 'i1-final', type: 'agentMessage', text: 'The full answer.' } },
+    }));
+    expect(completed).toEqual([]);
+    expect(t.composedAnswer()).toBe('The full answer.');
+  });
+
+  it('suppresses a cumulative assistant frame that diverges instead of re-streaming it whole', () => {
+    // Regression: the old code re-emitted the ENTIRE message when a later frame
+    // did not start with the prior one, duplicating the answer.
+    const t = new CentaurStreamTranslator();
+    t.handle(outputLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Hello world' }] } }));
+    const diverged = t.handle(outputLine({ type: 'assistant', message: { content: [{ type: 'text', text: 'Hi world' }] } }));
+    // Live stream is not corrupted with a second copy...
+    expect(diverged).toEqual([]);
+    // ...but the canonical text is preserved for storage.
+    expect(t.composedAnswer()).toBe('Hi world');
+  });
+
+  it('never emits text that is not a continuation of what the UI already has', () => {
+    // Property: the concatenation of every text_delta equals composedAnswer(),
+    // so the append-only UI can never end up with a doubled/interleaved answer.
+    const t = new CentaurStreamTranslator();
+    const frames = [
+      { method: 'item/agentMessage/delta', params: { itemId: 'a', delta: 'Intro para. ' } },
+      { method: 'item/agentMessage/delta', params: { itemId: 'a', delta: 'More intro.' } },
+      { method: 'item/completed', params: { itemId: 'a', item: { id: 'a', type: 'agentMessage', text: 'Intro para. More intro.' } } },
+      { method: 'item/agentMessage/delta', params: { itemId: 'b', delta: 'Second para.' } },
+      { method: 'item/completed', params: { itemId: 'b', item: { id: 'b', type: 'agentMessage', text: 'Second para.' } } },
+    ];
+    let streamed = '';
+    for (const frame of frames) {
+      for (const ev of t.handle(outputLine(frame))) {
+        if (ev.kind === 'text_delta') streamed += ev.text;
+      }
+    }
+    expect(streamed).toBe('Intro para. More intro.\n\nSecond para.');
+    expect(streamed).toBe(t.composedAnswer());
+  });
+
+  it('maps command executions to typed tool start and done events (normalized dialect)', () => {
     const t = new CentaurStreamTranslator();
     const started = t.handle(outputLine({
       method: 'item/started',
       params: { item: { id: 'c1', command: 'ls -la' } },
     }));
-    expect(started).toEqual([{ kind: 'tool_use', id: 'c1', name: 'shell', input: { command: 'ls -la' } }]);
+    expect(started).toEqual([{
+      kind: 'tool_call_started',
+      callId: 'c1',
+      tool: 'shell',
+      icon: { type: 'glyph', name: 'terminal' },
+      label: 'ls -la',
+      detail: { command: 'ls -la' },
+    }]);
 
     const completed = t.handle(outputLine({
       method: 'item/completed',
       params: { item: { id: 'c1', command: 'ls -la', aggregatedOutput: 'total 0\n' } },
     }));
-    expect(completed).toEqual([{ kind: 'tool_result', toolUseId: 'c1', content: 'total 0' }]);
+    expect(completed).toEqual([{
+      kind: 'tool_call_done',
+      callId: 'c1',
+      status: 'ok',
+      summary: 'total 0',
+      content: 'total 0',
+    }]);
     // Command output never leaks into the composed answer text.
     expect(t.composedAnswer()).toBe('');
   });
@@ -207,13 +277,28 @@ describe('CentaurStreamTranslator', () => {
     expect(content.endsWith('…[truncated]')).toBe(true);
   });
 
+  it('marks failed command executions as errored even with terse output', () => {
+    const t = new CentaurStreamTranslator();
+    const events = t.handle(outputLine({
+      method: 'item/completed',
+      params: { item: { id: 'c3', command: 'memory status', status: 'failed', exitCode: 127, aggregatedOutput: 'command not found' } },
+    }));
+    expect(events).toEqual([{
+      kind: 'tool_call_done',
+      callId: 'c3',
+      status: 'error',
+      summary: 'command not found',
+      content: 'command not found',
+    }]);
+  });
+
   it('maps tool_result frames', () => {
     const t = new CentaurStreamTranslator();
     const events = t.handle(outputLine({
       type: 'user',
       content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'done' }],
     }));
-    expect(events).toEqual([{ kind: 'tool_result', toolUseId: 'tu1', content: 'done' }]);
+    expect(events).toEqual([{ kind: 'tool_call_done', callId: 'tu1', status: 'ok', summary: 'done', content: 'done' }]);
   });
 
   it('extracts result_text on completion', () => {
@@ -238,5 +323,52 @@ describe('CentaurStreamTranslator', () => {
     const t = new CentaurStreamTranslator();
     expect(t.handle({ id: 8, event: 'session.output.line', data: 'sandbox bootstrap notice' })).toEqual([]);
     expect(t.handle(outputLine({ method: 'turn/started', params: {} }))).toEqual([]);
+  });
+});
+
+describe('classifyToolCall', () => {
+  it('labels memory search commands without raw shell noise', () => {
+    expect(classifyToolCall('shell', { command: 'memory search "kinexys rpc" --limit 5' })).toMatchObject({
+      tool: 'memory',
+      icon: { type: 'glyph', name: 'memory' },
+      label: 'Searching memory for "kinexys rpc"',
+    });
+  });
+
+  it('labels Composio calls with the toolkit logo url', () => {
+    expect(classifyToolCall('shell', {
+      command: `python -c "c.execute('GOOGLEDRIVE_FIND_FILE', {'query':'budget'}, user_id='u')"`,
+    })).toMatchObject({
+      tool: 'GOOGLEDRIVE_FIND_FILE',
+      icon: { type: 'url', url: 'https://logos.composio.dev/api/googledrive', fallback: 'Google Drive' },
+      label: 'Searching Google Drive: "budget"',
+    });
+  });
+
+  it('labels native file, git and web tools', () => {
+    expect(classifyToolCall('Read', { file_path: '/tmp/report.md' })).toMatchObject({
+      icon: { type: 'glyph', name: 'file' },
+      label: 'Reading report.md',
+    });
+    expect(classifyToolCall('shell', { command: 'git status --short' })).toMatchObject({
+      icon: { type: 'glyph', name: 'git' },
+      label: 'git: status --short',
+    });
+    expect(classifyToolCall('shell', { command: 'curl https://example.com/a' })).toMatchObject({
+      icon: { type: 'glyph', name: 'globe' },
+      label: 'Fetching example.com',
+    });
+  });
+
+  it('keeps fallback labels one-line and bounded', () => {
+    const label = classifyToolCall('shell', { command: `echo hello\n${'x'.repeat(200)}` }).label;
+    expect(label).not.toContain('\n');
+    expect(label.length).toBeLessThanOrEqual(96);
+  });
+});
+
+describe('summarizeToolResult', () => {
+  it('marks obvious tool failures as errors', () => {
+    expect(summarizeToolResult('Error: denied')).toEqual({ status: 'error', summary: 'Error: denied' });
   });
 });

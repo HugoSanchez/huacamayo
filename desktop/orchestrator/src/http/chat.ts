@@ -82,7 +82,7 @@ export function buildChatRoutes(
     route('GET', '/chat/status', async (_req, res) => {
       const activeSessionIds = Array.from(activeRequests.keys());
       if (centaur) {
-        const reachable = await centaur.client.healthy();
+        const gatewayStatus = await centaur.client.gatewayStatus();
         return json(res, 200, {
           status: activeRequests.size > 0 ? 'running' : 'idle',
           provider: 'centaur',
@@ -91,8 +91,8 @@ export function buildChatRoutes(
           sessionCount: store.listSessions().length,
           gateway: {
             url: centaur.client.endpoint,
-            reachable,
-            state: reachable ? 'ready' : 'error',
+            reachable: gatewayStatus.reachable,
+            state: gatewayStatus.state,
             source: 'centaur',
             launchConfigured: true,
           },
@@ -596,7 +596,10 @@ async function runCentaurMessage(
           type: 'status',
           provider: 'centaur',
           session_id: opts.session.id,
+          kind: event.statusKind,
           message: event.message,
+          source: event.source,
+          duration_ms: event.durationMs,
         });
         return;
       case 'text_delta':
@@ -614,24 +617,44 @@ async function runCentaurMessage(
           delta: { text: event.text },
         });
         return;
-      case 'tool_use':
+      case 'reasoning_done':
+        sendSSE(opts.res, {
+          type: 'reasoning_done',
+          session_id: opts.session.id,
+        });
+        return;
+      case 'tool_call_started':
         toolCallCount += 1;
         sendSSE(opts.res, {
           type: 'assistant',
           session_id: opts.session.id,
           message: {
             role: 'assistant',
-            content: [{ type: 'tool_use', id: event.id, name: event.name, input: event.input }],
+            content: [{
+              type: 'tool_use',
+              id: event.callId,
+              name: event.tool,
+              input: event.detail,
+              label: event.label,
+              icon: event.icon,
+              detail: event.detail,
+            }],
           },
         });
         return;
-      case 'tool_result':
+      case 'tool_call_done':
         sendSSE(opts.res, {
           type: 'user',
           session_id: opts.session.id,
           message: {
             role: 'user',
-            content: [{ type: 'tool_result', tool_use_id: event.toolUseId, content: event.content }],
+            content: [{
+              type: 'tool_result',
+              tool_use_id: event.callId,
+              content: event.content,
+              status: event.status,
+              summary: event.summary,
+            }],
           },
         });
         return;

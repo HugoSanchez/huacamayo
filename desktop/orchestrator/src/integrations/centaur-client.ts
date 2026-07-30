@@ -18,6 +18,14 @@
  *                                     N× output.line → terminal completed/failed
  */
 
+import {
+  classifyToolCall,
+  summarizeToolResult,
+  type CentaurToolIcon,
+} from './centaur-tool-classifier.ts';
+
+export { classifyToolCall, summarizeToolResult } from './centaur-tool-classifier.ts';
+
 export type CentaurHarness = 'codex' | 'amp' | 'claudecode';
 
 const VALID_HARNESSES: readonly CentaurHarness[] = ['codex', 'amp', 'claudecode'];
@@ -83,10 +91,12 @@ user_id) to find the tool slug, then execute(slug, args, user_id). ALWAYS pass
 user_id='${userId}'. Never use the first-party slack/linear/notion CLIs (broken on this
 instance), and never judge capabilities from \`composio health\` (github-only check).
 For questions about the user's history, work, contacts, or preferences, search personal
-memory FIRST (before web/Composio): symlink
+memory FIRST (before web/Composio): use \`memory search "..."\` if the wrapper is
+installed. If \`memory\` is not on PATH, symlink
 /home/agent/github/HugoSanchez/centaur/tools/productivity/memory as "memory" in a tmpdir,
 then \`python -m memory.cli search "..."\` via the same uv --no-project pattern. Save
-durable new facts with \`memory.cli write\` (search first; update, don't duplicate).
+durable new facts with \`memory write\` or \`memory.cli write\` (search first; update,
+don't duplicate).
 Attribute memory answers in human terms (title/source/date, link if present) — never
 show raw doc:<id> refs to the user.
 </verso-reminder>`;
@@ -110,6 +120,11 @@ export interface CentaurExecuteOptions {
   idempotencyKey?: string | null;
   model?: string | null;
   provider?: string | null;
+}
+
+export interface CentaurGatewayStatus {
+  reachable: boolean;
+  state: 'ready' | 'starting' | 'error';
 }
 
 // Verso session id → durable Centaur thread. api-rs validates that thread keys
@@ -159,8 +174,12 @@ without running any commands.
 WORKS on this instance:
 - Personal memory — the user's own history (Slack, Google Docs, meeting notes, past
   chats), searchable and writable. Check it FIRST for anything touching the user's work,
-  projects, contacts, or preferences — before web search and before Composio. Invocation
-  (same symlink rule as Composio; the import name only resolves through the symlink):
+  projects, contacts, or preferences — before web search and before Composio. Preferred
+  invocation:
+    memory status
+    memory search "kinexys rpc" --limit 5
+  If \`memory\` is not on PATH, use this fallback invocation (same symlink rule as
+  Composio; the import name only resolves through the symlink):
     TMPD=$(mktemp -d)
     ln -s /home/agent/github/HugoSanchez/centaur/tools/productivity/memory "$TMPD/memory"
     cd "$TMPD" && PYTHONPATH="$TMPD:/opt/centaur" uv run --no-project \\
@@ -233,18 +252,43 @@ export class CentaurClient {
     return this.baseUrl;
   }
 
-  /** Liveness probe used by /chat/status; api-rs answers `{ok:true}` on /healthz. */
+  /** Liveness probe used by tests and legacy callers. */
   async healthy(timeoutMs = 1500, signal?: AbortSignal): Promise<boolean> {
+    const status = await this.gatewayStatus(timeoutMs, signal);
+    return status.reachable;
+  }
+
+  /**
+   * Readiness probe used by /chat/status. `/healthz` only proves the process is
+   * alive; `/readyz` catches startup/config states where api-rs is listening
+   * but not ready to create sessions.
+   */
+  async gatewayStatus(timeoutMs = 1500, signal?: AbortSignal): Promise<CentaurGatewayStatus> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(`${this.baseUrl}/healthz`, {
+      const ready = await fetch(`${this.baseUrl}/readyz`, {
         method: 'GET',
         signal: mergeSignals(controller.signal, signal),
       });
-      return res.ok;
+      if (ready.ok) {
+        const body = await ready.json().catch(() => null);
+        return {
+          reachable: true,
+          state: body?.ready === false ? 'starting' : 'ready',
+        };
+      }
+
+      const health = await fetch(`${this.baseUrl}/healthz`, {
+        method: 'GET',
+        signal: mergeSignals(controller.signal, signal),
+      });
+      return {
+        reachable: health.ok,
+        state: health.ok ? 'starting' : 'error',
+      };
     } catch {
-      return false;
+      return { reachable: false, state: 'error' };
     } finally {
       clearTimeout(timeout);
     }
@@ -432,28 +476,37 @@ export function isTerminalEventName(name: string): boolean {
 // ---------------------------------------------------------------------------
 
 export type CentaurChatEvent =
-  | { kind: 'status'; message: string }
+  | { kind: 'status'; statusKind: 'sandbox_starting' | 'sandbox_ready'; message: string; source?: string | null; durationMs?: number | null }
   | { kind: 'text_delta'; text: string }
   | { kind: 'reasoning_delta'; text: string }
-  | { kind: 'tool_use'; id?: string; name: string; input: unknown }
-  | { kind: 'tool_result'; toolUseId?: string; content: unknown }
+  | { kind: 'reasoning_done' }
+  | { kind: 'tool_call_started'; callId?: string; tool: string; icon: CentaurToolIcon; label: string; detail: unknown }
+  | { kind: 'tool_call_done'; callId?: string; status: 'ok' | 'error'; summary: string; content: unknown }
   | { kind: 'completed'; resultText: string }
   | { kind: 'error'; message: string };
 
 export class CentaurStreamTranslator {
-  // Answer text keyed by harness item id, so an `item.completed` can reconcile
-  // (replace) whatever its deltas streamed instead of double-counting.
+  // Answer text keyed by harness item id (codex), in first-seen order. Deltas
+  // accumulate here and an `item.completed` reconciles (replaces) the same id's
+  // text with the canonical version instead of double-counting.
   private readonly answerByItemId = new Map<string, string>();
-  // Item ids we've already emitted deltas for — used to suppress a duplicate
-  // emit when the matching `item.completed` arrives.
-  private readonly streamedItemIds = new Set<string>();
+  // Cumulative answer text from Anthropic-style `assistant` frames (claudecode),
+  // which restate the whole message each frame rather than sending deltas.
+  private harnessAnswerText = '';
+  // The exact answer text already emitted to the append-only UI. EVERY emission
+  // must be a pure continuation of this string — the chat UI only ever does
+  // `content = content + delta`, so emitting anything that isn't a genuine
+  // extension interleaves a second copy of the answer on screen. This mirrors
+  // the guard in davao's renderer (packages/rendering/src/codex-app-server.ts,
+  // `emitPendingAssistantText`).
+  private streamedAnswerText = '';
 
   handle(event: CentaurRawEvent): CentaurChatEvent[] {
     switch (event.event) {
       case 'session.execution_started':
-        return [{ kind: 'status', message: 'Agent starting' }];
+        return [{ kind: 'status', statusKind: 'sandbox_starting', message: 'Starting workspace' }];
       case 'session.sandbox_ready':
-        return [{ kind: 'status', message: describeSandboxReady(event.data) }];
+        return [describeSandboxReady(event.data)];
       case 'session.output.line':
         return this.handleOutputLine(event.data);
       case 'session.execution_completed':
@@ -468,14 +521,32 @@ export class CentaurStreamTranslator {
     }
   }
 
-  /** Best-effort final answer assembled from streamed item text. */
+  /**
+   * The canonical full answer, recomposed from every source. This is the single
+   * source of truth for both live streaming and final storage — codex per-item
+   * text first (in arrival order), then any cumulative `assistant` text.
+   */
   composedAnswer(): string {
-    return Array.from(this.answerByItemId.values()).filter(Boolean).join('\n\n');
+    const segments = [...this.answerByItemId.values()];
+    if (this.harnessAnswerText) segments.push(this.harnessAnswerText);
+    return segments.filter(Boolean).join('\n\n');
   }
 
-  private hasAnswerText(): boolean {
-    for (const value of this.answerByItemId.values()) if (value) return true;
-    return false;
+  /**
+   * Emit only the portion of the recomposed answer that genuinely extends what
+   * the UI has already rendered. If the recomposed answer no longer starts with
+   * what we've streamed — a canonical rewrite, or a second source restating the
+   * same text — we suppress the live emission rather than append a divergent
+   * copy. `composedAnswer()` still returns the corrected text for storage, so
+   * the persisted message is right even when a live rewrite is dropped.
+   */
+  private emitAnswerText(): CentaurChatEvent[] {
+    const full = this.composedAnswer();
+    if (!full.startsWith(this.streamedAnswerText)) return [];
+    const suffix = full.slice(this.streamedAnswerText.length);
+    if (!suffix) return [];
+    this.streamedAnswerText = full;
+    return [{ kind: 'text_delta', text: suffix }];
   }
 
   private handleOutputLine(line: string): CentaurChatEvent[] {
@@ -491,17 +562,17 @@ export class CentaurStreamTranslator {
       return text ? [{ kind: 'reasoning_delta', text }] : [];
     }
 
-    // Incremental agent message text (codex). A NEW message item after
-    // earlier answer text gets a paragraph break — without it multi-phase
-    // answers run together ("...before I go further.The token resolves...").
+    // Incremental agent message text (codex). Accumulate under the item id and
+    // emit only the genuine continuation. A NEW message item after earlier
+    // answer text is separated by a paragraph break — which falls out naturally
+    // from recomposing (join '\n\n') and slicing the suffix, so multi-phase
+    // answers never run together ("...before I go further.The token resolves...").
     if (type === 'item.agentMessage.delta') {
       const id = itemId(notification);
       const text = extractDeltaText(notification);
       if (!text) return [];
-      const needsSeparator = !this.answerByItemId.has(id) && this.hasAnswerText();
-      this.streamedItemIds.add(id);
       this.answerByItemId.set(id, (this.answerByItemId.get(id) ?? '') + text);
-      return [{ kind: 'text_delta', text: needsSeparator ? `\n\n${text}` : text }];
+      return this.emitAnswerText();
     }
 
     // Completed items (codex): agent messages reconcile stored text; command
@@ -513,17 +584,32 @@ export class CentaurStreamTranslator {
         const id = itemId(notification);
         const text = String(item?.text ?? '');
         if (!text) return [];
-        const alreadyStreamed = this.streamedItemIds.has(id);
-        const needsSeparator = !this.answerByItemId.has(id) && this.hasAnswerText();
+        // If this completed frame's id doesn't line up with the deltas that
+        // already streamed this exact text (id drift across frames), don't add a
+        // second copy — it's already on screen and in the composed answer.
+        if (!this.answerByItemId.has(id) && this.streamedAnswerText.endsWith(text)) {
+          return [];
+        }
+        // Reconcile: replace this item's text with the canonical version, then
+        // emit only whatever genuinely extends what we've already streamed
+        // (usually nothing, since the deltas already carried it).
         this.answerByItemId.set(id, text);
-        return alreadyStreamed ? [] : [{ kind: 'text_delta', text: needsSeparator ? `\n\n${text}` : text }];
+        return this.emitAnswerText();
+      }
+      if (itemType === 'reasoning' || itemType === 'reasoning_summary') {
+        return [{ kind: 'reasoning_done' }];
       }
       const completedCommand = typeof item?.command === 'string' ? item.command : '';
       if (completedCommand) {
         const output = typeof item?.aggregatedOutput === 'string' ? item.aggregatedOutput : '';
+        const result = summarizeToolResult(truncateToolOutput(output));
+        const failed = item?.status === 'failed'
+          || (typeof item?.exitCode === 'number' && item.exitCode !== 0);
         return [{
-          kind: 'tool_result',
-          toolUseId: itemId(notification),
+          kind: 'tool_call_done',
+          callId: itemId(notification),
+          status: failed ? 'error' : result.status,
+          summary: result.summary,
           content: truncateToolOutput(output),
         }];
       }
@@ -536,43 +622,69 @@ export class CentaurStreamTranslator {
       const item = asRecord(notification.item);
       const startedCommand = typeof item?.command === 'string' ? item.command : '';
       if (startedCommand) {
-        return [{ kind: 'tool_use', id: itemId(notification), name: 'shell', input: { command: startedCommand } }];
+        const classified = classifyToolCall('shell', { command: startedCommand });
+        return [{
+          kind: 'tool_call_started',
+          callId: itemId(notification),
+          tool: classified.tool,
+          icon: classified.icon,
+          label: classified.label,
+          detail: classified.detail,
+        }];
       }
       return [];
     }
 
+    if (/thinking/i.test(type)) {
+      const text = extractDeltaText(notification);
+      if (text) return [{ kind: 'reasoning_delta', text }];
+      return type.toLowerCase().includes('done') || type.toLowerCase().includes('completed')
+        ? [{ kind: 'reasoning_done' }]
+        : [];
+    }
+
     // Anthropic-style `assistant` message frames (claudecode dialect, TBD).
-    // These tend to be cumulative rather than delta-based, so we replace the
-    // stored answer for a single synthetic id and emit only the newly-appended
-    // suffix to avoid re-rendering the whole message on every frame.
+    // These tend to be cumulative rather than delta-based: each frame restates
+    // the whole message. Store it as the cumulative buffer and let the shared
+    // emitter forward only the genuine continuation — if a frame diverges from
+    // what's already on screen it's suppressed rather than re-streamed whole.
     if (type === 'assistant') {
       const events: CentaurChatEvent[] = [];
       const full = assistantText(notification);
       if (full) {
-        const prior = this.answerByItemId.get('assistant') ?? '';
-        this.answerByItemId.set('assistant', full);
-        this.streamedItemIds.add('assistant');
-        const suffix = full.startsWith(prior) ? full.slice(prior.length) : full;
-        if (suffix) events.push({ kind: 'text_delta', text: suffix });
+        this.harnessAnswerText = full;
+        events.push(...this.emitAnswerText());
       }
       for (const tool of toolUses(notification)) {
+        const name = typeof tool.name === 'string' ? tool.name : 'tool';
+        const classified = classifyToolCall(name, tool.input);
         events.push({
-          kind: 'tool_use',
-          id: typeof tool.id === 'string' ? tool.id : undefined,
-          name: typeof tool.name === 'string' ? tool.name : 'tool',
-          input: tool.input,
+          kind: 'tool_call_started',
+          callId: typeof tool.id === 'string' ? tool.id : undefined,
+          tool: classified.tool,
+          icon: classified.icon,
+          label: classified.label,
+          detail: classified.detail,
         });
+      }
+      for (const text of thinkingText(notification)) {
+        events.push({ kind: 'reasoning_delta', text });
       }
       return events;
     }
 
     // Tool results (claudecode `user`/`tool` frames).
     if (type === 'user' || type === 'tool') {
-      return toolResults(notification).map((result) => ({
-        kind: 'tool_result' as const,
-        toolUseId: typeof result.tool_use_id === 'string' ? result.tool_use_id : undefined,
-        content: result.content,
-      }));
+      return toolResults(notification).map((result) => {
+        const summary = summarizeToolResult(result.content);
+        return {
+          kind: 'tool_call_done' as const,
+          callId: typeof result.tool_use_id === 'string' ? result.tool_use_id : undefined,
+          status: summary.status,
+          summary: summary.summary,
+          content: result.content,
+        };
+      });
     }
 
     return [];
@@ -640,6 +752,16 @@ function toolUses(notification: Record<string, unknown>): Array<Record<string, u
     .filter((block): block is Record<string, unknown> => Boolean(block) && block!.type === 'tool_use');
 }
 
+function thinkingText(notification: Record<string, unknown>): string[] {
+  const message = asRecord(notification.message);
+  const content = Array.isArray(message?.content) ? message.content : [];
+  return content
+    .map(asRecord)
+    .filter((block): block is Record<string, unknown> => Boolean(block) && /thinking/i.test(String(block!.type ?? '')))
+    .map((block) => String(block.text ?? block.thinking ?? block.content ?? ''))
+    .filter(Boolean);
+}
+
 function toolResults(notification: Record<string, unknown>): Array<Record<string, unknown>> {
   const content = Array.isArray(notification.content) ? notification.content : [];
   return content
@@ -670,12 +792,20 @@ function extractError(data: string): string {
   return data.trim();
 }
 
-function describeSandboxReady(data: string): string {
+function describeSandboxReady(data: string): Extract<CentaurChatEvent, { kind: 'status' }> {
   const record = parseJsonRecord(data);
   const source = typeof record?.sandbox_ready_source === 'string' ? record.sandbox_ready_source : '';
-  return source === 'reused' || source === 'resumed' || source === 'warm_pool'
-    ? 'Sandbox ready'
-    : 'Preparing sandbox';
+  const duration = typeof record?.sandbox_ready_duration_ms === 'number'
+    ? record.sandbox_ready_duration_ms
+    : null;
+  const warm = source === 'reused' || source === 'resumed' || source === 'warm_pool';
+  return {
+    kind: 'status',
+    statusKind: 'sandbox_ready',
+    message: warm ? 'Workspace ready' : 'Workspace ready after cold start',
+    source: source || null,
+    durationMs: duration,
+  };
 }
 
 function parseJsonRecord(data: string): Record<string, unknown> | null {

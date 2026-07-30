@@ -281,26 +281,65 @@ export function getHarnessModelOption(id: string | null | undefined): HarnessMod
 export type ActivityStep =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
+  | { type: 'status'; label: string; kind?: string; source?: string | null; durationMs?: number | null }
   | {
       type: 'tool';
       id?: string;
       name: string;
       input?: unknown;
       result?: string;
+      label?: string;
+      icon?: ToolStepIcon;
+      detail?: unknown;
+      summary?: string;
+      status?: 'running' | 'ok' | 'error';
       connection?: ConnectionRequestView;
     };
+
+export type ToolStepIcon =
+  | { type: 'glyph'; name: string }
+  | { type: 'url'; url: string; fallback: string };
 
 export interface ChatSSEEvent {
   type: string;
   message?: string | {
     role?: string;
-    content?: Array<{ type: string; text?: string; name?: string; input?: unknown }>;
+    content?: Array<{
+      type: string;
+      id?: string;
+      text?: string;
+      name?: string;
+      input?: unknown;
+      detail?: unknown;
+      label?: string;
+      icon?: ToolStepIcon;
+      tool_use_id?: string;
+      content?: unknown;
+      status?: 'ok' | 'error';
+      summary?: string;
+    }>;
   };
   delta?: { text?: string } | string;
   reasoning?: string | null;
   reason?: string;
   session_id?: string;
   role?: string;
-  content?: Array<{ type: string; text?: string; name?: string; input?: unknown }>;
+  content?: Array<{
+    type: string;
+    id?: string;
+    text?: string;
+    name?: string;
+    input?: unknown;
+    detail?: unknown;
+    label?: string;
+    icon?: ToolStepIcon;
+    tool_use_id?: string;
+    content?: unknown;
+    status?: 'ok' | 'error';
+    summary?: string;
+  }>;
+  kind?: string;
+  source?: string | null;
+  duration_ms?: number | null;
   stop_reason?: string;
 }

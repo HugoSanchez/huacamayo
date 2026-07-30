@@ -1403,7 +1403,7 @@ function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
 
   if (event.type === 'assistant') {
     const blocks = ev.message?.content ?? ev.content ?? [];
-    let newSteps = steps;
+    let newSteps = clearTransientStatusSteps(steps);
     let newContent = msg.content;
 
     for (const block of blocks) {
@@ -1424,7 +1424,11 @@ function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
           type: 'tool',
           id: block.id,
           name: block.name ?? 'tool',
-          input: block.input,
+          input: block.detail ?? block.input,
+          label: block.label,
+          icon: block.icon,
+          detail: block.detail ?? block.input,
+          status: 'running',
         }];
       }
     }
@@ -1434,26 +1438,30 @@ function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
   if (event.type === 'user') {
     const blocks = ev.message?.content ?? ev.content ?? [];
     if (!Array.isArray(blocks)) return msg;
-    let newSteps = steps;
+    let newSteps = clearTransientStatusSteps(steps);
     for (const block of blocks) {
       if (block.type !== 'tool_result') continue;
       const toolUseId = block.tool_use_id;
       const result = stringifyToolResult(block.content);
-      newSteps = attachResult(newSteps, toolUseId, result, block.content);
+      newSteps = attachResult(newSteps, toolUseId, result, block.content, block.status, block.summary);
     }
     return { ...msg, steps: newSteps };
   }
 
   if (event.type === 'content_block_delta' || event.type === 'text') {
     const delta = ev.delta?.text ?? ev.text ?? '';
-    return { ...msg, content: msg.content + delta };
+    return { ...msg, content: msg.content + delta, steps: clearTransientStatusSteps(steps) };
   }
 
   if (event.type === 'reasoning_delta') {
     const delta = typeof ev.delta === 'string' ? ev.delta : ev.delta?.text ?? ev.text ?? '';
     if (!delta) return msg;
     const reasoning = appendReasoningDelta(msg.reasoning, delta);
-    return { ...msg, reasoning, steps: appendReasoningStep(steps, delta) };
+    return { ...msg, reasoning, steps: appendReasoningStep(clearTransientStatusSteps(steps), delta) };
+  }
+
+  if (event.type === 'reasoning_done') {
+    return msg;
   }
 
   if (event.type === 'reasoning') {
@@ -1462,17 +1470,36 @@ function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
     return {
       ...msg,
       reasoning: mergeFinalReasoning(msg.reasoning, reasoning),
-      steps: mergeFinalReasoningStep(steps, reasoning),
+      steps: mergeFinalReasoningStep(clearTransientStatusSteps(steps), reasoning),
+    };
+  }
+
+  if (event.type === 'status') {
+    const label = typeof ev.message === 'string' ? ev.message : '';
+    if (!label || msg.content.trim() || steps.some((step) => step.type !== 'status')) return msg;
+    return {
+      ...msg,
+      steps: [{
+        type: 'status',
+        label,
+        kind: typeof ev.kind === 'string' ? ev.kind : undefined,
+        source: typeof ev.source === 'string' ? ev.source : null,
+        durationMs: typeof ev.duration_ms === 'number' ? ev.duration_ms : null,
+      }],
     };
   }
 
   if (event.type === 'result') {
     const text = ev.result ?? '';
-    if (text) return { ...msg, content: text };
+    if (text) return { ...msg, content: text, steps: clearTransientStatusSteps(steps) };
   }
 
   if (event.type === 'error') {
-    return { ...msg, content: msg.content + `\n\n**Error:** ${event.message ?? 'Unknown error'}` };
+    return {
+      ...msg,
+      content: msg.content + `\n\n**Error:** ${event.message ?? 'Unknown error'}`,
+      steps: clearTransientStatusSteps(steps),
+    };
   }
 
   if (event.type === 'done') {
@@ -1517,6 +1544,12 @@ function appendReasoningStep(steps: ActivityStep[], delta: string): ActivityStep
   return [...items, { type: 'reasoning', text: delta }];
 }
 
+function clearTransientStatusSteps(steps: ActivityStep[]): ActivityStep[] {
+  return steps.some((step) => step.type === 'status')
+    ? steps.filter((step) => step.type !== 'status')
+    : steps;
+}
+
 function mergeFinalReasoningStep(steps: ActivityStep[], reasoning: string): ActivityStep[] {
   const current = steps
     .filter((step): step is Extract<ActivityStep, { type: 'reasoning' }> => step.type === 'reasoning')
@@ -1552,6 +1585,8 @@ function attachResult(
   toolUseId: string | undefined,
   result: string,
   rawContent?: unknown,
+  status?: 'ok' | 'error',
+  summary?: string,
 ): ActivityStep[] {
   const items = [...steps];
   const connection = parseConnectionRequest(rawContent);
@@ -1559,7 +1594,13 @@ function attachResult(
     for (let index = items.length - 1; index >= 0; index -= 1) {
       const step = items[index];
       if (step.type === 'tool' && step.id === toolUseId && !step.result) {
-        items[index] = connection ? { ...step, result, connection } : { ...step, result };
+        items[index] = {
+          ...step,
+          result,
+          status: status ?? step.status ?? 'ok',
+          summary: summary ?? step.summary,
+          ...(connection ? { connection } : {}),
+        };
         return items;
       }
     }
@@ -1567,7 +1608,13 @@ function attachResult(
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const step = items[index];
     if (step.type === 'tool' && !step.result) {
-      items[index] = connection ? { ...step, result, connection } : { ...step, result };
+      items[index] = {
+        ...step,
+        result,
+        status: status ?? step.status ?? 'ok',
+        summary: summary ?? step.summary,
+        ...(connection ? { connection } : {}),
+      };
       return items;
     }
   }

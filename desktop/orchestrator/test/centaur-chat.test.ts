@@ -38,6 +38,7 @@ describe('Centaur backend chat', () => {
       calls.push(`${method} ${decodeURIComponent(url.split('?')[0])}`);
 
       if (url === '/healthz') return sendJson(res, { ok: true });
+      if (url === '/readyz') return sendJson(res, { ok: true, ready: true });
 
       if (url.endsWith('/execute')) {
         let body = '';
@@ -110,7 +111,7 @@ describe('Centaur backend chat', () => {
     return `http://127.0.0.1:${port}${pathname}`;
   }
 
-  it('reports centaur status backed by the healthz probe', async () => {
+  it('reports centaur status backed by the readyz probe', async () => {
     const res = await fetch(url('/chat/status'));
     const body = await res.json();
     expect(body.provider).toBe('centaur');

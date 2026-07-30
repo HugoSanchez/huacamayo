@@ -10,12 +10,18 @@ export type DraftResolutionStatus = 'sent' | 'discarded';
 export type ChatActivityStep =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
+  | { type: 'status'; label: string; kind?: string; source?: string | null; durationMs?: number | null }
   | {
       type: 'tool';
       id?: string;
       name: string;
       input?: unknown;
       result?: string;
+      label?: string;
+      icon?: unknown;
+      detail?: unknown;
+      summary?: string;
+      status?: 'running' | 'ok' | 'error';
     };
 
 export interface ChatMessageRecord {

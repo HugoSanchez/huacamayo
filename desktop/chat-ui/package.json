@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "bun test"
   },
   "dependencies": {
     "cronstrue": "^3.14.0",
