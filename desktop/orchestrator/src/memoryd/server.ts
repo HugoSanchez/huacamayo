@@ -1,6 +1,7 @@
 import http from 'node:http';
 import type { LocalEmbedder } from '../http/embedder.ts';
 import type { SourceIngestionScheduler } from '../http/source-ingestion.ts';
+import type { MemoryPageRow } from './pg-memory-provider.ts';
 import type { PgMemoryProvider } from './pg-memory-provider.ts';
 
 /**
@@ -9,12 +10,17 @@ import type { PgMemoryProvider } from './pg-memory-provider.ts';
  *    Raw embeddings, NO e5 prefixes (callers add query:/passage: themselves —
  *    this is the contract the sandbox memory CLI already speaks for
  *    MEMORY_EMBEDDER_URL).
+ *  - GET /identity — rendered identity prompt block sourced from reserved
+ *    memory_pages slugs.
  *  - GET /healthz — liveness (200 as long as the process serves).
  *  - GET /status  — memory counts, embedder state, per-source ingestion views.
  */
 
 const MAX_INPUTS = 64;
 const MAX_INPUT_CHARS = 16_000;
+const DEFAULT_IDENTITY_SLUGS = ['identity/agent', 'identity/user'];
+const MAX_IDENTITY_CHARS = 6000;
+const IDENTITY_TRUNCATION_MARKER = '…[truncated]';
 
 export function createMemorydServer(deps: {
   embedder: LocalEmbedder;
@@ -45,6 +51,18 @@ async function route(
       memory: { ...deps.provider.diagnostics(), ...(await deps.provider.counts()) },
       ingestion: deps.scheduler.listSources(),
     });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/identity') {
+    const pages = await deps.provider.getPagesBySlugs(identitySlugsFromEnv());
+    const identity = renderIdentityPrompt(pages);
+    if (!identity) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    sendText(res, 200, identity);
     return;
   }
 
@@ -79,6 +97,31 @@ async function route(
   sendJson(res, 404, { error: 'not found' });
 }
 
+export function identitySlugsFromEnv(value = process.env.MEMORYD_IDENTITY_SLUGS): string[] {
+  const slugs = (value ?? '')
+    .split(',')
+    .map((slug) => slug.trim())
+    .filter(Boolean);
+  return slugs.length > 0 ? slugs : DEFAULT_IDENTITY_SLUGS;
+}
+
+export function renderIdentityPrompt(pages: MemoryPageRow[], maxChars = MAX_IDENTITY_CHARS): string | null {
+  const contents = pages.map((page) => page.content.trim()).filter(Boolean);
+  if (contents.length === 0) return null;
+
+  const sourceSlugs = pages.map((page) => page.slug).join(', ');
+  const rendered = [
+    '## Who you are working for',
+    '',
+    ...contents.flatMap((content, index) => (index === 0 ? [content] : ['', content])),
+    '',
+    `(identity source: memory pages ${sourceSlugs} - update them with the memory tool when you learn durable facts about the user)`,
+  ].join('\n');
+
+  if (rendered.length <= maxChars) return rendered;
+  return `${rendered.slice(0, Math.max(0, maxChars - IDENTITY_TRUNCATION_MARKER.length))}${IDENTITY_TRUNCATION_MARKER}`;
+}
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const parts: Buffer[] = [];
@@ -91,5 +134,10 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload);
   res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(body);
+}
+
+function sendText(res: http.ServerResponse, status: number, body: string): void {
+  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
   res.end(body);
 }

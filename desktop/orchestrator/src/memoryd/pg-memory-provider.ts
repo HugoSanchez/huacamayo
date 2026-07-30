@@ -28,6 +28,13 @@ export const CHUNK_CHARS = 1600;
 export const CHUNK_OVERLAP = 200;
 export const MAX_CHUNKS_PER_ROW = 8;
 
+export interface MemoryPageRow {
+  slug: string;
+  title: string | null;
+  content: string;
+  updated_at: string;
+}
+
 export class PgMemoryProvider implements MemoryWriteProvider {
   readonly backend = 'lexical' as const;
   readonly capabilities = { search: true, getPage: true, bridgeWrites: true } as const;
@@ -136,6 +143,23 @@ export class PgMemoryProvider implements MemoryWriteProvider {
       [cleanSlug, deriveTitle(cleanSlug, content), content],
     );
     return { slug: cleanSlug, updatedAt: result.rows[0].updated_at };
+  }
+
+  async getPagesBySlugs(slugs: string[]): Promise<MemoryPageRow[]> {
+    const cleanSlugs = slugs.map((slug) => slug.trim()).filter(Boolean);
+    if (cleanSlugs.length === 0) return [];
+
+    const result = await this.pool.query(
+      `SELECT slug, title, content, updated_at::text AS updated_at
+       FROM memory_pages
+       WHERE slug = ANY($1)`,
+      [cleanSlugs],
+    );
+    const bySlug = new Map(result.rows.map((row: MemoryPageRow) => [row.slug, row]));
+    return cleanSlugs.flatMap((slug) => {
+      const row = bySlug.get(slug);
+      return row ? [row] : [];
+    });
   }
 
   /** Chat capture is a local-Verso concern; cloud sessions live in Centaur. */
