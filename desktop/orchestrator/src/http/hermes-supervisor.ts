@@ -848,11 +848,6 @@ export class HermesSupervisor {
     // provider tool schemas are too unstable for the primary product path.
     delete mcpServers.composio;
 
-    // Hygiene for pre-existing user configs from the GBrain era: memory is
-    // in-process now, and a stale per-profile gbrain MCP entry would spawn a
-    // dead child on every Hermes launch.
-    delete mcpServers.gbrain;
-
     const tools = asRecord(config.tools) ?? {};
     const toolSearch = asRecord(tools.tool_search) ?? {};
     tools.tool_search = {

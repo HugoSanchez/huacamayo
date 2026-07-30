@@ -6,8 +6,8 @@ import { dirname, join } from 'node:path';
  * downloaded once from the HF hub into a cache dir that survives app
  * updates, then loads from disk.
  *
- * Cardinal rule (learned from the GBrain design): embeddings must NEVER
- * gate memory reads or writes. This runtime therefore never throws from
+ * Cardinal rule: embeddings must NEVER gate memory reads or writes. This
+ * runtime therefore never throws from
  * start(), and callers treat "not ready" as "BM25-only for now".
  *
  * Default model: multilingual-e5-small — 384 dims, strong Spanish↔English

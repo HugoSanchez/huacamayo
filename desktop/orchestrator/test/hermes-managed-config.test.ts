@@ -129,7 +129,7 @@ describe('HermesSupervisor: managed config override', () => {
     // The managed memory section is appended after the refreshed identity.
     const refreshed = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
     expect(refreshed.startsWith(newSoul.trimEnd())).toBe(true);
-    expect(refreshed).toContain('verso:gbrain-memory:start');
+    expect(refreshed).toContain('verso:memory:start');
 
     writeFileSync(path.join(tempRoot, 'SOUL.md'), '# Verso\n\nAnother new identity.\n', 'utf8');
     writeFileSync(path.join(managedHome, 'SOUL.md'), '# Custom\n\nKeep my local identity.\n', 'utf8');
@@ -198,29 +198,6 @@ describe('HermesSupervisor: managed config override', () => {
     };
     expect(parsed.mcp_servers?.vervo).toBeUndefined();
     expect(parsed.mcp_servers?.composio).toBeUndefined();
-  });
-
-  it('removes a stale per-profile GBrain MCP entry from an older install', () => {
-    mkdirSync(managedHome, { recursive: true });
-    writeFileSync(path.join(managedHome, 'config.yaml'), [
-      'model:',
-      '  provider: openai-codex',
-      'mcp_servers:',
-      '  gbrain:',
-      '    command: /Users/someone/.bun/bin/bun',
-      '    args:',
-      '      - /tmp/gbrain/src/cli.ts',
-      '      - serve',
-    ].join('\n'), 'utf8');
-
-    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
-    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
-    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
-
-    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
-      mcp_servers?: Record<string, unknown>;
-    };
-    expect(parsed.mcp_servers?.gbrain).toBeUndefined();
   });
 
   it('writes the pinned tool_search hot set from the native tool manifest', () => {
@@ -305,9 +282,8 @@ describe('HermesSupervisor: managed config override', () => {
     (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
 
     const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
-    // The markers keep the historical gbrain name so existing installs
-    // upgrade their managed block in place.
-    expect(soul).toContain('<!-- verso:gbrain-memory:start -->');
+    // The markers fence the managed block so it can be swapped in place.
+    expect(soul).toContain('<!-- verso:memory:start -->');
     expect(soul).toContain('## Your memory');
     expect(soul).toContain('search_memory FIRST');
     expect(soul).toContain('write_memory_page');
@@ -324,19 +300,19 @@ describe('HermesSupervisor: managed config override', () => {
 
     const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
     expect(soul).not.toContain('## Your memory');
-    expect(soul).not.toContain('verso:gbrain-memory');
+    expect(soul).not.toContain('verso:memory');
   });
 
-  it('replaces an older gbrain-era managed SOUL section in place', () => {
+  it('replaces an existing managed SOUL section in place', () => {
     mkdirSync(managedHome, { recursive: true });
     writeFileSync(path.join(managedHome, 'SOUL.md'), [
       '# Custom identity',
       '',
-      '<!-- verso:gbrain-memory:start -->',
+      '<!-- verso:memory:start -->',
       '## Your memory',
       '',
-      'Old GBrain knowledge-base wording.',
-      '<!-- verso:gbrain-memory:end -->',
+      'Stale managed wording from an earlier build.',
+      '<!-- verso:memory:end -->',
       '',
     ].join('\n'), 'utf8');
 
@@ -346,8 +322,8 @@ describe('HermesSupervisor: managed config override', () => {
 
     const soul = readFileSync(path.join(managedHome, 'SOUL.md'), 'utf8');
     expect(soul).toContain('# Custom identity');
-    expect(soul).not.toContain('Old GBrain knowledge-base wording.');
+    expect(soul).not.toContain('Stale managed wording from an earlier build.');
     expect(soul).toContain('write_memory_page');
-    expect(soul.match(/verso:gbrain-memory:start/g)).toHaveLength(1);
+    expect(soul.match(/verso:memory:start/g)).toHaveLength(1);
   });
 });
