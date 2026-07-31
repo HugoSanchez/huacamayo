@@ -102,14 +102,7 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
 
   if (messages.length === 0) {
     return (
-      <div style={{
-        flex: 1,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: 'var(--text-dim)',
-        fontSize: '15px',
-      }}>
+      <div className="message-empty-state">
         Start a new session or resume one from the sidebar
       </div>
     );
@@ -205,16 +198,7 @@ function MessageBubble({
       marginTop: isUser ? '28px' : '0',
     }}>
       <div
-        className={isUser ? 'user-message-bubble' : undefined}
-        style={{
-          maxWidth: isUser ? '70%' : '100%',
-          padding: isUser ? '10px 16px' : '4px 0',
-          borderRadius: isUser ? '14px' : '0',
-          background: isUser ? 'var(--user-bubble)' : 'var(--assistant-bg)',
-          color: isUser ? 'var(--user-bubble-text)' : undefined,
-          wordBreak: 'break-word',
-          width: isUser ? 'auto' : '100%',
-        }}
+        className={isUser ? 'user-message-bubble' : 'assistant-message-bubble'}
       >
         {!isUser && (
           <AssistantActivity
@@ -404,7 +388,7 @@ function ResponseTime({ message }: { message: ChatMessage }) {
 
   return (
     <div className="assistant-response-time">
-      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatElapsed(elapsed)}</span>
+      <span className="assistant-response-time-value">{formatElapsed(elapsed)}</span>
     </div>
   );
 }
@@ -428,18 +412,8 @@ function ActivityHeader({
     <button
       type="button"
       onClick={hasActivity ? onToggle : undefined}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        background: 'transparent',
-        border: 'none',
-        padding: '2px 0',
-        color: 'var(--text-dim)',
-        fontSize: '13px',
-        cursor: hasActivity ? 'pointer' : 'default',
-        userSelect: 'none',
-      }}
+      className="activity-header-button"
+      style={{ cursor: hasActivity ? 'pointer' : 'default' }}
     >
       {hasActivity && (
         <svg

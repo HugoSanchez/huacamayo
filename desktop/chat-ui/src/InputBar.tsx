@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect, type CSSProperties } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect } from 'react';
 import { getSkills } from './chat';
 import type { AttachedContext, ChatModel, ReasoningEffort, SkillSummaryView } from './types';
 import {
@@ -275,21 +275,14 @@ export function InputBar({
         : 'Write a message...';
 
   return (
-    <div style={{ padding: '10px 12px', background: 'var(--bg)' }}>
+    <div className="input-bar">
       <div
         onMouseDown={(event) => {
           const target = event.target;
           if (target instanceof HTMLElement && target.closest('button')) return;
           window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
         }}
-        style={{
-          position: 'relative',
-          background: 'var(--bg-input)',
-          border: '1px solid var(--border)',
-          borderRadius: '16px',
-          padding: '12px 16px',
-          minHeight: '100px',
-        }}
+        className="input-bar-field"
       >
         {showSuggestions && (
           <SlashSuggestions
@@ -350,20 +343,8 @@ export function InputBar({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           rows={2}
-          style={{
-            width: '100%',
-            border: 'none',
-            outline: 'none',
-            background: 'transparent',
-            color: 'var(--text)',
-            fontSize: '14px',
-            lineHeight: '1.5',
-            resize: 'none',
-            fontFamily: 'inherit',
-            maxHeight: '160px',
-            minHeight: '48px',
-            textIndent: isAttached ? `${chipWidth}px` : 0,
-          }}
+          className="input-bar-textarea"
+          style={{ textIndent: isAttached ? `${chipWidth}px` : 0 }}
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
@@ -377,22 +358,7 @@ export function InputBar({
           <button
             onClick={handleSubmit}
             disabled={disabled || !canSend}
-            style={{
-              border: '1px solid var(--border)',
-              background: canSend && !disabled ? 'var(--text)' : 'transparent',
-              color: canSend && !disabled ? 'var(--bg)' : 'var(--text-dim)',
-              borderRadius: '8px',
-              width: '28px',
-              height: '28px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              opacity: disabled ? 0.3 : 1,
-              padding: 0,
-              fontSize: '16px',
-              lineHeight: 1,
-            }}
+            className={`input-send-button${canSend && !disabled ? ' is-active' : ''}${disabled ? ' is-blocked' : ''}`}
             aria-label={isStreaming ? 'Stop' : 'Send'}
           >
             {isStreaming ? (
@@ -480,25 +446,11 @@ function SparkGlyph() {
   );
 }
 
-// Shared styling for the footer cycle buttons. Clicking advances to the next
-// option; the tooltip names the control. No menu — matching the lightweight
-// Cursor/Claude footer affordance the user asked for.
-function footerCycleStyle(disabled: boolean): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px',
-    border: 'none',
-    background: 'transparent',
-    color: 'var(--text-dim)',
-    borderRadius: '7px',
-    padding: '3px 6px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontSize: '12px',
-    fontFamily: 'inherit',
-    opacity: disabled ? 0.4 : 1,
-  };
-}
+// Footer cycle buttons (model / reasoning-effort). Clicking advances to the
+// next option; the tooltip names the control. No menu — matching the
+// lightweight Cursor/Claude footer affordance. Styling lives in
+// .footer-cycle-button (composer.css); the disabled state is driven by the
+// button's own :disabled, so no dynamic inline style is needed.
 
 function cycleNext<T>(items: readonly T[], current: T): T {
   const index = items.indexOf(current);
@@ -521,7 +473,7 @@ function ReasoningEffortCycler({
       disabled={disabled}
       aria-label={`Reasoning effort: ${REASONING_EFFORT_LABELS[value]} (click to change)`}
       title="Reasoning effort"
-      style={footerCycleStyle(disabled)}
+      className="footer-cycle-button"
     >
       <EffortBars level={REASONING_EFFORTS.indexOf(value) + 1} />
       <span>{REASONING_EFFORT_LABELS[value]}</span>
@@ -545,7 +497,7 @@ function ModelCycler({
       disabled={disabled}
       aria-label={`Model: ${CHAT_MODEL_LABELS[value]} (click to change)`}
       title="Model"
-      style={footerCycleStyle(disabled)}
+      className="footer-cycle-button"
     >
       <SparkGlyph />
       <span>{CHAT_MODEL_LABELS[value]}</span>

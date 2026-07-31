@@ -1,0 +1,631 @@
+.chat-panel {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-header-scaffold {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-header-band-top {
+  height: 44px;
+  background: var(--header-band-top-bg);
+  border-bottom: 1px solid var(--header-band-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+}
+
+.chat-header-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.chat-header-band-tabs {
+  height: 46px;
+  position: relative;
+  background: var(--header-band-tabs-bg);
+  border-bottom: 1px solid var(--header-band-border);
+}
+
+.chat-header-active-line {
+  position: absolute;
+  bottom: 0;
+  left: 34px;
+  width: 140px;
+  height: 2px;
+  background: var(--header-active-line);
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 28px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome-surface);
+}
+
+.chat-toolbar-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.chat-toolbar-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.tool-step {
+  margin: 0;
+}
+
+.tool-step-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  transition: background 100ms ease;
+  min-width: 0;
+}
+
+.tool-step-row:disabled {
+  cursor: default;
+}
+
+.tool-step-row:hover:not(:disabled) {
+  background: var(--hover-soft);
+}
+
+.tool-step-icon {
+  flex-shrink: 0;
+  color: var(--ink-dim);
+}
+
+.tool-step-toolkit-logo {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.tool-step-toolkit-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  background: var(--tool-bg);
+  border: 1px solid var(--tool-border);
+  color: var(--ink-dim);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.tool-step-name {
+  font-weight: 500;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+/* Thinking is secondary to tool calls — render its icon, label and chevron in
+   a lighter, muted tone so it reads as a quiet aside in the stream. */
+.thinking-row .tool-step-icon,
+.thinking-row .tool-step-name,
+.thinking-row .tool-step-chevron {
+  color: var(--ink-faint);
+}
+
+.thinking-row .tool-step-name {
+  font-weight: 400;
+}
+
+.tool-step-preview {
+  color: var(--ink-dim);
+  font-family: var(--font-mono-step);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.tool-step-chevron {
+  flex-shrink: 0;
+  color: var(--ink-dim);
+  margin-left: auto;
+  transition: transform 120ms ease;
+}
+
+.tool-step-details {
+  margin: 4px 0 8px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-step-payload {
+  position: relative;
+  font-family: var(--font-mono-step);
+  font-size: 12px;
+  background: var(--payload-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 22px 10px 10px;
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.tool-step-payload-label {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  font-family: var(--font-ui-label);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  user-select: none;
+}
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+@media (max-width: 860px) {
+  .session-sidebar {
+    width: 240px;
+    padding: 16px 12px;
+  }
+
+  .chat-toolbar {
+    padding: 16px 20px 14px;
+  }
+}
+
+/* Empty-state placeholder (was inline in MessageList.tsx). */
+.message-empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-dim);
+  font-size: 15px;
+}
+
+/* Message bubbles (were inline in MessageList.tsx). The user/assistant split is
+   driven by which class the element gets, not by inline ternaries. */
+.user-message-bubble {
+  max-width: 70%;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: var(--user-bubble);
+  color: var(--user-bubble-text);
+  word-break: break-word;
+  width: auto;
+}
+
+.assistant-message-bubble {
+  max-width: 100%;
+  padding: 4px 0;
+  border-radius: 0;
+  background: var(--assistant-bg);
+  word-break: break-word;
+  width: 100%;
+}
+
+/* Activity toggle button (was inline in MessageList.tsx); the dynamic cursor
+   stays inline since it is state-driven. */
+.activity-header-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  color: var(--ink-dim);
+  font-size: 13px;
+  user-select: none;
+}
+
+/* Markdown content */
+.assistant-message-content {
+  width: 100%;
+  max-width: var(--assistant-content-max-width);
+}
+
+.message-content h1,
+.message-content h2,
+.message-content h3 {
+  margin-top: 1em;
+  margin-bottom: 0.4em;
+  font-weight: 600;
+}
+.message-content h1 { font-size: 1.3em; }
+.message-content h2 { font-size: 1.15em; }
+.message-content h3 { font-size: 1.05em; }
+
+.message-content p {
+  margin-bottom: 0.6em;
+}
+.message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.message-content ul, .message-content ol {
+  margin-bottom: 0.6em;
+}
+.message-content li {
+  margin-bottom: 0.2em;
+}
+.message-content li::marker {
+  color: var(--ink-dim);
+}
+
+.message-content code {
+  font-family: var(--font-mono-code);
+  font-size: 0.9em;
+  background: var(--code-inline-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+
+.message-content pre {
+  margin: 0.6em 0;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.message-content pre code {
+  display: block;
+  padding: 0.8em 1em;
+  background: var(--code-block-bg);
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+/* Light-only override of the bundled github-dark highlight.js theme. This is
+   the one structural (non-token-redefinition) block that must stay inside a
+   light media query: adding dark base rules would clobber the external theme.
+   All literal colors read from tokens defined in the light :root block. */
+@media (prefers-color-scheme: light) {
+  .message-content code {
+    color: var(--code-fg);
+  }
+  .message-content pre code,
+  .message-content pre code.hljs {
+    color: var(--code-fg);
+  }
+  .message-content .hljs-keyword,
+  .message-content .hljs-selector-tag,
+  .message-content .hljs-deletion {
+    color: var(--hljs-keyword);
+  }
+  .message-content .hljs-string,
+  .message-content .hljs-attribute,
+  .message-content .hljs-symbol,
+  .message-content .hljs-bullet,
+  .message-content .hljs-addition {
+    color: var(--hljs-string);
+  }
+  .message-content .hljs-built_in,
+  .message-content .hljs-builtin-name,
+  .message-content .hljs-type,
+  .message-content .hljs-class .hljs-title,
+  .message-content .hljs-title.class_ {
+    color: var(--hljs-builtin);
+  }
+  .message-content .hljs-comment,
+  .message-content .hljs-quote,
+  .message-content .hljs-meta {
+    color: var(--hljs-comment);
+  }
+  .message-content .hljs-number,
+  .message-content .hljs-literal,
+  .message-content .hljs-doctag {
+    color: var(--hljs-number);
+  }
+  .message-content .hljs-name,
+  .message-content .hljs-attr,
+  .message-content .hljs-tag,
+  .message-content .hljs-section {
+    color: var(--hljs-name);
+  }
+  .message-content .hljs-variable,
+  .message-content .hljs-template-variable,
+  .message-content .hljs-regexp,
+  .message-content .hljs-link {
+    color: var(--hljs-variable);
+  }
+  .message-content .hljs-title,
+  .message-content .hljs-function .hljs-title {
+    color: var(--hljs-title);
+  }
+}
+
+.message-content blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.8em;
+  margin: 0.6em 0;
+  color: var(--ink-dim);
+}
+
+.message-content a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.message-content table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  width: 100%;
+}
+
+.message-content th,
+.message-content td {
+  border: 1px solid var(--line);
+  padding: 0.4em 0.6em;
+  text-align: left;
+}
+
+.message-content th {
+  font-weight: 600;
+}
+
+/* Expanded thinking is secondary content — dim it and read it as plain prose,
+   flattening the bold "title" markers the provider emits so we don't get heavy
+   headings inside the reasoning. */
+.message-content.reasoning-markdown {
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+
+.message-content.reasoning-markdown strong {
+  font-weight: inherit;
+}
+
+.message-content.reasoning-markdown h1,
+.message-content.reasoning-markdown h2,
+.message-content.reasoning-markdown h3 {
+  margin-top: 0.6em;
+  margin-bottom: 0.25em;
+  font-size: 1em;
+  font-weight: inherit;
+}
+
+.message-content.reasoning-markdown p,
+.message-content.reasoning-markdown ul,
+.message-content.reasoning-markdown ol {
+  margin-bottom: 0.4em;
+}
+
+.message-content.reasoning-markdown pre code {
+  font-size: 0.82em;
+}
+
+.assistant-activity-wrap {
+  margin-bottom: 8px;
+  max-width: var(--assistant-content-max-width);
+}
+
+.assistant-message-footer-wrap {
+  margin-top: 7px;
+  max-width: var(--assistant-content-max-width);
+}
+
+.assistant-message-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--ink-dim);
+}
+
+.assistant-activity-details {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  padding-left: 18px;
+}
+
+.assistant-activity-live {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 18px;
+}
+
+.assistant-response-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+/* Elapsed-time figure (was inline in MessageList.tsx). */
+.assistant-response-time-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.message-copy-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  opacity: 0.75;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.message-copy-button:hover {
+  background: var(--copy-hover-bg);
+  color: var(--ink-dim);
+  opacity: 1;
+}
+
+.message-copy-button.is-copied {
+  color: var(--copy-success);
+  opacity: 1;
+  transform: scale(1.04);
+}
+
+.message-copy-button.is-copied svg {
+  animation: message-copy-check 280ms ease;
+}
+
+@keyframes message-copy-check {
+  0% { opacity: 0; transform: scale(0.75); }
+  55% { opacity: 1; transform: scale(1.12); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.connection-card {
+  margin: 10px 0;
+  padding: 14px;
+  border-radius: 14px;
+  /* Low-opacity wash: warm white in light, faint white elevation in dark. */
+  background: var(--connection-card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--connection-card-shadow);
+}
+
+.connection-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.connection-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.connection-card-logo,
+.connection-card-logo-fallback {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.connection-card-logo {
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.connection-card-logo-fallback {
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--logo-fallback-bg);
+  border-radius: 6px;
+}
+
+.connection-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.connection-card-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.connection-card-error {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--danger-soft);
+  white-space: pre-wrap;
+}
+
+.connection-pill {
+  appearance: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: capitalize;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+  white-space: nowrap;
+}
+
+.connection-pill:hover:not(:disabled) {
+  background: var(--pill-hover-bg);
+}
+
+.connection-pill:disabled {
+  cursor: default;
+}
+
+.connection-pill.is-connected {
+  color: var(--status-connected);
+}
+
+.connection-pill.is-pending {
+  color: var(--status-connected);
+}
+
+.connection-pill.is-failed,
+.connection-pill.is-expired {
+  color: var(--status-failed);
+}
+
