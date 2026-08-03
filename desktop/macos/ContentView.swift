@@ -27,6 +27,33 @@ private struct ConductorThemePalette {
     let footerIcon: Color
     let windowBorder: Color
 
+    // Text roles (semantic ink hierarchy). Values preserve today's per-mode
+    // rendering exactly; `ink2` and `inkDimRow` capture small pre-existing
+    // opacity drift between the session-row text and the surrounding list text.
+    let ink: Color        // primary text — session-row titles
+    let ink2: Color       // list-item names — connections, routines, skills
+    let inkDim: Color     // section labels, chevrons, empty/secondary text
+    let inkDimRow: Color  // session-row trailing meta (timestamps, hover icons)
+
+    // Sidebar surface fills.
+    let rowSelectedFill: Color
+    let rowHoverFill: Color
+    let cardFill: Color
+
+    // Destructive / warning text (system red at per-mode opacities).
+    let danger: Color        // inline error text
+    let dangerSoft: Color    // "Disconnect" affordance
+    let dangerStrong: Color  // routine delete confirmation
+
+    // Connection-logo fallback tile.
+    let iconFallbackFill: Color
+    let iconFallbackText: Color
+
+    // Floating sidebar toast.
+    let toastText: Color
+    let toastFill: Color
+    let toastStroke: Color
+
     static let windowCornerRadius: CGFloat = 10
 }
 
@@ -54,7 +81,22 @@ private enum ConductorThemes {
         headerActiveLine: Color.white.opacity(0.65),
         footerDivider: Color.white.opacity(0.10),
         footerIcon: Color.white.opacity(0.52),
-        windowBorder: Color.white.opacity(0.08)
+        windowBorder: Color.white.opacity(0.08),
+        ink: Color.white.opacity(0.88),
+        ink2: Color.white.opacity(0.86),
+        inkDim: Color.white.opacity(0.44),
+        inkDimRow: Color.white.opacity(0.46),
+        rowSelectedFill: Color.white.opacity(0.05),
+        rowHoverFill: Color.white.opacity(0.03),
+        cardFill: Color(red: 37/255, green: 40/255, blue: 43/255).opacity(0.38), // inputFill × 0.38
+        danger: Color.red.opacity(0.88),
+        dangerSoft: Color.red.opacity(0.72),
+        dangerStrong: Color.red.opacity(0.92),
+        iconFallbackFill: Color.white.opacity(0.08),
+        iconFallbackText: Color.white.opacity(0.7),
+        toastText: Color.white.opacity(0.88),
+        toastFill: Color.black.opacity(0.42),
+        toastStroke: Color.white.opacity(0.08)
     )
 
     // Light mode equivalent that preserves the same panel hierarchy and contrast steps.
@@ -81,8 +123,35 @@ private enum ConductorThemes {
         headerActiveLine: Color.black.opacity(0.55),
         footerDivider: Color.black.opacity(0.10),
         footerIcon: Color.black.opacity(0.52),
-        windowBorder: Color.black.opacity(0.10)
+        windowBorder: Color.black.opacity(0.10),
+        ink: Color.black.opacity(0.76),
+        ink2: Color.black.opacity(0.72),
+        inkDim: Color.black.opacity(0.42),
+        inkDimRow: Color.black.opacity(0.42),
+        rowSelectedFill: Color.white.opacity(0.32),
+        rowHoverFill: Color.white.opacity(0.18),
+        cardFill: Color(red: 235/255, green: 238/255, blue: 242/255).opacity(0.82), // inputFill × 0.82
+        danger: Color.red.opacity(0.74),
+        dangerSoft: Color.red.opacity(0.58),
+        dangerStrong: Color.red.opacity(0.78),
+        iconFallbackFill: Color.black.opacity(0.06),
+        iconFallbackText: Color.black.opacity(0.55),
+        toastText: Color.black.opacity(0.78),
+        toastFill: Color.white.opacity(0.82),
+        toastStroke: Color.black.opacity(0.08)
     )
+}
+
+/// Shared font ramp for the native shell. Groundwork for Phase 2 — swapping the
+/// UI typeface later happens here rather than at ~20 call sites. Only size/weight
+/// combos that repeat 3+ times live here; one-off fonts stay inline.
+private enum ConductorType {
+    static let sectionLabel = Font.system(size: 11, weight: .semibold)
+    static let disclosure = Font.system(size: 8, weight: .semibold)
+    static let rowTitle = Font.system(size: 13, weight: .regular)
+    static let caption = Font.system(size: 11)
+    static let placeholder = Font.system(size: 12)
+    static let footerControl = Font.system(size: 14, weight: .regular)
 }
 
 struct ContentView: View {
@@ -248,7 +317,7 @@ struct ContentView: View {
             }
             .overlay(alignment: .bottom) {
                 if let sidebarToast {
-                    SidebarToastView(toast: sidebarToast, isDarkMode: isDarkMode)
+                    SidebarToastView(toast: sidebarToast, theme: theme, isDarkMode: isDarkMode)
                         .padding(.bottom, 52)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -813,11 +882,11 @@ private struct SessionSidebar: View {
     @State private var draftTitle = ""
 
     private var primaryText: Color {
-        isDarkMode ? Color.white.opacity(0.86) : Color.black.opacity(0.72)
+        theme.ink2
     }
 
     private var secondaryText: Color {
-        isDarkMode ? Color.white.opacity(0.44) : Color.black.opacity(0.42)
+        theme.inkDim
     }
 
     private var activeSessions: [SidebarChatSession] {
@@ -852,8 +921,8 @@ private struct SessionSidebar: View {
         VStack(alignment: .leading, spacing: 14) {
             if let sessionError, !sessionError.isEmpty {
                 Text(sessionError)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.red.opacity(isDarkMode ? 0.88 : 0.74))
+                    .font(ConductorType.caption)
+                    .foregroundStyle(theme.danger)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -876,11 +945,11 @@ private struct SessionSidebar: View {
                             }) {
                                 HStack(spacing: 6) {
                                     Text("SESSIONS")
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(ConductorType.sectionLabel)
                                         .tracking(0.8)
                                         .foregroundStyle(secondaryText)
                                     Image(systemName: isSessionsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 8, weight: .semibold))
+                                        .font(ConductorType.disclosure)
                                         .foregroundStyle(secondaryText)
                                     Spacer(minLength: 0)
                                 }
@@ -890,7 +959,7 @@ private struct SessionSidebar: View {
 
                             Button(action: onCreateSession) {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(ConductorType.sectionLabel)
                                     .foregroundStyle(secondaryText)
                                     .frame(width: 18, height: 18)
                                     .contentShape(Rectangle())
@@ -908,6 +977,7 @@ private struct SessionSidebar: View {
                                 selectedSessionId: selectedSessionId,
                                 streamingSessionIds: streamingSessionIds,
                                 unreadSessionIds: unreadSessionIds,
+                                theme: theme,
                                 isDarkMode: isDarkMode,
                                 renamingSessionId: renamingSessionId,
                                 draftTitle: draftTitle,
@@ -929,11 +999,11 @@ private struct SessionSidebar: View {
                             }) {
                                 HStack(spacing: 6) {
                                     Text("CONNECTIONS")
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(ConductorType.sectionLabel)
                                         .tracking(0.8)
                                         .foregroundStyle(secondaryText)
                                     Image(systemName: isConnectionsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 8, weight: .semibold))
+                                        .font(ConductorType.disclosure)
                                         .foregroundStyle(secondaryText)
                                     Spacer(minLength: 0)
                                 }
@@ -943,7 +1013,7 @@ private struct SessionSidebar: View {
 
                             Button(action: onToggleCatalog) {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(ConductorType.sectionLabel)
                                     .foregroundStyle(secondaryText)
                                     .frame(width: 18, height: 18)
                                     .contentShape(Rectangle())
@@ -956,7 +1026,7 @@ private struct SessionSidebar: View {
                         if isConnectionsExpanded {
                             if connections.isEmpty {
                                 Text("No connected tools")
-                                    .font(.system(size: 12))
+                                    .font(ConductorType.placeholder)
                                     .foregroundStyle(secondaryText)
                                     .padding(.horizontal, 10)
                             } else {
@@ -965,7 +1035,7 @@ private struct SessionSidebar: View {
                                         connection: connection,
                                         primaryText: primaryText,
                                         secondaryText: secondaryText,
-                                        isDarkMode: isDarkMode,
+                                        theme: theme,
                                         onDisconnect: { onDisconnectConnection(connection.connectedAccountId) }
                                     )
                                 }
@@ -982,11 +1052,11 @@ private struct SessionSidebar: View {
                             }) {
                                 HStack(spacing: 6) {
                                     Text("SKILLS")
-                                        .font(.system(size: 11, weight: .semibold))
+                                        .font(ConductorType.sectionLabel)
                                         .tracking(0.8)
                                         .foregroundStyle(secondaryText)
                                     Image(systemName: isSkillsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 8, weight: .semibold))
+                                        .font(ConductorType.disclosure)
                                         .foregroundStyle(secondaryText)
                                     Spacer(minLength: 0)
                                 }
@@ -996,7 +1066,7 @@ private struct SessionSidebar: View {
 
                             Button(action: onToggleSkillsCatalog) {
                                 Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(ConductorType.sectionLabel)
                                     .foregroundStyle(secondaryText)
                                     .frame(width: 18, height: 18)
                                     .contentShape(Rectangle())
@@ -1010,7 +1080,7 @@ private struct SessionSidebar: View {
                             let pinnedSkills = skills.filter { $0.pinned }
                             if pinnedSkills.isEmpty {
                                 Text("No skills pinned")
-                                    .font(.system(size: 12))
+                                    .font(ConductorType.placeholder)
                                     .foregroundStyle(secondaryText)
                                     .padding(.horizontal, 10)
                             } else {
@@ -1022,7 +1092,7 @@ private struct SessionSidebar: View {
                                             .frame(width: 18, height: 18)
 
                                         Text(skill.name)
-                                            .font(.system(size: 13, weight: .regular))
+                                            .font(ConductorType.rowTitle)
                                             .foregroundStyle(primaryText)
                                             .lineLimit(1)
 
@@ -1048,11 +1118,11 @@ private struct SessionSidebar: View {
                         }) {
                             HStack(spacing: 6) {
                                 Text("ROUTINES")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(ConductorType.sectionLabel)
                                     .tracking(0.8)
                                     .foregroundStyle(secondaryText)
                                 Image(systemName: isCronsExpanded ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 8, weight: .semibold))
+                                    .font(ConductorType.disclosure)
                                     .foregroundStyle(secondaryText)
                                 Spacer(minLength: 0)
                             }
@@ -1063,7 +1133,7 @@ private struct SessionSidebar: View {
                         if isCronsExpanded {
                             if crons.isEmpty {
                                 Text("No routines yet")
-                                    .font(.system(size: 12))
+                                    .font(ConductorType.placeholder)
                                     .foregroundStyle(secondaryText)
                                     .padding(.horizontal, 10)
                             } else {
@@ -1073,7 +1143,7 @@ private struct SessionSidebar: View {
                                         subtitle: cronSubtitle(cron),
                                         primaryText: primaryText,
                                         secondaryText: secondaryText,
-                                        isDarkMode: isDarkMode,
+                                        theme: theme,
                                         onOpen: { onOpenCron(cron.id) },
                                         onDelete: { onDeleteCron(cron.id) }
                                     )
@@ -1089,12 +1159,8 @@ private struct SessionSidebar: View {
         .padding(.top, 22)
     }
 
-    private var rowSelectionFill: Color {
-        isDarkMode ? Color.white.opacity(0.07) : Color.white.opacity(0.72)
-    }
-
     private var cardFill: Color {
-        theme.inputFill.opacity(isDarkMode ? 0.38 : 0.82)
+        theme.cardFill
     }
 
     private func beginRename(_ session: SidebarChatSession) {
@@ -1120,6 +1186,7 @@ private struct SessionSidebarSection: View {
     let selectedSessionId: String?
     let streamingSessionIds: Set<String>
     let unreadSessionIds: Set<String>
+    let theme: ConductorThemePalette
     let isDarkMode: Bool
     let renamingSessionId: String?
     let draftTitle: String
@@ -1129,26 +1196,22 @@ private struct SessionSidebarSection: View {
     let onBeginRename: (SidebarChatSession) -> Void
     let onCommitRename: (SidebarChatSession) -> Void
 
-    private var primaryText: Color {
-        isDarkMode ? Color.white.opacity(0.84) : Color.black.opacity(0.72)
-    }
-
     private var secondaryText: Color {
-        isDarkMode ? Color.white.opacity(0.44) : Color.black.opacity(0.42)
+        theme.inkDim
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let title {
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(ConductorType.sectionLabel)
                     .tracking(0.8)
                     .foregroundStyle(secondaryText)
             }
 
             if sessions.isEmpty {
                 Text(emptyText)
-                    .font(.system(size: 12))
+                    .font(ConductorType.placeholder)
                     .foregroundStyle(secondaryText)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
@@ -1160,6 +1223,7 @@ private struct SessionSidebarSection: View {
                             isSelected: session.id == selectedSessionId,
                             isStreaming: streamingSessionIds.contains(session.id),
                             isUnread: unreadSessionIds.contains(session.id),
+                            theme: theme,
                             isDarkMode: isDarkMode,
                             isRenaming: renamingSessionId == session.id,
                             draftTitle: draftTitle,
@@ -1181,6 +1245,7 @@ private struct SessionSidebarRow: View {
     let isSelected: Bool
     let isStreaming: Bool
     let isUnread: Bool
+    let theme: ConductorThemePalette
     let isDarkMode: Bool
     let isRenaming: Bool
     let draftTitle: String
@@ -1192,11 +1257,11 @@ private struct SessionSidebarRow: View {
     @State private var isHovered = false
 
     private var primaryText: Color {
-        isDarkMode ? Color.white.opacity(0.88) : Color.black.opacity(0.76)
+        theme.ink
     }
 
     private var secondaryText: Color {
-        isDarkMode ? Color.white.opacity(0.46) : Color.black.opacity(0.42)
+        theme.inkDimRow
     }
 
     var body: some View {
@@ -1217,7 +1282,7 @@ private struct SessionSidebarRow: View {
                 .frame(maxWidth: .infinity)
             } else {
                 Text(session.title)
-                    .font(.system(size: 13, weight: .regular))
+                    .font(ConductorType.rowTitle)
                     .foregroundStyle(primaryText)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1269,7 +1334,7 @@ private struct SessionSidebarRow: View {
                     .help("New response")
             } else if !isRenaming {
                 Text(sessionTimestampLabel(session))
-                    .font(.system(size: 11))
+                    .font(ConductorType.caption)
                     .foregroundStyle(secondaryText)
             }
         }
@@ -1287,10 +1352,10 @@ private struct SessionSidebarRow: View {
 
     private var backgroundFill: Color {
         if isSelected {
-            return isDarkMode ? Color.white.opacity(0.05) : Color.white.opacity(0.32)
+            return theme.rowSelectedFill
         }
         if isHovered {
-            return isDarkMode ? Color.white.opacity(0.03) : Color.white.opacity(0.18)
+            return theme.rowHoverFill
         }
         return .clear
     }
@@ -1361,7 +1426,7 @@ private struct SidebarCronRow: View {
     let subtitle: String?
     let primaryText: Color
     let secondaryText: Color
-    let isDarkMode: Bool
+    let theme: ConductorThemePalette
     let onOpen: () -> Void
     let onDelete: () -> Void
 
@@ -1378,12 +1443,12 @@ private struct SidebarCronRow: View {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(cron.name)
-                        .font(.system(size: 13, weight: .regular))
+                        .font(ConductorType.rowTitle)
                         .foregroundStyle(isDisabled ? secondaryText : primaryText)
                         .lineLimit(1)
                     if let subtitle {
                         Text(subtitle)
-                            .font(.system(size: 11))
+                            .font(ConductorType.caption)
                             .foregroundStyle(secondaryText)
                             .opacity(isDisabled ? 0.86 : 1)
                             .lineLimit(1)
@@ -1396,7 +1461,7 @@ private struct SidebarCronRow: View {
                     Button(action: handleDeleteTap) {
                         Text("Confirm")
                             .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(Color.red.opacity(isDarkMode ? 0.92 : 0.78))
+                            .foregroundStyle(theme.dangerStrong)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .contentShape(Rectangle())
@@ -1515,13 +1580,13 @@ private struct SidebarConnectionRow: View {
     let connection: SidebarConnection
     let primaryText: Color
     let secondaryText: Color
-    let isDarkMode: Bool
+    let theme: ConductorThemePalette
     let onDisconnect: () -> Void
 
     @State private var isHovered = false
 
     private var disconnectText: Color {
-        Color.red.opacity(isDarkMode ? 0.72 : 0.58)
+        theme.dangerSoft
     }
 
     var body: some View {
@@ -1529,11 +1594,11 @@ private struct SidebarConnectionRow: View {
             ConnectionLogo(
                 logoUrl: connection.logoUrl,
                 toolkitName: connection.toolkitName,
-                isDarkMode: isDarkMode
+                theme: theme
             )
 
             Text(connection.toolkitName)
-                .font(.system(size: 13, weight: .regular))
+                .font(ConductorType.rowTitle)
                 .foregroundStyle(primaryText)
 
             Spacer(minLength: 0)
@@ -1541,7 +1606,7 @@ private struct SidebarConnectionRow: View {
             if isHovered {
                 Button(action: onDisconnect) {
                     Text("Disconnect")
-                        .font(.system(size: 11))
+                        .font(ConductorType.caption)
                         .foregroundStyle(disconnectText)
                         .contentShape(Rectangle())
                 }
@@ -1549,7 +1614,7 @@ private struct SidebarConnectionRow: View {
                 .help("Revoke access and remove this connection")
             } else {
                 Text(connection.status.capitalized)
-                    .font(.system(size: 11))
+                    .font(ConductorType.caption)
                     .foregroundStyle(secondaryText)
             }
         }
@@ -1565,7 +1630,7 @@ private struct SidebarConnectionRow: View {
 private struct ConnectionLogo: View {
     let logoUrl: String?
     let toolkitName: String
-    let isDarkMode: Bool
+    let theme: ConductorThemePalette
 
     @State private var image: NSImage?
 
@@ -1592,10 +1657,10 @@ private struct ConnectionLogo: View {
     private var fallback: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
+                .fill(theme.iconFallbackFill)
             Text(String(toolkitName.prefix(1)).uppercased())
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(isDarkMode ? Color.white.opacity(0.7) : Color.black.opacity(0.55))
+                .foregroundStyle(theme.iconFallbackText)
         }
     }
 
@@ -1722,21 +1787,22 @@ private let sidebarRelativeFormatter: RelativeDateTimeFormatter = {
 
 private struct SidebarToastView: View {
     let toast: SidebarToast
+    let theme: ConductorThemePalette
     let isDarkMode: Bool
 
     var body: some View {
         Text(toast.message)
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(isDarkMode ? Color.white.opacity(0.88) : Color.black.opacity(0.78))
+            .foregroundStyle(theme.toastText)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 999, style: .continuous)
-                    .fill(isDarkMode ? Color.black.opacity(0.42) : Color.white.opacity(0.82))
+                    .fill(theme.toastFill)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 999, style: .continuous)
-                    .stroke(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(theme.toastStroke, lineWidth: 1)
             }
             .shadow(color: .black.opacity(isDarkMode ? 0.18 : 0.08), radius: 12, y: 4)
     }
@@ -1971,7 +2037,7 @@ private struct SidebarFooter: View {
                             .fill(sidecarStatusColor)
                             .frame(width: 7, height: 7)
                         Text(sidecarStatusText)
-                            .font(.system(size: 11))
+                            .font(ConductorType.caption)
                             .foregroundStyle(theme.footerIcon)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
@@ -1995,21 +2061,21 @@ private struct SidebarFooter: View {
 
                 Button(action: { isDarkMode.toggle() }) {
                     Image(systemName: isDarkMode ? "sun.max" : "moon.fill")
-                        .font(.system(size: 14, weight: .regular))
+                        .font(ConductorType.footerControl)
                         .foregroundStyle(theme.footerIcon)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: {}) {
                     Image(systemName: "questionmark.circle")
-                        .font(.system(size: 14, weight: .regular))
+                        .font(ConductorType.footerControl)
                         .foregroundStyle(theme.footerIcon)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: onOpenSettings) {
                     Image(systemName: "gearshape")
-                        .font(.system(size: 14, weight: .regular))
+                        .font(ConductorType.footerControl)
                         .foregroundStyle(theme.footerIcon)
                 }
                 .buttonStyle(.plain)
