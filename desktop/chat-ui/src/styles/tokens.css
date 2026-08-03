@@ -131,8 +131,10 @@
 
   /* ---- Cron detail ---- */
   --cron-name-focus-bg: rgba(255, 255, 255, 0.06);
-  --cron-desc-focus-border: rgba(255, 255, 255, 0.25);
-  --cron-detail-focus-border: rgba(0, 0, 0, 0.25);
+  /* Editorial focus: a field's hairline goes to full ink on focus (line → ink),
+     so these resolve to --ink in both modes. */
+  --cron-desc-focus-border: var(--ink);
+  --cron-detail-focus-border: var(--ink);
   --state-paused: var(--orange);
   --error-border: rgba(249, 122, 122, 0.55);
   --error-text-strong: #f97a7a;
@@ -294,9 +296,9 @@
     --warn-box-border: rgba(178, 106, 57, 0.22);
     --warn-box-bg: rgba(178, 106, 57, 0.06);
 
-    /* Cron detail */
+    /* Cron detail (focus borders resolve to --ink via :root; only the bg tint
+       needs a light value) */
     --cron-name-focus-bg: rgba(0, 0, 0, 0.04);
-    --cron-desc-focus-border: rgba(0, 0, 0, 0.25);
     --state-paused: var(--orange);
     --error-border: rgba(220, 60, 60, 0.55);
     --error-text-strong: #c62a2a;

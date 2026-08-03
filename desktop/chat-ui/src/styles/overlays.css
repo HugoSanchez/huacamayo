@@ -49,35 +49,37 @@
   background: var(--close-hover-bg);
 }
 
+/* Flattened segmented control: text tabs separated by a hairline, the active
+   tab marked by an ink underline rather than a filled pill. */
 .catalog-overlay-tabs {
   margin: 0 18px 12px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--seg-track-bg);
+  padding: 0;
+  border-bottom: 1px solid var(--line-soft);
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 2px;
   flex-shrink: 0;
 }
 
 .catalog-overlay-tab {
   appearance: none;
   border: 0;
-  border-radius: 6px;
+  border-bottom: 1.5px solid transparent;
+  margin-bottom: -1px;
   background: transparent;
   color: var(--ink-dim);
   font: inherit;
   font-size: 12px;
   font-weight: 500;
-  padding: 6px 8px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  padding: 7px 8px;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: color 0.12s ease, border-color 0.12s ease;
 }
 
 .catalog-overlay-tab.is-active {
-  background: var(--seg-active-bg);
   color: var(--ink);
-  box-shadow: var(--seg-active-shadow);
+  border-bottom-color: var(--ink);
 }
 
 .catalog-overlay-tab:hover {
@@ -95,21 +97,20 @@
   font: inherit;
   font-size: 13px;
   padding: 9px 12px;
-  border: 1px solid transparent;
+  border: 1px solid var(--line-soft);
   border-radius: 8px;
-  background: var(--field-subtle-bg);
+  background: var(--paper-2);
   color: var(--ink);
   outline: none;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .catalog-overlay-search-input:hover {
-  background: var(--field-subtle-bg-hover);
+  border-color: var(--line);
 }
 
 .catalog-overlay-search-input:focus {
-  background: var(--field-subtle-bg-focus);
-  border-color: var(--field-subtle-border-focus);
+  border-color: var(--ink);
 }
 
 .catalog-overlay-search-input::placeholder {
@@ -151,11 +152,11 @@
   gap: 10px;
   padding: 7px 8px;
   border-radius: 8px;
-  transition: background 0.1s ease;
 }
 
-.catalog-row:hover {
-  background: var(--row-hover-bg);
+/* Editorial hover: no fill — the row title lifts from ink-2 to ink instead. */
+.catalog-row:hover .catalog-row-name {
+  color: var(--ink);
 }
 
 .catalog-row-logo,
@@ -207,10 +208,11 @@
   flex: 1;
   font-size: 13px;
   font-weight: 500;
-  color: var(--ink);
+  color: var(--ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.1s ease;
 }
 
 .catalog-row-pill {
@@ -265,8 +267,8 @@
   padding: 10px 12px;
   margin: 6px 0;
   background: var(--paper-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
 }
 
 .cron-tool-card-icon {
@@ -354,8 +356,8 @@
   gap: 12px;
   padding: 14px 16px 12px;
   background: var(--paper-2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
   box-shadow: var(--draft-card-shadow);
   animation: message-draft-rise 160ms ease-out;
 }
@@ -616,7 +618,7 @@
   gap: 8px;
   padding: 8px 12px;
   background: var(--paper-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: 999px;
   font: inherit;
   font-size: 12px;

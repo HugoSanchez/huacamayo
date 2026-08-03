@@ -21,7 +21,7 @@
   border-radius: 10px;
   background: var(--paper-2);
   color: var(--ink);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   box-shadow: var(--toast-shadow);
   animation: toast-in 0.18s ease-out;
 }
@@ -44,23 +44,24 @@
   color: var(--ink-dim);
 }
 
+/* Text affordance rather than a filled pill: ink-dim resting, ink on hover. */
 .toast-action {
   appearance: none;
   font: inherit;
   font-size: 12px;
   font-weight: 500;
-  padding: 6px 10px;
+  padding: 6px 8px;
   border-radius: 4px;
-  background: var(--primary-btn-bg);
-  color: var(--primary-btn-text);
-  border: 1px solid var(--primary-btn-bg);
+  background: transparent;
+  color: var(--ink-dim);
+  border: 0;
   cursor: pointer;
   flex-shrink: 0;
+  transition: color 0.12s ease;
 }
 
 .toast-action:hover {
-  background: var(--primary-btn-bg-hover);
-  border-color: var(--primary-btn-bg-hover);
+  color: var(--ink);
 }
 
 .toast-close {
