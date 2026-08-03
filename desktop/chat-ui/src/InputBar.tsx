@@ -355,23 +355,26 @@ export function InputBar({
               disabled={disabled}
             />
           </div>
-          <button
-            onClick={handleSubmit}
-            disabled={disabled || !canSend}
-            className={`input-send-button${canSend && !disabled ? ' is-active' : ''}${disabled ? ' is-blocked' : ''}`}
-            aria-label={isStreaming ? 'Stop' : 'Send'}
-          >
-            {isStreaming ? (
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                <rect x="2" y="2" width="10" height="10" rx="1.5" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="8" y1="12" x2="8" y2="4" />
-                <polyline points="4,7 8,3 12,7" />
-              </svg>
-            )}
-          </button>
+          <div className="composer-send-group">
+            <span className="composer-send-hint"><b>↵</b> return to send</span>
+            <button
+              onClick={handleSubmit}
+              disabled={disabled || !canSend}
+              className={`input-send-button${canSend && !disabled ? ' is-active' : ''}${disabled ? ' is-blocked' : ''}`}
+              aria-label={isStreaming ? 'Stop' : 'Send'}
+            >
+              {isStreaming ? (
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                  <rect x="2" y="2" width="10" height="10" rx="1.5" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="8" y1="12" x2="8" y2="4" />
+                  <polyline points="4,7 8,3 12,7" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -473,7 +476,7 @@ function ReasoningEffortCycler({
       disabled={disabled}
       aria-label={`Reasoning effort: ${REASONING_EFFORT_LABELS[value]} (click to change)`}
       title="Reasoning effort"
-      className="footer-cycle-button"
+      className="footer-cycle-button footer-effort-button"
     >
       <EffortBars level={REASONING_EFFORTS.indexOf(value) + 1} />
       <span>{REASONING_EFFORT_LABELS[value]}</span>
@@ -497,7 +500,7 @@ function ModelCycler({
       disabled={disabled}
       aria-label={`Model: ${CHAT_MODEL_LABELS[value]} (click to change)`}
       title="Model"
-      className="footer-cycle-button"
+      className="footer-cycle-button footer-model-button"
     >
       <SparkGlyph />
       <span>{CHAT_MODEL_LABELS[value]}</span>

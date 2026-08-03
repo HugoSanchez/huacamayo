@@ -2,17 +2,24 @@
    InputBar.tsx). The dynamic textIndent stays inline on the textarea and the
    active-send state is expressed via the .is-active modifier. */
 .input-bar {
-  padding: 10px 12px;
+  padding: 0 44px 20px;
   background: var(--paper);
 }
 
+/* Editorial composer (mockup `.composer`): no filled/bordered box — the field
+   is transparent with a single `--line` rule ABOVE it (the mockup `.rule-line`,
+   realised as the field's border-top), capped to the same 800px column as the
+   doc. The 16px content inset keeps the absolutely-positioned skill chip
+   (top:12 / left:16) and the textarea aligned. */
 .input-bar-field {
   position: relative;
-  background: var(--paper-2);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 12px 16px;
-  min-height: 100px;
+  max-width: 800px;
+  margin: 0 auto;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 12px 16px 0;
 }
 
 .input-bar-textarea {
@@ -29,11 +36,17 @@
   min-height: 48px;
 }
 
+.input-bar-textarea::placeholder {
+  color: var(--ink-dim);
+}
+
+/* Send / stop control — a quiet ghost affordance (no filled box). Dim by
+   default, ink on hover and while actionable (`.is-active`). */
 .input-send-button {
-  border: 1px solid var(--line);
+  border: none;
   background: transparent;
   color: var(--ink-dim);
-  border-radius: 8px;
+  border-radius: 0;
   width: 28px;
   height: 28px;
   display: flex;
@@ -43,6 +56,11 @@
   padding: 0;
   font-size: 16px;
   line-height: 1;
+  transition: color 120ms ease;
+}
+
+.input-send-button:hover:not(:disabled) {
+  color: var(--ink);
 }
 
 /* Dim state tracks the `disabled` PROP (Connecting…), not the button's
@@ -55,6 +73,10 @@
 
 /* Footer model / reasoning-effort cycle buttons (was footerCycleStyle in
    InputBar.tsx). Disabled state driven by the button's own :disabled. */
+/* Footer model / effort cyclers — text-style affordances (mockup `.picker`):
+   no pill background or border. Model reads in green (mockup `.model-trigger`);
+   effort reads ink-dim and lifts to ink on hover. Glyphs inherit currentColor
+   so the spark/effort bars pick up the same tint. */
 .footer-cycle-button {
   display: flex;
   align-items: center;
@@ -62,12 +84,13 @@
   border: none;
   background: transparent;
   color: var(--ink-dim);
-  border-radius: 7px;
+  border-radius: 0;
   padding: 3px 6px;
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
   opacity: 1;
+  transition: color 120ms ease;
 }
 
 .footer-cycle-button:disabled {
@@ -75,9 +98,35 @@
   opacity: 0.4;
 }
 
+.footer-model-button {
+  color: var(--green);
+}
+
+.footer-effort-button:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+/* "↵ return to send" hint sitting beside the send control (mockup `.send`). */
+.composer-send-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-send-hint {
+  font-size: 13px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.composer-send-hint b {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
 .input-send-button.is-active {
-  background: var(--ink);
-  color: var(--paper);
+  background: transparent;
+  color: var(--ink);
 }
 
 /* Skill chip inside the input bar (when a skill is attached) */
@@ -87,8 +136,9 @@
   gap: 6px;
   height: 22px;
   padding: 0 6px 0 8px;
-  border-radius: 6px;
-  background: var(--chip-bg);
+  border-radius: 10px;
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
   color: var(--ink);
   font-size: 12px;
   line-height: 1;
@@ -149,8 +199,8 @@
   right: 0;
   max-height: 280px;
   overflow-y: auto;
-  background: var(--paper);
-  border: 1px solid var(--line);
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
   border-radius: 10px;
   padding: 4px;
   box-shadow: var(--popover-shadow);

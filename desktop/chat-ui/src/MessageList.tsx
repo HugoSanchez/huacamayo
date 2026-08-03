@@ -126,11 +126,7 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '16px 32px',
-        }}
+        className="chat-scroll"
       >
         {messages.map(msg => (
           <MessageBubble

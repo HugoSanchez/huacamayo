@@ -36,7 +36,7 @@
   --card-border: rgba(255, 255, 255, 0.12);
   /* Shared cap so the response, the activity (thinking/tools), and the footer
      all line up at the same width inside an assistant turn. */
-  --assistant-content-max-width: 820px;
+  --assistant-content-max-width: 800px;
 
   /* ---- App shells / chrome surfaces (flat paper — gradients/blur retired) ---- */
   --app-shell-bg: var(--paper);
@@ -63,7 +63,7 @@
   /* ---- Chat header bands (flat paper — bands retired) ---- */
   --header-band-top-bg: var(--paper);
   --header-band-tabs-bg: var(--paper);
-  --header-band-border: var(--line);
+  --header-band-border: var(--line-soft);
   --header-active-line: var(--ink);
 
   /* ---- Tool steps / payloads ---- */
@@ -229,7 +229,7 @@
     /* Chat header bands (flat paper) */
     --header-band-top-bg: var(--paper);
     --header-band-tabs-bg: var(--paper);
-    --header-band-border: var(--line);
+    --header-band-border: var(--line-soft);
     --header-active-line: var(--ink);
 
     /* Tool steps / payloads */
