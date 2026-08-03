@@ -1,15 +1,11 @@
 :root {
-  /* ---- Fonts (bundled in Phase 2 via fonts.css; JetBrains Mono is the app-wide
-     UI + code font, IBM Plex Sans is defined for Phase 4 assistant prose) ---- */
+  /* ---- Fonts (bundled in Phase 2 via fonts.css) ----
+     Two canonical families: --font-ui (JetBrains Mono) drives the whole UI and
+     all code; --font-sans (IBM Plex Sans) is assistant reply prose only. Phase 6
+     collapsed the retired per-rule mono aliases (--font-mono-code / -ui-label /
+     -mono-step / -mono-codex) onto --font-ui — they all held the same stack. */
   --font-ui: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --font-sans: 'IBM Plex Sans', ui-sans-serif, -apple-system, sans-serif;
-  /* Legacy per-rule stacks are retired onto the same JetBrains Mono stack —
-     the whole UI and all code render JetBrains Mono from this phase on. Token
-     names are kept for now; Phase 6 collapses them. */
-  --font-mono-code: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --font-ui-label: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --font-mono-step: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --font-mono-codex: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
   /* ---- Semantic core (dark defaults; light overrides in the light block) ---- */
   --paper: #1e2022;
@@ -32,7 +28,6 @@
   --tool-bg: var(--line-soft);
   --tool-border: rgba(255, 255, 255, 0.08);
   --scrollbar: var(--line);
-  --card-bg: var(--paper-2);
   --card-border: rgba(255, 255, 255, 0.12);
   /* Shared cap so the response, the activity (thinking/tools), and the footer
      all line up at the same width inside an assistant turn. */
@@ -81,7 +76,9 @@
   /* ---- Connection card ---- */
   --connection-card-bg: rgba(255, 255, 255, 0.035);
   --connection-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
-  --logo-fallback-bg: rgba(0, 0, 0, 0.05);
+  /* Dark: a black tint is invisible on paper, so the fallback tile uses a
+     white-alpha wash (matching --row-logo-fallback-bg); light override below. */
+  --logo-fallback-bg: rgba(255, 255, 255, 0.06);
   --danger-soft: #ff9a8b;
 
   /* ---- Connection pill / status ---- */
@@ -92,20 +89,11 @@
   /* ---- Catalog overlay ---- */
   --catalog-shadow: 2px 0 6px rgba(0, 0, 0, 0.18);
   --close-hover-bg: rgba(255, 255, 255, 0.08);
-  --seg-track-bg: rgba(255, 255, 255, 0.05);
-  --seg-active-bg: rgba(255, 255, 255, 0.08);
-  --seg-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-  --field-subtle-bg: rgba(255, 255, 255, 0.04);
-  --field-subtle-bg-hover: rgba(255, 255, 255, 0.06);
-  --field-subtle-bg-focus: rgba(255, 255, 255, 0.05);
-  --field-subtle-border-focus: rgba(255, 255, 255, 0.14);
   --warn-text: var(--orange);
-  --row-hover-bg: rgba(255, 255, 255, 0.04);
   --row-logo-fallback-bg: rgba(255, 255, 255, 0.06);
   --catalog-pill-color: var(--accent);
 
   /* ---- Skill / input chips ---- */
-  --chip-bg: rgba(255, 255, 255, 0.08);
   --chip-remove-hover-bg: rgba(255, 255, 255, 0.1);
   --skill-chip-bg: rgba(255, 255, 255, 0.14);
 
@@ -121,7 +109,6 @@
   --icon-hover-bg: rgba(255, 255, 255, 0.08);
   --icon-hover-soft: rgba(255, 255, 255, 0.07);
   --check-success: var(--green);
-  --tag-bg: rgba(255, 255, 255, 0.06);
   --primary-btn-bg: rgba(255, 255, 255, 0.92);
   --primary-btn-text: #111;
   --primary-btn-bg-hover: #fff;
@@ -135,16 +122,9 @@
      so these resolve to --ink in both modes. */
   --cron-desc-focus-border: var(--ink);
   --cron-detail-focus-border: var(--ink);
-  --state-paused: var(--orange);
-  --error-border: rgba(249, 122, 122, 0.55);
-  --error-text-strong: #f97a7a;
-  --danger-strong: #c62a2a;
-  --white: #fff;
-  --delete-hover-border: rgba(249, 122, 122, 0.45);
   --cron-run-hover-bg: rgba(255, 255, 255, 0.05);
   --status-ok: var(--green);
   --status-error: #d14747;
-  --transcript-payload-bg: rgba(255, 255, 255, 0.04);
 
   /* ---- Toast ---- */
   --toast-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
@@ -160,25 +140,22 @@
   --draft-card-shadow: 0 12px 32px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.2);
   --draft-icon-hover-bg: rgba(255, 255, 255, 0.06);
   --avatar-bg: rgba(255, 255, 255, 0.08);
-  --draft-toggle-hover-bg: rgba(255, 255, 255, 0.05);
+  /* Shared hover tint for message-draft-card controls (toggle rows + secondary
+     button) — Phase 6 merged --draft-toggle-hover-bg + --secondary-btn-hover-bg. */
+  --draft-hover-bg: rgba(255, 255, 255, 0.05);
   --draft-error-text: #ff8585;
-  --secondary-btn-hover-bg: rgba(255, 255, 255, 0.05);
   --minimized-shadow: 0 8px 22px rgba(0, 0, 0, 0.3), 0 1px 4px rgba(0, 0, 0, 0.18);
   --minimized-border-hover: rgba(255, 255, 255, 0.18);
   --minimized-shadow-hover: 0 10px 26px rgba(0, 0, 0, 0.36), 0 1px 4px rgba(0, 0, 0, 0.2);
 
   /* ---- Settings / codex ---- */
   --settings-hover-bg: rgba(255, 255, 255, 0.06);
-  --track-bg: rgba(255, 255, 255, 0.08);
-  --usage-fill: var(--green);
   --danger-btn-text: #ff6f61;
   --danger-btn-border: rgba(255, 111, 97, 0.35);
   --danger-btn-hover-bg: rgba(255, 111, 97, 0.1);
   --copied-bg: rgba(166, 192, 122, 0.14);
   --copied-border: rgba(166, 192, 122, 0.4);
   --success-text: var(--green);
-  --pill-success-bg: rgba(166, 192, 122, 0.16);
-  --pill-success-border: rgba(166, 192, 122, 0.35);
 }
 
 /* Light mode — token redefinitions only. Swift sets colorScheme=light so this
@@ -208,7 +185,6 @@
     --tool-bg: var(--line-soft);
     --tool-border: rgba(0, 0, 0, 0.08);
     --scrollbar: var(--line);
-    --card-bg: var(--paper-2);
     --card-border: rgba(0, 0, 0, 0.08);
 
     /* App shells / chrome surfaces (flat paper) */
@@ -257,6 +233,7 @@
     /* Connection card */
     --connection-card-bg: rgba(255, 255, 255, 0.55);
     --connection-card-shadow: 0 2px 6px rgba(40, 38, 28, 0.06);
+    --logo-fallback-bg: rgba(0, 0, 0, 0.05);
 
     /* Connection pill / status */
     --pill-hover-bg: rgba(0, 0, 0, 0.04);
@@ -266,18 +243,10 @@
     /* Catalog overlay */
     --catalog-shadow: 2px 0 6px rgba(40, 38, 28, 0.06);
     --close-hover-bg: rgba(0, 0, 0, 0.05);
-    --seg-track-bg: rgba(0, 0, 0, 0.04);
-    --seg-active-bg: var(--paper);
-    --field-subtle-bg: rgba(0, 0, 0, 0.04);
-    --field-subtle-bg-hover: rgba(0, 0, 0, 0.06);
-    --field-subtle-bg-focus: rgba(0, 0, 0, 0.05);
-    --field-subtle-border-focus: rgba(0, 0, 0, 0.12);
-    --row-hover-bg: rgba(0, 0, 0, 0.025);
     --row-logo-fallback-bg: rgba(0, 0, 0, 0.05);
     --catalog-pill-color: var(--accent);
 
     /* Skill / input chips */
-    --chip-bg: rgba(0, 0, 0, 0.06);
     --chip-remove-hover-bg: rgba(0, 0, 0, 0.08);
     --skill-chip-bg: rgba(255, 255, 255, 0.18);
 
@@ -289,7 +258,6 @@
     --toggle-track-bg: rgba(0, 0, 0, 0.12);
     --icon-hover-bg: rgba(0, 0, 0, 0.06);
     --icon-hover-soft: rgba(0, 0, 0, 0.06);
-    --tag-bg: rgba(0, 0, 0, 0.05);
     --primary-btn-bg: #111;
     --primary-btn-text: #fff;
     --primary-btn-bg-hover: #000;
@@ -299,12 +267,7 @@
     /* Cron detail (focus borders resolve to --ink via :root; only the bg tint
        needs a light value) */
     --cron-name-focus-bg: rgba(0, 0, 0, 0.04);
-    --state-paused: var(--orange);
-    --error-border: rgba(220, 60, 60, 0.55);
-    --error-text-strong: #c62a2a;
-    --delete-hover-border: rgba(198, 42, 42, 0.4);
     --cron-run-hover-bg: rgba(0, 0, 0, 0.04);
-    --transcript-payload-bg: rgba(0, 0, 0, 0.04);
 
     /* Cron tool card */
     --cron-card-icon-bg: rgba(0, 0, 0, 0.06);
@@ -317,23 +280,19 @@
     --draft-card-shadow: 0 12px 32px rgba(40, 38, 28, 0.12), 0 2px 6px rgba(40, 38, 28, 0.08);
     --draft-icon-hover-bg: rgba(0, 0, 0, 0.06);
     --avatar-bg: rgba(0, 0, 0, 0.06);
-    --draft-toggle-hover-bg: rgba(0, 0, 0, 0.05);
+    --draft-hover-bg: rgba(0, 0, 0, 0.05);
     --draft-error-text: #c43d3d;
-    --secondary-btn-hover-bg: rgba(0, 0, 0, 0.05);
     --minimized-shadow: 0 8px 22px rgba(40, 38, 28, 0.1), 0 1px 4px rgba(40, 38, 28, 0.06);
     --minimized-border-hover: rgba(0, 0, 0, 0.18);
     --minimized-shadow-hover: 0 10px 26px rgba(40, 38, 28, 0.14), 0 1px 4px rgba(40, 38, 28, 0.08);
 
     /* Settings / codex */
     --settings-hover-bg: rgba(0, 0, 0, 0.04);
-    --track-bg: rgba(0, 0, 0, 0.06);
     --danger-btn-text: #c0392b;
     --danger-btn-border: rgba(192, 57, 43, 0.35);
     --danger-btn-hover-bg: rgba(192, 57, 43, 0.08);
     --copied-bg: rgba(109, 122, 76, 0.14);
     --copied-border: rgba(109, 122, 76, 0.35);
     --success-text: var(--green);
-    --pill-success-bg: rgba(109, 122, 76, 0.16);
-    --pill-success-border: rgba(109, 122, 76, 0.35);
   }
 }

@@ -383,7 +383,7 @@
 }
 
 .skill-detail-hint code {
-  font-family: var(--font-mono-code);
+  font-family: var(--font-ui);
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 4px;
@@ -450,31 +450,6 @@
   color: var(--ink);
 }
 
-.cron-description-action {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  padding: 4px;
-  margin: 0;
-  border-radius: 4px;
-  color: var(--ink-dim);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.12s ease, background 0.12s ease;
-}
-
-.cron-description-action:hover {
-  color: var(--ink);
-  background: var(--icon-hover-soft);
-}
-
-.cron-description-action:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .cron-description-input {
   appearance: none;
   font: inherit;
@@ -514,14 +489,6 @@
   font-style: italic;
 }
 
-.cron-state {
-  text-transform: capitalize;
-}
-
-.cron-state-paused {
-  color: var(--state-paused);
-}
-
 .cron-detail-section {
   display: flex;
   flex-direction: column;
@@ -536,7 +503,6 @@
   color: var(--ink-dim);
 }
 
-.cron-detail-input,
 .cron-detail-textarea {
   appearance: none;
   font: inherit;
@@ -552,25 +518,15 @@
 }
 
 .cron-detail-textarea {
-  font-family: var(--font-mono-code);
+  font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.5;
   resize: vertical;
   min-height: 96px;
 }
 
-.cron-detail-input:focus,
 .cron-detail-textarea:focus {
   border-color: var(--cron-detail-focus-border);
-}
-
-.cron-detail-input.has-error {
-  border-color: var(--error-border);
-}
-
-.cron-detail-field-error {
-  font-size: 11px;
-  color: var(--error-text-strong);
 }
 
 .cron-detail-schedule-meta {
@@ -612,32 +568,6 @@
 .cron-detail-secondary:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.cron-detail-delete {
-  appearance: none;
-  margin-left: auto;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink-dim);
-  border: 1px solid var(--line);
-  cursor: pointer;
-  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
-}
-
-.cron-detail-delete:hover {
-  color: var(--error-text-strong);
-  border-color: var(--delete-hover-border);
-}
-
-.cron-detail-delete.is-confirming {
-  color: var(--white);
-  background: var(--danger-strong);
-  border-color: var(--danger-strong);
 }
 
 .cron-detail-empty {
@@ -765,7 +695,7 @@
 }
 
 .cron-run-transcript-tool-name {
-  font-family: var(--font-mono-code);
+  font-family: var(--font-ui);
   font-size: 12px;
 }
 
@@ -793,7 +723,7 @@
   background: var(--paper-2);
   border: 1px solid var(--line-soft);
   border-radius: 10px;
-  font-family: var(--font-mono-code);
+  font-family: var(--font-ui);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -839,11 +769,6 @@
   font-size: 12px;
   line-height: 1.55;
   color: var(--ink);
-}
-
-@media (prefers-color-scheme: dark) {
-  /* has-error tints the input text red in dark only; light keeps --ink. */
-  .cron-detail-input.has-error { color: var(--error-text-strong); }
 }
 
 /* ============================================================== */
@@ -942,48 +867,6 @@
   font-size: 11px;
   color: var(--ink-dim);
   margin: 4px 0 0;
-}
-
-.usage-bar-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.usage-bar-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 13px;
-}
-
-.usage-bar-limit {
-  color: var(--ink-dim);
-  font-weight: 400;
-}
-
-.usage-bar-track {
-  position: relative;
-  width: 100%;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--track-bg);
-  overflow: hidden;
-}
-
-.usage-bar-fill {
-  position: absolute;
-  inset: 0;
-  width: 0;
-  border-radius: 3px;
-  background: var(--usage-fill);
-  transition: width 0.2s ease;
-}
-
-.usage-bar-unlimited {
-  font-size: 11px;
-  color: var(--ink-dim);
-  font-style: italic;
 }
 
 .settings-button {
@@ -1109,7 +992,7 @@
 }
 
 .codex-code {
-  font-family: var(--font-mono-codex);
+  font-family: var(--font-ui);
   font-size: 18px;
   letter-spacing: 0.08em;
   padding: 0;
@@ -1133,10 +1016,6 @@
   color: var(--danger-btn-text);
 }
 
-.codex-success {
-  color: var(--success-text);
-}
-
 .codex-connected {
   display: inline-flex;
   align-items: center;
@@ -1150,28 +1029,10 @@
   color: var(--ink);
 }
 
-
-.codex-copy-button {
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-
-.codex-copy-button.is-copied {
-  background: var(--copied-bg);
-  border-color: var(--copied-border);
-  color: var(--success-text);
-}
-
 @media (prefers-color-scheme: dark) {
   /* Slightly stronger press feedback in dark; not a color, so kept as a rule. */
   .settings-button-primary:hover:not(:disabled) {
     opacity: 0.85;
-  }
-
-  /* .codex-pill-success has no light counterpart — dark-only success chip. */
-  .codex-pill-success {
-    background: var(--pill-success-bg);
-    color: var(--success-text);
-    border-color: var(--pill-success-border);
   }
 }
 

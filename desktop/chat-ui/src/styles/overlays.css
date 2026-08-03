@@ -239,25 +239,6 @@
   color: var(--status-connected);
 }
 
-.connection-strip {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 16px;
-}
-
-.connection-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--card-border);
-  border-radius: 999px;
-  background: var(--card-bg);
-  color: var(--ink);
-  font-size: 12px;
-}
-
 /* Inline confirmation card rendered in the chat when the agent's
    `cronjob` tool returns success. Click "View" → cron detail page. */
 .cron-tool-card {
@@ -525,7 +506,7 @@
 
 .message-draft-card-row-toggle:hover {
   color: var(--ink);
-  background: var(--draft-toggle-hover-bg);
+  background: var(--draft-hover-bg);
 }
 
 .message-draft-card-input:disabled {
@@ -598,7 +579,7 @@
 
 .message-draft-card-button.is-secondary:not(:disabled):hover {
   color: var(--ink);
-  background: var(--secondary-btn-hover-bg);
+  background: var(--draft-hover-bg);
 }
 
 .message-draft-card-button.is-primary {
