@@ -27,13 +27,13 @@ private struct ConductorThemePalette {
     let footerIcon: Color
     let windowBorder: Color
 
-    // Text roles (semantic ink hierarchy). Values preserve today's per-mode
-    // rendering exactly; `ink2` and `inkDimRow` capture small pre-existing
-    // opacity drift between the session-row text and the surrounding list text.
-    let ink: Color        // primary text — session-row titles
-    let ink2: Color       // list-item names — connections, routines, skills
-    let inkDim: Color     // section labels, chevrons, empty/secondary text
-    let inkDimRow: Color  // session-row trailing meta (timestamps, hover icons)
+    // Text roles (semantic ink hierarchy). Phase 2 collapses the Phase-1b
+    // micro-drift onto the canonical editorial ink scale: `ink2` = ink-2 and
+    // `inkDimRow` = ink-dim (they no longer diverge from ink2 / inkDim).
+    let ink: Color        // primary text — session-row titles (ink)
+    let ink2: Color       // list-item names — connections, routines, skills (ink-2)
+    let inkDim: Color     // section labels, chevrons, empty/secondary text (ink-dim)
+    let inkDimRow: Color  // session-row trailing meta (timestamps, hover icons) (ink-dim)
 
     // Sidebar surface fills.
     let rowSelectedFill: Color
@@ -58,100 +58,105 @@ private struct ConductorThemePalette {
 }
 
 private enum ConductorThemes {
+    // Editorial palette (Phase 2). Flat paper surfaces — the sidebar gradient
+    // collapses to a single paper stop and `sidebarTintOpacity` = 1.0 fully
+    // covers the blur material, so no structural edits are needed.
     static let dark = ConductorThemePalette(
-        sidebarTop: Color(red: 38/255, green: 47/255, blue: 45/255),      // #262F2D
-        sidebarBottom: Color(red: 34/255, green: 47/255, blue: 55/255),   // #222F37
-        sidebarTintOpacity: 0.94,
-        mainCanvas: Color(red: 20/255, green: 22/255, blue: 24/255),      // #141618
-        inputFill: Color(red: 37/255, green: 40/255, blue: 43/255),       // #25282B
-        inputStroke: Color.white.opacity(0.10),
-        rightTop: Color(red: 19/255, green: 21/255, blue: 23/255),        // #131517
-        rightBottom: Color(red: 19/255, green: 21/255, blue: 23/255),     // #131517
-        verticalDivider: Color(red: 42/255, green: 45/255, blue: 48/255), // #2A2D30
-        horizontalDivider: Color(red: 42/255, green: 45/255, blue: 48/255), // #2A2D30
+        sidebarTop: Color(red: 30/255, green: 32/255, blue: 34/255),      // #1E2022 paper
+        sidebarBottom: Color(red: 30/255, green: 32/255, blue: 34/255),   // #1E2022 paper
+        sidebarTintOpacity: 1.0,
+        mainCanvas: Color(red: 30/255, green: 32/255, blue: 34/255),      // #1E2022 paper
+        inputFill: Color(red: 38/255, green: 40/255, blue: 43/255),       // #26282B paper-2
+        inputStroke: Color.white.opacity(0.10),                           // line
+        rightTop: Color(red: 30/255, green: 32/255, blue: 34/255),        // #1E2022 paper
+        rightBottom: Color(red: 30/255, green: 32/255, blue: 34/255),     // #1E2022 paper
+        verticalDivider: Color.white.opacity(0.10),                       // line
+        horizontalDivider: Color.white.opacity(0.10),                     // line
         rightDividerThickness: 1,
         centerRightDividerThickness: 1,
-        headerTopStart: Color(red: 43/255, green: 43/255, blue: 42/255, opacity: 0.52),
-        headerTopEnd: Color(red: 33/255, green: 33/255, blue: 32/255, opacity: 0.52),
-        headerTabsStart: Color(red: 41/255, green: 41/255, blue: 40/255, opacity: 0.48),
-        headerTabsEnd: Color(red: 30/255, green: 30/255, blue: 29/255, opacity: 0.48),
-        headerDivider: Color.white.opacity(0.10),
-        headerBottomDivider: Color.white.opacity(0.10),
+        headerTopStart: Color(red: 30/255, green: 32/255, blue: 34/255),  // #1E2022 paper (flat)
+        headerTopEnd: Color(red: 30/255, green: 32/255, blue: 34/255),    // #1E2022 paper (flat)
+        headerTabsStart: Color(red: 30/255, green: 32/255, blue: 34/255), // #1E2022 paper (flat)
+        headerTabsEnd: Color(red: 30/255, green: 32/255, blue: 34/255),   // #1E2022 paper (flat)
+        headerDivider: Color.white.opacity(0.10),                         // line
+        headerBottomDivider: Color.white.opacity(0.06),                   // line-soft
         headerBottomDividerThickness: 1,
-        headerActiveLine: Color.white.opacity(0.65),
-        footerDivider: Color.white.opacity(0.10),
-        footerIcon: Color.white.opacity(0.52),
-        windowBorder: Color.white.opacity(0.08),
-        ink: Color.white.opacity(0.88),
-        ink2: Color.white.opacity(0.86),
-        inkDim: Color.white.opacity(0.44),
+        headerActiveLine: Color.white.opacity(0.90),                      // ink
+        footerDivider: Color.white.opacity(0.06),                         // line-soft
+        footerIcon: Color.white.opacity(0.46),                            // ink-dim
+        windowBorder: Color.white.opacity(0.10),                          // line
+        ink: Color.white.opacity(0.90),
+        ink2: Color.white.opacity(0.74),
+        inkDim: Color.white.opacity(0.46),
         inkDimRow: Color.white.opacity(0.46),
         rowSelectedFill: Color.white.opacity(0.05),
         rowHoverFill: Color.white.opacity(0.03),
-        cardFill: Color(red: 37/255, green: 40/255, blue: 43/255).opacity(0.38), // inputFill × 0.38
+        cardFill: Color(red: 38/255, green: 40/255, blue: 43/255).opacity(0.38), // paper-2 × 0.38
         danger: Color.red.opacity(0.88),
         dangerSoft: Color.red.opacity(0.72),
         dangerStrong: Color.red.opacity(0.92),
         iconFallbackFill: Color.white.opacity(0.08),
         iconFallbackText: Color.white.opacity(0.7),
-        toastText: Color.white.opacity(0.88),
-        toastFill: Color.black.opacity(0.42),
-        toastStroke: Color.white.opacity(0.08)
+        toastText: Color.white.opacity(0.90),                             // ink
+        toastFill: Color(red: 38/255, green: 40/255, blue: 43/255),       // #26282B paper-2
+        toastStroke: Color.white.opacity(0.10)                            // line
     )
 
-    // Light mode equivalent that preserves the same panel hierarchy and contrast steps.
+    // Light mode — same editorial palette, warm paper. Row fills switch from
+    // white overlays (invisible on paper) to ink-tinted lines.
     static let light = ConductorThemePalette(
-        sidebarTop: Color(red: 236/255, green: 242/255, blue: 246/255),      // #ECF2F6
-        sidebarBottom: Color(red: 227/255, green: 235/255, blue: 241/255),   // #E3EBF1
-        sidebarTintOpacity: 0.46,
-        mainCanvas: Color(red: 243/255, green: 245/255, blue: 247/255),      // #F3F5F7
-        inputFill: Color(red: 235/255, green: 238/255, blue: 242/255),       // #EBEEF2
-        inputStroke: Color.black.opacity(0.10),
-        rightTop: Color(red: 241/255, green: 244/255, blue: 247/255),        // #F1F4F7
-        rightBottom: Color(red: 241/255, green: 244/255, blue: 247/255),     // #F1F4F7
-        verticalDivider: Color(red: 214/255, green: 220/255, blue: 226/255), // #D6DCE2
-        horizontalDivider: Color(red: 214/255, green: 220/255, blue: 226/255), // #D6DCE2
+        sidebarTop: Color(red: 245/255, green: 242/255, blue: 234/255),     // #F5F2EA paper
+        sidebarBottom: Color(red: 245/255, green: 242/255, blue: 234/255),  // #F5F2EA paper
+        sidebarTintOpacity: 1.0,
+        mainCanvas: Color(red: 245/255, green: 242/255, blue: 234/255),     // #F5F2EA paper
+        inputFill: Color(red: 239/255, green: 235/255, blue: 224/255),      // #EFEBE0 paper-2
+        inputStroke: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),  // line
+        rightTop: Color(red: 245/255, green: 242/255, blue: 234/255),       // #F5F2EA paper
+        rightBottom: Color(red: 245/255, green: 242/255, blue: 234/255),    // #F5F2EA paper
+        verticalDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),   // line
+        horizontalDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11), // line
         rightDividerThickness: 0.5,
         centerRightDividerThickness: 0,
-        headerTopStart: Color(red: 250/255, green: 251/255, blue: 253/255, opacity: 0.26),
-        headerTopEnd: Color(red: 239/255, green: 243/255, blue: 247/255, opacity: 0.26),
-        headerTabsStart: Color(red: 248/255, green: 250/255, blue: 252/255, opacity: 0.22),
-        headerTabsEnd: Color(red: 236/255, green: 241/255, blue: 246/255, opacity: 0.22),
-        headerDivider: Color.black.opacity(0.12),
-        headerBottomDivider: Color.black.opacity(0.06),
+        headerTopStart: Color(red: 245/255, green: 242/255, blue: 234/255),  // paper (flat)
+        headerTopEnd: Color(red: 245/255, green: 242/255, blue: 234/255),    // paper (flat)
+        headerTabsStart: Color(red: 245/255, green: 242/255, blue: 234/255), // paper (flat)
+        headerTabsEnd: Color(red: 245/255, green: 242/255, blue: 234/255),   // paper (flat)
+        headerDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),        // line
+        headerBottomDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.07),  // line-soft
         headerBottomDividerThickness: 0.5,
-        headerActiveLine: Color.black.opacity(0.55),
-        footerDivider: Color.black.opacity(0.10),
-        footerIcon: Color.black.opacity(0.52),
-        windowBorder: Color.black.opacity(0.10),
-        ink: Color.black.opacity(0.76),
-        ink2: Color.black.opacity(0.72),
-        inkDim: Color.black.opacity(0.42),
-        inkDimRow: Color.black.opacity(0.42),
-        rowSelectedFill: Color.white.opacity(0.32),
-        rowHoverFill: Color.white.opacity(0.18),
-        cardFill: Color(red: 235/255, green: 238/255, blue: 242/255).opacity(0.82), // inputFill × 0.82
+        headerActiveLine: Color(red: 52/255, green: 51/255, blue: 45/255),   // #34332D ink
+        footerDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.07),  // line-soft
+        footerIcon: Color(red: 143/255, green: 140/255, blue: 127/255),      // #8F8C7F ink-dim
+        windowBorder: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),   // line
+        ink: Color(red: 52/255, green: 51/255, blue: 45/255),                // #34332D
+        ink2: Color(red: 85/255, green: 83/255, blue: 74/255),               // #55534A
+        inkDim: Color(red: 143/255, green: 140/255, blue: 127/255),          // #8F8C7F
+        inkDimRow: Color(red: 143/255, green: 140/255, blue: 127/255),       // #8F8C7F ink-dim
+        rowSelectedFill: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.07),
+        rowHoverFill: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.045),
+        cardFill: Color(red: 239/255, green: 235/255, blue: 224/255).opacity(0.82), // paper-2 × 0.82
         danger: Color.red.opacity(0.74),
         dangerSoft: Color.red.opacity(0.58),
         dangerStrong: Color.red.opacity(0.78),
         iconFallbackFill: Color.black.opacity(0.06),
         iconFallbackText: Color.black.opacity(0.55),
-        toastText: Color.black.opacity(0.78),
-        toastFill: Color.white.opacity(0.82),
-        toastStroke: Color.black.opacity(0.08)
+        toastText: Color(red: 52/255, green: 51/255, blue: 45/255),          // #34332D ink
+        toastFill: Color(red: 245/255, green: 242/255, blue: 234/255),       // #F5F2EA paper
+        toastStroke: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11)  // line
     )
 }
 
-/// Shared font ramp for the native shell. Groundwork for Phase 2 — swapping the
-/// UI typeface later happens here rather than at ~20 call sites. Only size/weight
-/// combos that repeat 3+ times live here; one-off fonts stay inline.
+/// Shared font ramp for the native shell. Phase 2 swaps the UI typeface to the
+/// bundled JetBrains Mono here rather than at ~20 call sites. Sizes are unchanged;
+/// the semibold roles reference the SemiBold face directly (guaranteed real weight,
+/// not a synthesized one). One-off fonts stay inline.
 private enum ConductorType {
-    static let sectionLabel = Font.system(size: 11, weight: .semibold)
-    static let disclosure = Font.system(size: 8, weight: .semibold)
-    static let rowTitle = Font.system(size: 13, weight: .regular)
-    static let caption = Font.system(size: 11)
-    static let placeholder = Font.system(size: 12)
-    static let footerControl = Font.system(size: 14, weight: .regular)
+    static let sectionLabel = Font.custom("JetBrains Mono SemiBold", size: 11)
+    static let disclosure = Font.custom("JetBrains Mono SemiBold", size: 8)
+    static let rowTitle = Font.custom("JetBrains Mono", size: 13)
+    static let caption = Font.custom("JetBrains Mono", size: 11)
+    static let placeholder = Font.custom("JetBrains Mono", size: 12)
+    static let footerControl = Font.custom("JetBrains Mono", size: 14)
 }
 
 struct ContentView: View {

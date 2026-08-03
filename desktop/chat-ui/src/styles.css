@@ -1,5 +1,7 @@
 /* Entry point — imports the split stylesheets in cascade order.
-   Do not reorder: tokens must load first, then base, then component layers. */
+   Do not reorder: fonts first (so @font-face resolves before tokens reference
+   the families), then tokens, then base, then component layers. */
+@import './styles/fonts.css';
 @import './styles/tokens.css';
 @import './styles/base.css';
 @import './styles/sidebar.css';

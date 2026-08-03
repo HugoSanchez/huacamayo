@@ -16,6 +16,7 @@
 		A10000010000000000000005 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000006 /* SidecarManager.swift */; };
 		A1000001000000000000000B /* ChatWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000C /* ChatWebView.swift */; };
 		A1000001000000000000000C /* chat-ui in Resources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000D /* chat-ui */; };
+		A10000010000000000000021 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000021 /* Fonts */; };
 		A1000001000000000000000D /* ManagedSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000E /* ManagedSessionStore.swift */; };
 		A1000001000000000000000F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000010 /* SignInView.swift */; };
 		A10000010000000000000011 /* UpdateToastUserDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000011 /* UpdateToastUserDriver.swift */; };
@@ -31,6 +32,7 @@
 		A10000020000000000000006 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		A1000002000000000000000C /* ChatWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebView.swift; sourceTree = "<group>"; };
 		A1000002000000000000000D /* chat-ui */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "chat-ui"; sourceTree = "<group>"; };
+		A10000020000000000000021 /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fonts; sourceTree = "<group>"; };
 		A1000002000000000000000E /* ManagedSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedSessionStore.swift; sourceTree = "<group>"; };
 		A1000002000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000020000000000000010 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
@@ -81,6 +83,7 @@
 				A10000020000000000000020 /* Telemetry.swift */,
 				A1000002000000000000000F /* Info.plist */,
 				A1000002000000000000000D /* chat-ui */,
+				A10000020000000000000021 /* Fonts */,
 				A10000020000000000000003 /* Assets.xcassets */,
 				A10000020000000000000005 /* verso.entitlements */,
 				A10000050000000000000004 /* Preview Content */,
@@ -172,6 +175,7 @@
 				A10000010000000000000004 /* Preview Assets.xcassets in Resources */,
 				A10000010000000000000003 /* Assets.xcassets in Resources */,
 				A1000001000000000000000C /* chat-ui in Resources */,
+				A10000010000000000000021 /* Fonts in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
