@@ -17,9 +17,11 @@ export interface Route {
 
 const MAX_BODY = 10 * 1024 * 1024; // 10MB
 const AUTH_HEADER = 'x-verso-sidecar-token';
-// WKWebView serializes a file:// page's origin as "file://" when
-// allowFileAccessFromFileURLs is enabled, and as "null" (opaque) otherwise.
-const ALLOWED_ORIGINS = new Set(['null', 'file://']);
+// WKWebView serializes the chat page's origin as "file://" because the shell
+// enables allowFileAccessFromFileURLs (see ChatWebView.swift). Deliberately
+// NOT "null": sandboxed iframes on arbitrary websites also send Origin: null,
+// so allowlisting it would let them read public-route responses.
+const ALLOWED_ORIGINS = new Set(['file://']);
 const ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
 const ALLOWED_HEADERS = `Content-Type, ${AUTH_HEADER}, Authorization`;
 

@@ -169,7 +169,10 @@ struct ChatWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        // Allow fetch to localhost from file:// origin
+        // Allow fetch to localhost from file:// origin. With this enabled,
+        // WebKit sends `Origin: file://` on sidecar requests — the exact value
+        // the orchestrator's CORS allowlist expects (router.ts ALLOWED_ORIGINS).
+        // Removing it changes the origin to "null" and breaks every chat fetch.
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         config.userContentController.add(context.coordinator, name: "chatBridge")
         config.userContentController.addUserScript(WKUserScript(

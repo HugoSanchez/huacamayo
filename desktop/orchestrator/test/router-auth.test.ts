@@ -25,24 +25,35 @@ describe('sidecar router auth boundary', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  // WKWebView serializes the chat page's file origin as "file://" when
-  // allowFileAccessFromFileURLs is enabled, and as "null" (opaque) otherwise.
-  for (const fileOrigin of ['file://', 'null']) {
-    it(`allows WKWebView file-origin preflight with required headers (origin ${fileOrigin})`, async () => {
-      const res = await request('/chat/sessions', {
-        method: 'OPTIONS',
-        headers: {
-          origin: fileOrigin,
-          'access-control-request-method': 'POST',
-          'access-control-request-headers': 'content-type, x-verso-sidecar-token',
-        },
-      });
-      expect(res.status).toBe(204);
-      expect(res.headers['access-control-allow-origin']).toBe(fileOrigin);
-      expect(res.headers['access-control-allow-methods']).toContain('POST');
-      expect(String(res.headers['access-control-allow-headers']).toLowerCase()).toContain('x-verso-sidecar-token');
+  // WKWebView serializes the chat page's origin as "file://" because the
+  // shell enables allowFileAccessFromFileURLs (see ChatWebView.swift).
+  it('allows WKWebView file-origin preflight with required headers', async () => {
+    const res = await request('/chat/sessions', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'file://',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type, x-verso-sidecar-token',
+      },
     });
-  }
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('file://');
+    expect(res.headers['access-control-allow-methods']).toContain('POST');
+    expect(String(res.headers['access-control-allow-headers']).toLowerCase()).toContain('x-verso-sidecar-token');
+  });
+
+  it('does not grant CORS to the null origin (forgeable via sandboxed iframes)', async () => {
+    const res = await request('/chat/sessions', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'null',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type, x-verso-sidecar-token',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
 
   it('does not grant CORS to hostile preflights', async () => {
     const res = await request('/chat/sessions', {
