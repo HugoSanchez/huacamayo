@@ -226,13 +226,13 @@
   padding: 16px 44px;
 }
 
-/* Centre the message column (mockup `.col`, max 800px) inside the padded doc.
+/* Centre the message column inside the padded doc.
    The rows are the scroll area's direct children; auto side-margins centre each
    one while the per-row inline flex alignment still floats user bubbles right
    and assistant content left. Only side margins are set, so the inline
    margin-top/bottom the rows carry for vertical rhythm is preserved. */
 .chat-scroll > div {
-  max-width: 800px;
+  max-width: var(--assistant-content-max-width);
   margin-left: auto;
   margin-right: auto;
 }
@@ -310,6 +310,12 @@
 .assistant-message-content {
   width: 100%;
   max-width: var(--assistant-content-max-width);
+}
+
+.message-content.user-message-content {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 .message-content h1,
@@ -454,8 +460,8 @@
    Assistant reply prose — the signature editorial move. Assistant markdown
    (final answer + interim text steps, both `.message-content.assistant-message-content`)
    switches from mono to IBM Plex Sans at 15px/1.55. Scoped to the compound
-   class so it never touches user bubbles (`.user-message-content`) or reasoning
-   (`.reasoning-markdown`), which stay mono. Follows the mockup `.reply` rules.
+   class so it never touches reasoning (`.reasoning-markdown`), which stays
+   mono. Follows the mockup `.reply` rules.
    Inline code and code blocks INSIDE replies keep JetBrains Mono via the base
    `.message-content code` rule (mono) and the pre-code override below.
    ========================================================================== */
@@ -467,6 +473,7 @@
 }
 
 .message-content.assistant-message-content p {
+  font-family: var(--font-sans);
   margin: 0 0 20px;
   font-size: 15px;
   line-height: 1.55;
@@ -505,6 +512,7 @@
   padding: 0 0 0 20px;
 }
 .message-content.assistant-message-content li {
+  font-family: var(--font-sans);
   margin: 0 0 14px;
   font-size: 15px;
   line-height: 1.55;
@@ -528,10 +536,16 @@
 }
 
 .message-content.assistant-message-content blockquote {
+  font-family: var(--font-sans);
   border-left: 3px solid var(--line);
   color: var(--ink-dim);
   padding-left: 0.9em;
   margin: 0 0 20px;
+}
+
+.message-content.assistant-message-content th,
+.message-content.assistant-message-content td {
+  font-family: var(--font-sans);
 }
 
 /* Code blocks inside replies take the mockup `.block` look: paper-2 fill, a
@@ -779,4 +793,3 @@
 .connection-pill.is-expired {
   color: var(--status-failed);
 }
-

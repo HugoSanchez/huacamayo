@@ -33,6 +33,7 @@ class StubVerifier implements PrivyAuthVerifier {
 class StubComposioService extends ComposioService {
   capturedUserId: string | null = null;
   capturedDeletedConnectionId: string | null = null;
+  capturedCallbackUrl: string | null = null;
   constructor() { super('test-key'); }
 
   override get configured(): boolean { return true; }
@@ -234,12 +235,71 @@ describe('Composio routes', () => {
       payload: {
         userId: 'usr_attacker_attempting_to_act_as_someone_else',
         toolkit: 'gmail',
-        callbackUrl: 'https://verso.example/cb',
+        callbackUrl: 'http://127.0.0.1:4123/connections/callback',
       },
     });
     expect(res.statusCode).toBe(201);
     expect(capturedToolkit).toBe('gmail');
     expect(composio.capturedUserId).toBe(s.userId);
+  });
+
+  test('POST /v1/composio/connections/request validates callbackUrl at the backend boundary', async () => {
+    s = await setup();
+    const invalidUrls = [
+      'https://127.0.0.1:4123/connections/callback',
+      'http://localhost:4123/connections/callback',
+      'http://localtest.me:4123/connections/callback',
+      'http://127.0.0.1.evil.example:4123/connections/callback',
+      'http://2130706433:4123/connections/callback',
+      'http://127.0.0.1/connections/callback',
+      'http://127.0.0.1:0/connections/callback',
+      'http://127.0.0.1:70000/connections/callback',
+      'http://127.0.0.1:4123/connections/callback/extra',
+      'http://127.0.0.1:4123/other',
+      'http://127.0.0.1:4123/connections/callback?next=https://evil.example',
+      'http://127.0.0.1:4123/connections/callback#token',
+      'http://user:pass@127.0.0.1:4123/connections/callback',
+    ];
+
+    for (const callbackUrl of invalidUrls) {
+      const res = await s.app.inject({
+        method: 'POST',
+        url: '/v1/composio/connections/request',
+        headers: { authorization: `Bearer ${s.sessionToken}` },
+        payload: { toolkit: 'gmail', callbackUrl },
+      });
+      expect(res.statusCode, callbackUrl).toBe(400);
+      expect(res.json().message).toBe('Invalid callbackUrl.');
+    }
+  });
+
+  test('POST /v1/composio/connections/request accepts the exact loopback callback URL', async () => {
+    s = await setup();
+    const composio = s.composio;
+    composio.requestConnection = async (userId, toolkit, callbackUrl) => {
+      composio.capturedUserId = userId;
+      composio.capturedCallbackUrl = callbackUrl;
+      return {
+        id: 'req_x',
+        toolkitSlug: toolkit,
+        toolkitName: 'Gmail',
+        logoUrl: null,
+        status: 'pending' as const,
+        redirectUrl: 'https://composio.example/auth',
+        connectedAccountId: null,
+        errorMessage: null,
+      };
+    };
+
+    const res = await s.app.inject({
+      method: 'POST',
+      url: '/v1/composio/connections/request',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+      payload: { toolkit: 'gmail', callbackUrl: 'http://127.0.0.1:4123/connections/callback' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(composio.capturedCallbackUrl).toBe('http://127.0.0.1:4123/connections/callback');
   });
 
   test('POST /v1/composio/connections/request rejects missing toolkit as 400', async () => {
@@ -248,7 +308,7 @@ describe('Composio routes', () => {
       method: 'POST',
       url: '/v1/composio/connections/request',
       headers: { authorization: `Bearer ${s.sessionToken}` },
-      payload: { callbackUrl: 'https://verso.example/cb' },
+      payload: { callbackUrl: 'http://127.0.0.1:4123/connections/callback' },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('composio_error');

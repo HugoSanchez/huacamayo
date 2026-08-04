@@ -14,6 +14,7 @@ import {
   rejectDraft,
   sendDraft,
 } from './chat';
+import { displayToolkitName } from './display-names';
 import { useIsSystemAsleep } from './useSystemSleep';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
 
@@ -48,14 +49,14 @@ function buildToolkitMap(
   for (const tk of catalog) {
     const slug = tk.slug?.toLowerCase();
     if (!slug) continue;
-    map.set(slug, { name: tk.name, logoUrl: tk.logoUrl, connected: tk.connected });
+    map.set(slug, { name: displayToolkitName(tk.name), logoUrl: tk.logoUrl, connected: tk.connected });
   }
   for (const conn of connections) {
     const slug = conn.toolkitSlug?.toLowerCase();
     if (!slug) continue;
     const existing = map.get(slug);
     map.set(slug, {
-      name: conn.toolkitName || existing?.name || slug,
+      name: conn.toolkitName ? displayToolkitName(conn.toolkitName) : existing?.name || slug,
       logoUrl: conn.logoUrl ?? existing?.logoUrl ?? null,
       connected: conn.status === 'active' || existing?.connected === true,
     });
@@ -1487,6 +1488,7 @@ function ConnectionCard({
   onConnect: (request: ConnectionRequestView) => void;
 }) {
   const status = request.status;
+  const displayName = displayToolkitName(request.toolkitName);
   const canConnect = status === 'pending' || status === 'failed' || status === 'expired';
   const label = status === 'connected'
     ? 'Connected'
@@ -1498,9 +1500,9 @@ function ConnectionCard({
     <div className="connection-card">
       <div className="connection-card-head">
         <div className="connection-card-meta">
-          <ToolkitLogo name={request.toolkitName} logoUrl={request.logoUrl} />
+          <ToolkitLogo name={displayName} logoUrl={request.logoUrl} />
           <div>
-            <div className="connection-card-title">{request.toolkitName}</div>
+            <div className="connection-card-title">{displayName}</div>
             <div className="connection-card-subtitle">This tool needs access to continue.</div>
           </div>
         </div>
@@ -1579,13 +1581,52 @@ function previewInput(input: unknown): string {
 
 const SLASH_SKILL_MATCH = /^\/([a-z0-9][a-z0-9_-]*)\b\s*/i;
 
+// Attachment marker lines the orchestrator stores in message content (see
+// attachments.ts `attachmentMarker`). The blobs themselves are never
+// persisted; these lines are the durable record that a message carried
+// attachments, and we render them as chips instead of raw text.
+const ATTACHMENT_MARKER = /^\[attached image: (.+)\]$/;
+
+function splitAttachmentMarkers(content: string): { text: string; attachmentNames: string[] } {
+  if (!content.includes('[attached image:')) return { text: content, attachmentNames: [] };
+  const attachmentNames: string[] = [];
+  const kept: string[] = [];
+  for (const line of content.split('\n')) {
+    const match = line.match(ATTACHMENT_MARKER);
+    if (match) attachmentNames.push(match[1]);
+    else kept.push(line);
+  }
+  return { text: kept.join('\n').trim(), attachmentNames };
+}
+
 function UserMessageBody({ content }: { content: string }) {
-  const match = content.match(SLASH_SKILL_MATCH);
+  const { text, attachmentNames } = splitAttachmentMarkers(content);
+  const attachmentChips = attachmentNames.length > 0 && (
+    <span className="message-attachments-row">
+      {attachmentNames.map((name, index) => (
+        <span key={`${name}-${index}`} className="attachment-chip">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="1" y="1" width="8" height="8" rx="1.5" />
+            <circle cx="3.6" cy="3.6" r="0.9" fill="currentColor" stroke="none" />
+            <path d="M1.5 7.5 L4 5 L6 7 L7.4 5.6 L9 7.2" />
+          </svg>
+          <span className="attachment-chip-name">{name}</span>
+        </span>
+      ))}
+    </span>
+  );
+
+  const match = text.match(SLASH_SKILL_MATCH);
   if (!match) {
-    return <span style={{ whiteSpace: 'pre-wrap' }}>{content}</span>;
+    return (
+      <span style={{ whiteSpace: 'pre-wrap' }}>
+        {text}
+        {attachmentChips}
+      </span>
+    );
   }
   const slug = match[1].toLowerCase();
-  const remainder = content.slice(match[0].length);
+  const remainder = text.slice(match[0].length);
   return (
     <span style={{ whiteSpace: 'pre-wrap' }}>
       <span className="skill-chip">
@@ -1595,6 +1636,7 @@ function UserMessageBody({ content }: { content: string }) {
         <span className="skill-chip-slug">/{slug}</span>
       </span>
       {remainder.length > 0 && <span> {remainder}</span>}
+      {attachmentChips}
     </span>
   );
 }

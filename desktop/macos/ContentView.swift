@@ -160,20 +160,21 @@ private enum ConductorThemes {
 
 /// Shared font ramp for the native shell. Phase 2 swaps the UI typeface to the
 /// bundled JetBrains Mono here rather than at ~20 call sites. Sizes are unchanged;
-/// the semibold roles reference the SemiBold face directly (guaranteed real weight,
-/// not a synthesized one). One-off fonts stay inline.
+/// emphasized roles reference bundled face weights directly (guaranteed real
+/// weights, not synthesized ones). One-off fonts stay inline.
 private enum ConductorType {
     static let sectionLabel = Font.custom("JetBrains Mono SemiBold", size: 11)
     static let disclosure = Font.custom("JetBrains Mono SemiBold", size: 8)
     static let rowTitle = Font.custom("JetBrains Mono", size: 13)
-    static let rowTitleStrong = Font.custom("JetBrains Mono SemiBold", size: 13) // selected session title
+    static let rowTitleStrong = Font.custom("JetBrains Mono Bold", size: 13) // selected session title
     static let meta = Font.custom("JetBrains Mono", size: 12)      // ago / status / row meta (ink-faint)
     static let caption = Font.custom("JetBrains Mono", size: 11)
+    static let captionStrong = Font.custom("JetBrains Mono Bold", size: 11)
     static let placeholder = Font.custom("JetBrains Mono", size: 12)
     // SF Symbol glyph sizes (kept on Font.system since they size symbols, not
     // the mono UI text). Centralized here so call sites carry no font literals.
-    static let rowActionIcon = Font.system(size: 12, weight: .medium)      // session hover pencil/archive
-    static let rowActionIconSmall = Font.system(size: 11, weight: .medium)  // cron hover delete
+    static let rowActionIcon = Font.system(size: 11, weight: .medium)      // session hover pencil/archive
+    static let rowActionIconSmall = Font.system(size: 10, weight: .medium)  // cron hover delete
     static let trafficGlyph = Font.system(size: 8, weight: .bold)          // traffic-light hover glyph
 }
 
@@ -310,10 +311,7 @@ struct ContentView: View {
                     SidebarFooter(
                         isDarkMode: $isDarkMode,
                         sidecarState: sidecar.state,
-                        managedAccount: sidecar.managedAccount,
-                        managedSession: managedSessionStore.currentSession,
                         theme: theme,
-                        onSignOut: { managedSessionStore.clearSession() },
                         onOpenSettings: {
                             pendingSettingsOpen = SettingsOpenRequest(token: UUID())
                         }
@@ -354,6 +352,7 @@ struct ContentView: View {
             // span the full window height like the left sidebar.
             ChatWebView(
                 sidecarPort: sidecarPort,
+                sidecarAuthToken: sidecar.authToken,
                 isDarkMode: isDarkMode,
                 isCatalogOpen: isConnectionsCatalogExpanded,
                 isSkillsCatalogOpen: isSkillsCatalogExpanded,
@@ -499,7 +498,7 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("chat/sessions")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 throw SidebarRequestError.invalidResponse
@@ -527,13 +526,25 @@ struct ContentView: View {
         isLoadingSessions = false
     }
 
+    private func sidecarRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        applySidecarAuthHeader(&request)
+        return request
+    }
+
+    private func applySidecarAuthHeader(_ request: inout URLRequest) {
+        if let authToken = sidecar.authToken {
+            request.setValue(authToken, forHTTPHeaderField: "X-Verso-Sidecar-Token")
+        }
+    }
+
     @MainActor
     private func refreshConnections() async {
         guard let baseURL = sidecar.baseURL else { return }
 
         do {
             let url = baseURL.appendingPathComponent("connections")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 return
@@ -558,6 +569,7 @@ struct ContentView: View {
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("connections/\(connectedAccountId)"))
             request.httpMethod = "DELETE"
+            applySidecarAuthHeader(&request)
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
@@ -579,6 +591,7 @@ struct ContentView: View {
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("crons/\(id)"))
             request.httpMethod = "DELETE"
+            applySidecarAuthHeader(&request)
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
@@ -598,7 +611,7 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("crons")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 return
@@ -617,7 +630,7 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("skills")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 return
@@ -639,6 +652,7 @@ struct ContentView: View {
             )
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            applySidecarAuthHeader(&request)
             request.httpBody = try JSONEncoder().encode(SidebarSkillToggleRequest(enabled: enabled))
             _ = try await URLSession.shared.data(for: request)
             await refreshSkills()
@@ -655,6 +669,7 @@ struct ContentView: View {
             var request = URLRequest(url: baseURL.appendingPathComponent("chat/sessions"))
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            applySidecarAuthHeader(&request)
             request.httpBody = Data("{}".utf8)
 
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -682,6 +697,7 @@ struct ContentView: View {
                 url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/archive")
             )
             request.httpMethod = "POST"
+            applySidecarAuthHeader(&request)
 
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
@@ -713,6 +729,7 @@ struct ContentView: View {
             )
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            applySidecarAuthHeader(&request)
             request.httpBody = try JSONEncoder().encode(SidebarRenameSessionRequest(title: title))
 
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -742,6 +759,7 @@ struct ContentView: View {
                 url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/unarchive")
             )
             request.httpMethod = "POST"
+            applySidecarAuthHeader(&request)
 
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
@@ -991,7 +1009,7 @@ private struct SessionSidebar: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         SidebarSectionHead(
-                            label: "connections (\(connections.count))",
+                            label: "connections",
                             isExpanded: $isConnectionsExpanded,
                             dimText: secondaryText,
                             faintText: theme.inkFaint,
@@ -1081,7 +1099,7 @@ private struct SessionSidebar: View {
                 .padding(.bottom, 8)
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 24)
         .padding(.top, 22)
     }
 
@@ -1199,7 +1217,7 @@ private struct SidebarSkillRow: View {
                 .foregroundStyle(theme.inkFaint)
                 .lineLimit(1)
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
     }
@@ -1240,7 +1258,7 @@ private struct SessionSidebarSection: View {
                 Text(emptyText)
                     .font(ConductorType.placeholder)
                     .foregroundStyle(secondaryText)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 6)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
@@ -1346,7 +1364,7 @@ private struct SessionSidebarRow: View {
                         Image(systemName: "pencil")
                             .font(ConductorType.rowActionIcon)
                             .foregroundStyle(actionColor)
-                            .frame(width: 20, height: 20)
+                            .frame(width: 18, height: 16)
                     }
                     .buttonStyle(.plain)
                     .help("Rename session")
@@ -1356,7 +1374,7 @@ private struct SessionSidebarRow: View {
                             Image(systemName: "archivebox")
                                 .font(ConductorType.rowActionIcon)
                                 .foregroundStyle(actionColor)
-                                .frame(width: 20, height: 20)
+                                .frame(width: 18, height: 16)
                         }
                         .buttonStyle(.plain)
                         .help("Archive session")
@@ -1385,7 +1403,7 @@ private struct SessionSidebarRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isRenaming else { return }
@@ -1503,7 +1521,7 @@ private struct SidebarCronRow: View {
                         Image(systemName: "archivebox")
                             .font(ConductorType.rowActionIconSmall)
                             .foregroundStyle(theme.inkDim)
-                            .frame(width: 18, height: 18)
+                            .frame(width: 16, height: 16)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -1516,7 +1534,7 @@ private struct SidebarCronRow: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.vertical, 5)
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1609,6 +1627,7 @@ private struct SidebarConnection: Decodable, Identifiable {
     let status: String
 
     var id: String { connectedAccountId }
+    var displayToolkitName: String { sidebarDisplayToolkitName(toolkitName) }
 }
 
 private struct SidebarConnectionRow: View {
@@ -1636,11 +1655,11 @@ private struct SidebarConnectionRow: View {
         HStack(spacing: 10) {
             ConnectionLogo(
                 logoUrl: connection.logoUrl,
-                toolkitName: connection.toolkitName,
+                toolkitName: connection.displayToolkitName,
                 theme: theme
             )
 
-            Text(connection.toolkitName)
+            Text(connection.displayToolkitName)
                 .font(ConductorType.rowTitle)
                 .foregroundStyle(isHovered ? theme.ink : theme.ink2)
 
@@ -1655,13 +1674,13 @@ private struct SidebarConnectionRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Revoke access and remove this connection")
-            } else {
+            } else if !isHealthy {
                 Text(connection.status.capitalized)
                     .font(ConductorType.meta)
                     .foregroundStyle(statusColor)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering
@@ -1725,6 +1744,31 @@ private struct ConnectionLogo: View {
         } catch {
             // Fallback view will render on failure.
         }
+    }
+}
+
+private func sidebarDisplayToolkitName(_ name: String) -> String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalized = trimmed.lowercased().replacingOccurrences(of: "_", with: " ")
+    switch normalized {
+    case "google calendar", "googlecalendar":
+        return "Calendar"
+    case "google docs", "googledocs":
+        return "Docs"
+    case "google drive", "googledrive":
+        return "Drive"
+    case "google sheets", "googlesheets":
+        return "Sheets"
+    case "granola mcp":
+        return "Granola"
+    default:
+        if normalized.hasPrefix("google ") {
+            return String(trimmed.dropFirst("Google ".count))
+        }
+        if normalized.hasSuffix(" mcp") {
+            return String(trimmed.dropLast(" MCP".count))
+        }
+        return trimmed.isEmpty ? name : trimmed
     }
 }
 
@@ -1990,9 +2034,9 @@ private struct TopChromeControls: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            WindowControlButton(color: Color(red: 1.0, green: 0.38, blue: 0.35), action: .close, ringColor: ringColor)
-            WindowControlButton(color: Color(red: 1.0, green: 0.78, blue: 0.24), action: .miniaturize, ringColor: ringColor)
-            WindowControlButton(color: Color(red: 0.30, green: 0.85, blue: 0.39), action: .zoom, ringColor: ringColor)
+            WindowControlButton(color: Color(red: 1.0, green: 95/255, blue: 87/255), action: .close, ringColor: ringColor)
+            WindowControlButton(color: Color(red: 254/255, green: 188/255, blue: 46/255), action: .miniaturize, ringColor: ringColor)
+            WindowControlButton(color: Color(red: 40/255, green: 200/255, blue: 64/255), action: .zoom, ringColor: ringColor)
 
             Button(action: { isLeftSidebarExpanded.toggle() }) {
                 SidebarToggleIcon(side: .left, color: iconColor.opacity(0.82))
@@ -2034,9 +2078,9 @@ private struct SidebarToggleIcon: View {
 struct WindowControlButton: View {
     let color: Color
     let action: WindowAction
-    // When set, render the editorial style: 12pt circle, transparent fill and a
-    // 1pt ring at idle, restoring the classic colored fill + glyph on hover.
-    // When nil (e.g. the sign-in screen), keep the classic always-filled look.
+    // When set, render the editorial titlebar size while keeping the macOS
+    // traffic-light color language. When nil (e.g. the sign-in screen), keep
+    // the slightly larger classic look.
     var ringColor: Color? = nil
     @State private var isHovered = false
 
@@ -2045,9 +2089,13 @@ struct WindowControlButton: View {
 
     private var fillColor: Color {
         if isEditorial {
-            return isHovered ? color : .clear
+            return isHovered ? color : color.opacity(0.92)
         }
         return isHovered ? color : color.opacity(0.9)
+    }
+
+    private var borderColor: Color {
+        isEditorial ? .black.opacity(0.14) : .black.opacity(0.10)
     }
 
     var body: some View {
@@ -2055,9 +2103,7 @@ struct WindowControlButton: View {
             .fill(fillColor)
             .frame(width: diameter, height: diameter)
             .overlay {
-                if let ringColor, !isHovered {
-                    Circle().strokeBorder(ringColor, lineWidth: 1)
-                }
+                Circle().strokeBorder(borderColor, lineWidth: 0.5)
                 if isHovered {
                     Image(systemName: iconName)
                         .font(ConductorType.trafficGlyph)
@@ -2089,24 +2135,31 @@ struct WindowControlButton: View {
     }
 }
 
-/// Footer `.toggles a`: an 11pt mono text link, ink-dim → hover ink.
+/// Footer `.toggles a`: an 11pt mono text link, dim normally, stronger for
+/// emphasized actions, and primary ink on hover.
 private struct FooterTextToggle: View {
     let label: String
     let theme: ConductorThemePalette
     let action: () -> Void
     var help: String = ""
+    var isEmphasized = false
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(ConductorType.caption)
-                .foregroundStyle(isHovered ? theme.ink : theme.footerIcon)
+                .font(isEmphasized ? ConductorType.captionStrong : ConductorType.caption)
+                .foregroundStyle(textColor)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .help(help)
+    }
+
+    private var textColor: Color {
+        if isHovered { return theme.ink }
+        return isEmphasized ? theme.ink2 : theme.footerIcon
     }
 }
 
@@ -2124,10 +2177,7 @@ private struct FooterSeparator: View {
 private struct SidebarFooter: View {
     @Binding var isDarkMode: Bool
     let sidecarState: SidecarManager.State
-    let managedAccount: SidecarManager.ManagedAccountSnapshot?
-    let managedSession: ManagedAppSession?
     let theme: ConductorThemePalette
-    let onSignOut: () -> Void
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -2137,36 +2187,20 @@ private struct SidebarFooter: View {
                 .frame(height: 1)
 
             HStack(spacing: 8) {
+                Spacer(minLength: 8)
+
+                // Text toggles replace the moon/gear/help icon buttons; label
+                // shows the mode you'd switch TO (`dark` in light, `light` in dark).
+                FooterTextToggle(label: isDarkMode ? "light" : "dark", theme: theme, action: { isDarkMode.toggle() })
+                FooterSeparator(theme: theme)
+                FooterTextToggle(label: "settings", theme: theme, action: onOpenSettings, help: "Settings", isEmphasized: true)
+                FooterSeparator(theme: theme)
                 Circle()
                     .fill(sidecarStatusColor)
                     .frame(width: 7, height: 7)
                     .help(sidecarStatusText)
-
-                Menu {
-                    Button("Sign out", action: onSignOut)
-                } label: {
-                    Text(managedSessionText)
-                        .font(ConductorType.caption)
-                        .foregroundStyle(theme.footerIcon)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-
-                Spacer(minLength: 8)
-
-                // Text toggles replace the moon/gear/help icon buttons; label
-                // shows the mode you'd switch TO (`dark` in light, `light` in
-                // dark). Actions are unchanged.
-                FooterTextToggle(label: isDarkMode ? "light" : "dark", theme: theme, action: { isDarkMode.toggle() })
-                FooterSeparator(theme: theme)
-                FooterTextToggle(label: "settings", theme: theme, action: onOpenSettings, help: "Settings")
-                FooterSeparator(theme: theme)
-                FooterTextToggle(label: "?", theme: theme, action: {})
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 24)
             .padding(.vertical, 10)
         }
     }
@@ -2188,44 +2222,6 @@ private struct SidebarFooter: View {
         case .failed: return "Connection error"
         }
     }
-
-    private var managedSessionText: String {
-        if let managedAccount {
-            switch managedAccount.account.state {
-            case "authenticated":
-                if let email = managedAccount.account.user?.email, !email.isEmpty {
-                    return email
-                }
-                if let displayName = managedAccount.account.user?.displayName, !displayName.isEmpty {
-                    return displayName
-                }
-                if let userId = managedAccount.account.user?.id, !userId.isEmpty {
-                    return userId
-                }
-                return "Signed in"
-            case "expired":
-                return "Managed session expired"
-            case "invalid_session":
-                return "Sign-in expired"
-            case "backend_unavailable":
-                if let managedSession, !managedSession.isExpired {
-                    return managedSession.identityLabel
-                }
-                return "Managed backend unavailable"
-            case "signed_out":
-                break
-            default:
-                break
-            }
-        }
-
-        guard let managedSession else { return "Signed out" }
-        if managedSession.isExpired {
-            return "Managed session expired"
-        }
-        return managedSession.identityLabel
-    }
-
 }
 
 

@@ -43,16 +43,14 @@ export function buildCronsRoutes(hermes: HermesSupervisor, descriptions: CronDes
 
   return [
     route('GET', '/crons', async (_req, res) => {
-      const client = await getClient(hermes);
-      const jobs = await client.list();
+      const jobs = await listJobs(hermes);
       json(res, 200, { crons: jobs });
     }),
 
     route('GET', '/crons/:id', async (_req, res, params) => {
       const id = params.id;
       if (!isValidJobId(id)) return notFound(res, id);
-      const client = await getClient(hermes);
-      const job = await client.get(id);
+      const job = await getJob(hermes, id);
       if (!job) return notFound(res, id);
       const runs = listRuns(cronOutputDir(), id);
       const description = descriptions.get(id);
@@ -198,6 +196,30 @@ async function getClient(hermes: HermesSupervisor): Promise<HermesCronsClient> {
   return new HermesCronsClient(config.baseUrl, config.apiKey ?? undefined);
 }
 
+async function listJobs(hermes: HermesSupervisor): Promise<HermesCronJob[]> {
+  try {
+    return await (await getClient(hermes)).list();
+  } catch (error: unknown) {
+    const jobs = shouldFallbackToLocalJobs(error) ? readLocalCronJobs(hermes.hermesHome) : null;
+    if (jobs) return jobs;
+    throw error;
+  }
+}
+
+async function getJob(hermes: HermesSupervisor, id: string): Promise<HermesCronJob | null> {
+  try {
+    return await (await getClient(hermes)).get(id);
+  } catch (error: unknown) {
+    const jobs = shouldFallbackToLocalJobs(error) ? readLocalCronJobs(hermes.hermesHome) : null;
+    if (jobs) return jobs.find((job) => job.id === id) ?? null;
+    throw error;
+  }
+}
+
+function shouldFallbackToLocalJobs(error: unknown): boolean {
+  return !(error instanceof HermesCronsError);
+}
+
 function isValidJobId(id: string): boolean {
   return VALID_JOB_ID.test(id);
 }
@@ -237,6 +259,56 @@ function sanitizeUpdate(body: unknown): HermesCronUpdatePayload {
     };
   }
   return out;
+}
+
+function readLocalCronJobs(hermesHome: string): HermesCronJob[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path.join(hermesHome, 'cron', 'jobs.json'), 'utf-8'));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const rawJobs = (parsed as Record<string, unknown>).jobs;
+  if (!Array.isArray(rawJobs)) return null;
+  return rawJobs
+    .map((raw) => normalizeLocalCronJob(raw))
+    .filter((job): job is HermesCronJob => job !== null);
+}
+
+function normalizeLocalCronJob(raw: unknown): HermesCronJob | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const id = asString(obj.id);
+  const name = asString(obj.name);
+  if (!id || !name) return null;
+  const schedule = obj.schedule && typeof obj.schedule === 'object'
+    ? obj.schedule as HermesCronJob['schedule']
+    : {};
+  return {
+    ...obj,
+    id,
+    name,
+    prompt: asString(obj.prompt) ?? '',
+    skills: Array.isArray(obj.skills) ? obj.skills.filter((skill): skill is string => typeof skill === 'string') : [],
+    schedule,
+    schedule_display: asString(obj.schedule_display) ?? asString(schedule.display) ?? undefined,
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : true,
+    state: asString(obj.state) ?? (obj.enabled === false ? 'paused' : 'scheduled'),
+    paused_at: asString(obj.paused_at),
+    paused_reason: asString(obj.paused_reason),
+    created_at: asString(obj.created_at) ?? '',
+    next_run_at: asString(obj.next_run_at),
+    last_run_at: asString(obj.last_run_at),
+    last_status: asString(obj.last_status),
+    last_error: asString(obj.last_error),
+    deliver: asString(obj.deliver),
+    origin: obj.origin && typeof obj.origin === 'object' ? obj.origin as Record<string, unknown> : null,
+  };
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 function listRuns(outputRoot: string, jobId: string): CronRunSummary[] {

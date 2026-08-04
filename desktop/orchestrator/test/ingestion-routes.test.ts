@@ -58,7 +58,7 @@ describe('Ingestion routes', () => {
 
   async function serve(scheduler: SourceIngestionScheduler): Promise<number> {
     const routes = buildIngestionRoutes(scheduler);
-    const server = http.createServer((req, res) => dispatch(routes, req, res));
+    const server = http.createServer((req, res) => dispatch(routes, req, res, { allowUnauthenticated: true }));
     servers.push(server);
     return new Promise((resolve) => {
       server.listen(0, '127.0.0.1', () => resolve((server.address() as { port: number }).port));

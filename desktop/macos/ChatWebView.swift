@@ -127,6 +127,7 @@ enum ShellAction: Equatable {
 /// Passes the sidecar port to JS via `window.setSidecarPort(port)`.
 struct ChatWebView: NSViewRepresentable {
     let sidecarPort: Int?
+    let sidecarAuthToken: String?
     let isDarkMode: Bool
     let isCatalogOpen: Bool
     let isSkillsCatalogOpen: Bool
@@ -192,8 +193,11 @@ struct ChatWebView: NSViewRepresentable {
                 }
               });
 
-              window.__versoApplySidecarPort = function(port) {
+              window.__versoApplySidecarPort = function(port, token) {
                 window.__versoPendingSidecarPort = port;
+                if (typeof token === 'string') {
+                  window.__versoSidecarToken = token;
+                }
               if (typeof assignedHandler === 'function') {
                 try { assignedHandler(port); } catch (_) {}
               }
@@ -266,10 +270,13 @@ struct ChatWebView: NSViewRepresentable {
         context.coordinator.onCatalogStateChange = onCatalogStateChange
 
         // When sidecar port becomes available, inject it into JS
-        if let port = sidecarPort, port != context.coordinator.lastInjectedPort {
+        if let port = sidecarPort,
+           let authToken = sidecarAuthToken,
+           port != context.coordinator.lastInjectedPort || authToken != context.coordinator.lastInjectedAuthToken {
             context.coordinator.pendingPort = port
+            context.coordinator.pendingAuthToken = authToken
             if context.coordinator.pageLoaded {
-                context.coordinator.injectPort(port)
+                context.coordinator.injectSidecar(port: port, authToken: authToken)
             }
         }
 
@@ -347,6 +354,8 @@ struct ChatWebView: NSViewRepresentable {
         weak var webView: WKWebView?
         var lastInjectedPort: Int?
         var pendingPort: Int?
+        var lastInjectedAuthToken: String?
+        var pendingAuthToken: String?
         var lastInjectedCatalogOpen: Bool?
         var pendingCatalogOpen: Bool = false
         var lastInjectedSkillsCatalogOpen: Bool?
@@ -491,8 +500,9 @@ struct ChatWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             pageLoaded = true
-            if let port = pendingPort ?? lastInjectedPort {
-                injectPort(port)
+            if let port = pendingPort ?? lastInjectedPort,
+               let authToken = pendingAuthToken ?? lastInjectedAuthToken {
+                injectSidecar(port: port, authToken: authToken)
             }
             injectCatalogState(pendingCatalogOpen)
             injectSkillsCatalogState(pendingSkillsCatalogOpen)
@@ -542,27 +552,38 @@ struct ChatWebView: NSViewRepresentable {
             decisionHandler(.allow)
         }
 
-        func injectPort(_ port: Int) {
+        func injectSidecar(port: Int, authToken: String) {
             guard let webView else { return }
+            guard let tokenLiteral = Self.javascriptStringLiteral(authToken) else { return }
             let js = """
             (function() {
               window.__versoSidecarPort = \(port);
+              window.__versoSidecarToken = \(tokenLiteral);
               if (typeof window.__versoApplySidecarPort === 'function') {
-                window.__versoApplySidecarPort(\(port));
+                window.__versoApplySidecarPort(\(port), \(tokenLiteral));
               }
               if (typeof window.setSidecarPort === 'function') {
                 window.setSidecarPort(\(port));
               }
-              window.dispatchEvent(new CustomEvent('verso:sidecar-port', { detail: { port: \(port) } }));
+              window.dispatchEvent(new CustomEvent('verso:sidecar-port', { detail: { port: \(port), token: \(tokenLiteral) } }));
             })();
             """
             webView.evaluateJavaScript(js) { _, error in
                 if let error {
-                    print("[ChatWebView] Failed to inject sidecar port: \(error.localizedDescription)")
+                    print("[ChatWebView] Failed to inject sidecar credentials: \(error.localizedDescription)")
                 }
             }
             lastInjectedPort = port
+            lastInjectedAuthToken = authToken
             pendingPort = port
+            pendingAuthToken = authToken
+        }
+
+        private static func javascriptStringLiteral(_ value: String) -> String? {
+            guard let data = try? JSONSerialization.data(withJSONObject: [value]),
+                  let json = String(data: data, encoding: .utf8),
+                  json.count >= 2 else { return nil }
+            return String(json.dropFirst().dropLast())
         }
 
         func injectCatalogState(_ open: Bool) {

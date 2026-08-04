@@ -17,6 +17,16 @@ export interface ChatMessage {
   // this send in place of the widget so the chat continues seamlessly.
   pendingText?: string;
   pendingAttached?: AttachedContext | null;
+  pendingAttachments?: OutgoingAttachment[];
+}
+
+// An image the user attached in the composer, ready to POST. `dataBase64` is
+// the raw base64 payload (no data-URL prefix); the orchestrator re-validates
+// by magic bytes and forwards it to the model on the live request only.
+export interface OutgoingAttachment {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
 }
 
 export interface ChatSessionSummary {
@@ -233,6 +243,7 @@ export interface ChatSSEEvent {
   delta?: { text?: string } | string;
   reasoning?: string | null;
   reason?: string;
+  provider?: string;
   session_id?: string;
   role?: string;
   content?: Array<{ type: string; text?: string; name?: string; input?: unknown }>;

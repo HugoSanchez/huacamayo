@@ -213,9 +213,9 @@ export class CodexAuthService {
 }
 
 // Default Codex model to write into config.yaml after a successful auth.
-// Matches what `hermes model` interactive flow defaults to when picking
-// OpenAI Codex (see hermes_cli/codex_models.py for the model list).
-const DEFAULT_CODEX_MODEL = 'gpt-5.5';
+// Keep this aligned with the managed entitlement returned by the Verso backend;
+// gpt-5.5 can silently hang on accounts that are only entitled for gpt-5.4.
+const DEFAULT_CODEX_MODEL = 'gpt-5.4';
 
 // Bridge to Hermes's own _update_config_for_provider helper — the
 // canonical way to mutate config.yaml after an auth flow. We invoke it
@@ -274,4 +274,3 @@ export function buildModelAuthRoutes(service: CodexAuthService): Route[] {
     }),
   ];
 }
-

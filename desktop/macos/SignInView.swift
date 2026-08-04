@@ -25,9 +25,9 @@ struct SignInView: View {
         ZStack {
             HStack {
                 HStack(spacing: 8) {
-                    WindowControlButton(color: Color(red: 1.0, green: 0.38, blue: 0.35), action: .close)
-                    WindowControlButton(color: Color(red: 1.0, green: 0.78, blue: 0.24), action: .miniaturize)
-                    WindowControlButton(color: Color(red: 0.30, green: 0.85, blue: 0.39), action: .zoom)
+                    WindowControlButton(color: Color(red: 1.0, green: 95/255, blue: 87/255), action: .close)
+                    WindowControlButton(color: Color(red: 254/255, green: 188/255, blue: 46/255), action: .miniaturize)
+                    WindowControlButton(color: Color(red: 40/255, green: 200/255, blue: 64/255), action: .zoom)
                 }
                 Spacer()
             }

@@ -42,7 +42,7 @@ describe('Managed Hermes Startup', () => {
     process.env.VERSO_HERMES_CWD = process.cwd();
     process.env.VERSO_HERMES_MANAGED = 'true';
 
-    const result = await startServer({ port: 0 });
+    const result = await startServer({ port: 0, allowUnauthenticated: true });
     server = result.server;
     port = result.port;
   });

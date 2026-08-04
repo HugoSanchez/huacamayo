@@ -99,8 +99,11 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
 }
 
 function requestBaseUrl(req: IncomingMessage): string {
-  const host = req.headers.host || '127.0.0.1';
-  return `http://${host}`;
+  const port = req.socket.localPort;
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new HttpError(500, 'Unable to determine local callback port');
+  }
+  return `http://127.0.0.1:${port}`;
 }
 
 function renderCallbackPage(title: string, message: string): string {

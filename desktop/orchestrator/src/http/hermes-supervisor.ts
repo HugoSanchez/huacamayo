@@ -15,7 +15,7 @@ import {
 } from './runtime-bootstrap.ts';
 import { isMemoryEnabled } from './lexical-provider.ts';
 import { applyMemorySoulSection } from './memory-soul.ts';
-import { computePinnedToolNames } from './hermes-pinned-tools.ts';
+import { computePinnedToolNames, findInertCorePins } from './hermes-pinned-tools.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -228,6 +228,11 @@ export class HermesSupervisor {
   private source: HermesRuntimeSource = 'none';
   private lastError: string | null = null;
   private logTail: string[] = [];
+  // null = not checked yet (or gateway doesn't expose /v1/toolsets);
+  // [] = all core pins live; non-empty = product-critical tools are
+  // invisible to the model and someone should look at naming drift.
+  private inertCorePins: string[] | null = null;
+  private pinLivenessPromise: Promise<void> | null = null;
 
   constructor(options: HermesSupervisorOptions = {}) {
     this.config = options.config ?? getHermesGatewayConfig();
@@ -451,6 +456,60 @@ export class HermesSupervisor {
     this.state = 'ready';
     this.lastError = null;
     this.source = 'managed';
+    void this.verifyPinnedToolLiveness();
+  }
+
+  // Best-effort inert-pin detector. Hermes ignores pinned names that match
+  // no registered tool without any diagnostic, so a naming-convention drift
+  // (e.g. the 0.19 mcp_verso_* → mcp__verso__* rename) silently strips the
+  // memory/product-core tools from the model. Ask the gateway what the
+  // api_server platform actually exposes and complain loudly on a mismatch.
+  private async verifyPinnedToolLiveness(): Promise<void> {
+    if (this.pinLivenessPromise) return this.pinLivenessPromise;
+    this.pinLivenessPromise = (async () => {
+      // MCP registration can lag the health endpoint by a moment on cold
+      // boots; retry a few times before concluding anything.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (attempt > 0) await delay(5_000);
+        const registered = await this.fetchRegisteredToolNames();
+        if (registered === null) return; // endpoint unavailable — inconclusive, stay null
+        const memoryToolsActive = isMemoryEnabled() && this.memoryToolsMode !== 'none';
+        const inert = findInertCorePins(registered, { includeMemoryTools: memoryToolsActive });
+        if (inert.length === 0 || attempt === 2) {
+          this.inertCorePins = inert;
+          if (inert.length > 0) {
+            console.error(
+              `[hermes-supervisor] ${inert.length} core pinned tool(s) matched nothing the gateway registered: `
+              + `${inert.join(', ')}. The model cannot see them. This usually means the Hermes MCP tool-naming `
+              + 'convention drifted from hermes-pinned-tools.ts — check the "registered N tool(s)" line in agent.log.',
+            );
+          }
+          return;
+        }
+      }
+    })().catch(() => {
+      // Diagnostics must never disturb the boot path.
+    }).finally(() => {
+      this.pinLivenessPromise = null;
+    });
+    return this.pinLivenessPromise;
+  }
+
+  private async fetchRegisteredToolNames(): Promise<string[] | null> {
+    try {
+      const res = await fetch(`${this.config.baseUrl}/v1/toolsets`, {
+        method: 'GET',
+        headers: hermesGatewayAuthHeaders(this.config),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) return null;
+      const body = await res.json() as { toolsets?: Array<{ tools?: string[] }> } | Array<{ tools?: string[] }>;
+      const toolsets = Array.isArray(body) ? body : body?.toolsets;
+      if (!Array.isArray(toolsets)) return null;
+      return toolsets.flatMap((set) => (Array.isArray(set?.tools) ? set.tools : []));
+    } catch {
+      return null;
+    }
   }
 
   private isChildRunning(): boolean {

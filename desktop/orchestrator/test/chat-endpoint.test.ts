@@ -13,7 +13,7 @@ describe('Chat HTTP Endpoints', () => {
   beforeAll(async () => {
     process.env.VERSO_HERMES_MANAGED = 'false';
     process.env.VERSO_CHAT_STORE_PATH = `/tmp/verso-chat-endpoint-${process.pid}.sqlite`;
-    const result = await startServer({ port: 0 });
+    const result = await startServer({ port: 0, allowUnauthenticated: true });
     server = result.server;
     port = result.port;
   });
@@ -135,5 +135,33 @@ describe('Chat HTTP Endpoints', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('bad_request');
+  });
+
+  it('rejects messages with invalid attachments', async () => {
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const sessionId = created.body.session.id as string;
+
+    // Declared as PNG but the payload is not an image — magic-byte sniffing
+    // must reject it before anything reaches Hermes.
+    const res = await fetchJson(`/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'look at this',
+        attachments: [{
+          name: 'not-an-image.png',
+          mimeType: 'image/png',
+          dataBase64: Buffer.from('%PDF-1.4 nope', 'latin1').toString('base64'),
+        }],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('bad_request');
+    expect(res.body.message).toContain('PNG, JPEG, WebP, and GIF');
   });
 });

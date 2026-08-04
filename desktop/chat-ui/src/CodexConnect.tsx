@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { codexConnectUrl, openExternalUrl } from './chat';
+import { codexConnectUrl, openExternalUrl, sidecarFetch } from './chat';
 
 export type CodexConnectPhase =
   | { kind: 'idle' }
@@ -24,7 +24,7 @@ interface UseCodexConnectResult {
 // chat widget) compose this with their own intro + button styling.
 export function useCodexConnect({ onConnected }: UseCodexConnectOptions = {}): UseCodexConnectResult {
   const [phase, setPhase] = useState<CodexConnectPhase>({ kind: 'idle' });
-  const sourceRef = useRef<EventSource | null>(null);
+  const sourceRef = useRef<AbortController | null>(null);
   const browserOpenedRef = useRef(false);
   // We keep the callback in a ref so the start function doesn't have to be
   // re-created when the parent re-renders with a different onConnected — the
@@ -33,12 +33,12 @@ export function useCodexConnect({ onConnected }: UseCodexConnectOptions = {}): U
   useEffect(() => { onConnectedRef.current = onConnected; }, [onConnected]);
 
   useEffect(() => () => {
-    sourceRef.current?.close();
+    sourceRef.current?.abort();
     sourceRef.current = null;
   }, []);
 
   function closeStream() {
-    sourceRef.current?.close();
+    sourceRef.current?.abort();
     sourceRef.current = null;
   }
 
@@ -47,45 +47,67 @@ export function useCodexConnect({ onConnected }: UseCodexConnectOptions = {}): U
     browserOpenedRef.current = false;
     setPhase({ kind: 'starting' });
 
-    const source = new EventSource(codexConnectUrl());
-    sourceRef.current = source;
+    const controller = new AbortController();
+    sourceRef.current = controller;
+    void readCodexStream(controller);
+  }
 
-    source.onmessage = (event) => {
-      let payload: { type?: string; url?: string; code?: string; message?: string };
-      try {
-        payload = JSON.parse(event.data);
-      } catch {
-        return;
+  async function readCodexStream(controller: AbortController) {
+    try {
+      const res = await sidecarFetch(codexConnectUrl(), { signal: controller.signal });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (sourceRef.current === controller) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const split = splitSseFrames(buffer);
+        buffer = split.remainder;
+        for (const frame of split.frames) handleSseFrame(frame);
       }
-      if (payload.type === 'prompt' && payload.url && payload.code) {
-        setPhase({ kind: 'waiting', url: payload.url, code: payload.code });
-        if (!browserOpenedRef.current) {
-          browserOpenedRef.current = true;
-          openExternalUrl(payload.url);
-        }
-      } else if (payload.type === 'connected') {
-        setPhase({ kind: 'connected' });
-        closeStream();
-        onConnectedRef.current?.();
-      } else if (payload.type === 'error') {
-        setPhase({ kind: 'error', message: payload.message ?? 'Login failed.' });
-        closeStream();
-      }
-    };
-
-    source.onerror = () => {
-      // EventSource auto-retries on its own, which we don't want for a
-      // one-shot device-code flow. Surface the failure if we haven't reached
-      // a terminal state.
-      if (sourceRef.current !== source) return;
+      buffer += decoder.decode();
+      const finalFrame = buffer.trim();
+      if (finalFrame) handleSseFrame(finalFrame);
+    } catch (error) {
+      if (controller.signal.aborted || sourceRef.current !== controller) return;
       closeStream();
-      setPhase((current) => {
-        if (current.kind === 'starting' || current.kind === 'waiting') {
-          return { kind: 'error', message: 'Connection to the local sidecar was lost.' };
-        }
-        return current;
-      });
-    };
+      setPhase((current) => (
+        current.kind === 'starting' || current.kind === 'waiting'
+          ? { kind: 'error', message: error instanceof Error ? error.message : 'Connection to the local sidecar was lost.' }
+          : current
+      ));
+    }
+  }
+
+  function handleSseFrame(frame: string) {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((part) => part.startsWith('data:'))
+      .map((part) => part.slice(5).trimStart())
+      .join('\n');
+    if (!data) return;
+    let payload: { type?: string; url?: string; code?: string; message?: string };
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (payload.type === 'prompt' && payload.url && payload.code) {
+      setPhase({ kind: 'waiting', url: payload.url, code: payload.code });
+      if (!browserOpenedRef.current) {
+        browserOpenedRef.current = true;
+        openExternalUrl(payload.url);
+      }
+    } else if (payload.type === 'connected') {
+      setPhase({ kind: 'connected' });
+      closeStream();
+      onConnectedRef.current?.();
+    } else if (payload.type === 'error') {
+      setPhase({ kind: 'error', message: payload.message ?? 'Login failed.' });
+      closeStream();
+    }
   }
 
   function cancel() {
@@ -99,6 +121,18 @@ export function useCodexConnect({ onConnected }: UseCodexConnectOptions = {}): U
   }
 
   return { phase, start, cancel, reset };
+}
+
+function splitSseFrames(buffer: string): { frames: string[]; remainder: string } {
+  const frames: string[] = [];
+  let cursor = 0;
+  const delimiter = /\r?\n\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = delimiter.exec(buffer)) !== null) {
+    frames.push(buffer.slice(cursor, match.index));
+    cursor = delimiter.lastIndex;
+  }
+  return { frames, remainder: buffer.slice(cursor) };
 }
 
 function CopyCodeButton({ code }: { code: string }) {

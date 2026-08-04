@@ -8,12 +8,12 @@
 
 /* Editorial composer (mockup `.composer`): no filled/bordered box — the field
    is transparent with a single `--line` rule ABOVE it (the mockup `.rule-line`,
-   realised as the field's border-top), capped to the same 800px column as the
-   doc. The 16px content inset keeps the absolutely-positioned skill chip
+   realised as the field's border-top), capped to the same column as the doc.
+   The 16px content inset keeps the absolutely-positioned skill chip
    (top:12 / left:16) and the textarea aligned. */
 .input-bar-field {
   position: relative;
-  max-width: 800px;
+  max-width: var(--assistant-content-max-width);
   margin: 0 auto;
   background: transparent;
   border: none;
@@ -31,7 +31,8 @@
   font-size: 14px;
   line-height: 1.5;
   resize: none;
-  font-family: inherit;
+  /* Match the assistant message body (IBM Plex Sans) rather than the mono. */
+  font-family: var(--font-sans);
   max-height: 160px;
   min-height: 48px;
 }
@@ -171,6 +172,61 @@
   background: var(--chip-remove-hover-bg);
 }
 
+/* Pending image attachments — a wrapping chip row inside the composer field,
+   sitting between the top rule line and the textarea. */
+.input-attachments-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.input-attachment-chip-name {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Drop-target affordance while a file drag is over the window */
+.input-bar-field.is-dragging-over {
+  outline: 1.5px dashed var(--ink-dim);
+  outline-offset: -1.5px;
+}
+
+/* Attachment chips in user messages (rendered from stored marker lines) */
+.message-attachments-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--skill-chip-bg);
+  color: var(--user-bubble-text, var(--ink));
+  font-size: 12px;
+  line-height: 1;
+}
+
+.attachment-chip-name {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Skill chip in user messages */
 .skill-chip {
   display: inline-flex;
@@ -249,5 +305,4 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 

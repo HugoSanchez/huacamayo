@@ -13,6 +13,7 @@ import type {
 } from './types';
 
 let sidecarPort: number | null = null;
+let sidecarToken: string | null = null;
 
 // Tell the native host that a piece of sidebar state changed. The Swift shell
 // listens via WKScriptMessageHandler('chatBridge') and refetches the
@@ -31,6 +32,10 @@ export function setSidecarPort(port: number) {
   sidecarPort = port;
 }
 
+export function setSidecarAuthToken(token: string | null | undefined) {
+  sidecarToken = token || null;
+}
+
 export function getSidecarPort(): number | null {
   return sidecarPort;
 }
@@ -40,8 +45,14 @@ function baseURL(): string {
   return `http://127.0.0.1:${sidecarPort}`;
 }
 
+export function sidecarFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (sidecarToken) headers.set('X-Verso-Sidecar-Token', sidecarToken);
+  return fetch(input, { ...init, headers });
+}
+
 export async function createChatSession(title?: string): Promise<ChatSessionSummary> {
-  const res = await fetch(`${baseURL()}/chat/sessions`, {
+  const res = await sidecarFetch(`${baseURL()}/chat/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(title ? { title } : {}),
@@ -54,7 +65,7 @@ export async function createChatSession(title?: string): Promise<ChatSessionSumm
 }
 
 export async function getChatSessions(): Promise<ChatSessionSummary[]> {
-  const res = await fetch(`${baseURL()}/chat/sessions`);
+  const res = await sidecarFetch(`${baseURL()}/chat/sessions`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load chat sessions'));
   }
@@ -63,7 +74,7 @@ export async function getChatSessions(): Promise<ChatSessionSummary[]> {
 }
 
 export async function archiveChatSession(sessionId: string): Promise<ChatSessionSummary> {
-  const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/archive`, {
+  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/archive`, {
     method: 'POST',
   });
   if (!res.ok) {
@@ -74,7 +85,7 @@ export async function archiveChatSession(sessionId: string): Promise<ChatSession
 }
 
 export async function unarchiveChatSession(sessionId: string): Promise<ChatSessionSummary> {
-  const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/unarchive`, {
+  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/unarchive`, {
     method: 'POST',
   });
   if (!res.ok) {
@@ -85,7 +96,7 @@ export async function unarchiveChatSession(sessionId: string): Promise<ChatSessi
 }
 
 export async function getChatMessages(sessionId: string): Promise<StoredChatMessage[]> {
-  const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`);
+  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load chat messages'));
   }
@@ -101,6 +112,7 @@ export function streamChatMessage(
   onError: (err: string) => void,
   options: {
     attached?: import('./types').AttachedContext | null;
+    attachments?: import('./types').OutgoingAttachment[];
     reasoningEffort?: string | null;
     model?: string | null;
   } = {},
@@ -116,12 +128,19 @@ export function streamChatMessage(
 
   const requestBody: Record<string, unknown> = { content };
   if (attached) requestBody.attached = attached;
+  if (options.attachments && options.attachments.length > 0) {
+    requestBody.attachments = options.attachments.map(({ name, mimeType, dataBase64 }) => ({
+      name,
+      mimeType,
+      dataBase64,
+    }));
+  }
   if (options.reasoningEffort) requestBody.reasoningEffort = options.reasoningEffort;
   if (options.model) requestBody.model = options.model;
 
   (async () => {
     try {
-      const res = await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
@@ -167,7 +186,7 @@ export function streamChatMessage(
 }
 
 export async function cancelChatRequest(sessionId: string): Promise<void> {
-  await fetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+  await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/cancel`, {
     method: 'POST',
   });
 }
@@ -177,7 +196,7 @@ export async function getChatStatus(): Promise<{
   provider: string;
   hasActiveRequest: boolean;
 }> {
-  const res = await fetch(`${baseURL()}/chat/status`);
+  const res = await sidecarFetch(`${baseURL()}/chat/status`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load chat status'));
   }
@@ -189,7 +208,7 @@ export async function getConnections(): Promise<{
   configured: boolean;
   connections: ConnectionView[];
 }> {
-  const res = await fetch(`${baseURL()}/connections`);
+  const res = await sidecarFetch(`${baseURL()}/connections`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load connections'));
   }
@@ -211,7 +230,7 @@ export async function getToolkits(opts: {
   const url = params.toString().length > 0
     ? `${baseURL()}/connections/toolkits?${params.toString()}`
     : `${baseURL()}/connections/toolkits`;
-  const res = await fetch(url);
+  const res = await sidecarFetch(url);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load toolkits'));
   }
@@ -223,7 +242,7 @@ export async function getToolkits(opts: {
 }
 
 export async function getSkills(): Promise<SkillSummaryView[]> {
-  const res = await fetch(`${baseURL()}/skills`);
+  const res = await sidecarFetch(`${baseURL()}/skills`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load skills'));
   }
@@ -232,7 +251,7 @@ export async function getSkills(): Promise<SkillSummaryView[]> {
 }
 
 export async function getSkill(slug: string): Promise<SkillDetailView> {
-  const res = await fetch(`${baseURL()}/skills/${encodeURIComponent(slug)}`);
+  const res = await sidecarFetch(`${baseURL()}/skills/${encodeURIComponent(slug)}`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load skill'));
   }
@@ -254,7 +273,7 @@ export async function getHubSkills(opts: {
   if (opts.source) params.set('source', opts.source);
   if (typeof opts.limit === 'number') params.set('limit', String(opts.limit));
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  const res = await fetch(`${baseURL()}/skills/hub${suffix}`);
+  const res = await sidecarFetch(`${baseURL()}/skills/hub${suffix}`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load Skills Hub'));
   }
@@ -271,7 +290,7 @@ export async function getHubSkills(opts: {
 }
 
 export async function getHubSkill(identifier: string): Promise<HubSkillDetailView> {
-  const res = await fetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}`);
+  const res = await sidecarFetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load hub skill'));
   }
@@ -280,7 +299,7 @@ export async function getHubSkill(identifier: string): Promise<HubSkillDetailVie
 }
 
 export async function installHubSkill(identifier: string): Promise<HubSkillInstallView> {
-  const res = await fetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}/install`, {
+  const res = await sidecarFetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}/install`, {
     method: 'POST',
   });
   if (!res.ok) {
@@ -292,7 +311,7 @@ export async function installHubSkill(identifier: string): Promise<HubSkillInsta
 }
 
 export async function toggleSkill(slug: string, enabled: boolean): Promise<SkillSummaryView> {
-  const res = await fetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/toggle`, {
+  const res = await sidecarFetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/toggle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
@@ -320,7 +339,7 @@ export interface IngestionSourceView {
 }
 
 export async function getIngestionSources(): Promise<IngestionSourceView[]> {
-  const res = await fetch(`${baseURL()}/ingestion/sources`);
+  const res = await sidecarFetch(`${baseURL()}/ingestion/sources`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load ingestion sources'));
   }
@@ -329,7 +348,7 @@ export async function getIngestionSources(): Promise<IngestionSourceView[]> {
 }
 
 export async function toggleIngestionSource(slug: string, enabled: boolean): Promise<IngestionSourceView> {
-  const res = await fetch(`${baseURL()}/ingestion/sources/${encodeURIComponent(slug)}/toggle`, {
+  const res = await sidecarFetch(`${baseURL()}/ingestion/sources/${encodeURIComponent(slug)}/toggle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
@@ -342,7 +361,7 @@ export async function toggleIngestionSource(slug: string, enabled: boolean): Pro
 }
 
 export async function getCronDetail(id: string): Promise<import('./types').CronDetailView> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}`);
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load cron job'));
   }
@@ -350,7 +369,7 @@ export async function getCronDetail(id: string): Promise<import('./types').CronD
 }
 
 export async function getCronRunOutput(id: string, filename: string): Promise<string> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}`);
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load run output'));
   }
@@ -359,7 +378,7 @@ export async function getCronRunOutput(id: string, filename: string): Promise<st
 }
 
 export async function generateCronDescription(id: string, force = false): Promise<import('./types').CronDescriptionView | null> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description/generate`, {
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ force }),
@@ -372,7 +391,7 @@ export async function generateCronDescription(id: string, force = false): Promis
 }
 
 export async function patchCronDescription(id: string, description: string): Promise<import('./types').CronDescriptionView | null> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description`, {
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ description }),
@@ -385,7 +404,7 @@ export async function patchCronDescription(id: string, description: string): Pro
 }
 
 export async function getCronRunTranscript(id: string, filename: string): Promise<import('./types').CronRunTranscriptView | null> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}/transcript`);
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}/transcript`);
   if (res.status === 404) return null;
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load run transcript'));
@@ -400,7 +419,7 @@ export async function patchCron(id: string, payload: Partial<{
   deliver: string;
   skills: string[];
 }>): Promise<import('./types').CronJobView> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, {
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -414,7 +433,7 @@ export async function patchCron(id: string, payload: Partial<{
 }
 
 export async function deleteCron(id: string): Promise<void> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to delete cron job'));
   }
@@ -422,7 +441,7 @@ export async function deleteCron(id: string): Promise<void> {
 }
 
 export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Promise<import('./types').CronJobView> {
-  const res = await fetch(`${baseURL()}/crons/${encodeURIComponent(id)}/${op}`, { method: 'POST' });
+  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/${op}`, { method: 'POST' });
   if (!res.ok) {
     throw new Error(await readError(res, `Failed to ${op} cron job`));
   }
@@ -432,7 +451,7 @@ export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Pr
 }
 
 export async function pinSkill(slug: string, pinned: boolean): Promise<SkillSummaryView> {
-  const res = await fetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/pin`, {
+  const res = await sidecarFetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/pin`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pinned }),
@@ -446,7 +465,7 @@ export async function pinSkill(slug: string, pinned: boolean): Promise<SkillSumm
 }
 
 export async function getConnectionRequest(requestId: string): Promise<ConnectionRequestView> {
-  const res = await fetch(`${baseURL()}/connections/requests/${encodeURIComponent(requestId)}`);
+  const res = await sidecarFetch(`${baseURL()}/connections/requests/${encodeURIComponent(requestId)}`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load connection request'));
   }
@@ -455,7 +474,7 @@ export async function getConnectionRequest(requestId: string): Promise<Connectio
 }
 
 export async function createConnectionRequest(toolkit: string): Promise<ConnectionRequestView> {
-  const res = await fetch(`${baseURL()}/connections/request`, {
+  const res = await sidecarFetch(`${baseURL()}/connections/request`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ toolkit }),
@@ -487,7 +506,7 @@ export interface CodexStatus {
 }
 
 export async function getCodexStatus(): Promise<CodexStatus> {
-  const res = await fetch(`${baseURL()}/model-auth/codex/status`);
+  const res = await sidecarFetch(`${baseURL()}/model-auth/codex/status`);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load Codex status'));
   }
@@ -495,7 +514,7 @@ export async function getCodexStatus(): Promise<CodexStatus> {
 }
 
 export async function disconnectCodex(): Promise<{ removed: number }> {
-  const res = await fetch(`${baseURL()}/model-auth/codex/disconnect`, { method: 'POST' });
+  const res = await sidecarFetch(`${baseURL()}/model-auth/codex/disconnect`, { method: 'POST' });
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to disconnect Codex'));
   }
@@ -534,7 +553,7 @@ export async function sendDraft(
   sessionId: string,
   payload: DraftApproveInput,
 ): Promise<void> {
-  const res = await fetch(`${baseURL()}/drafts/send`, {
+  const res = await sidecarFetch(`${baseURL()}/drafts/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, draftId, sessionId }),
@@ -549,7 +568,7 @@ export async function discardDraft(
   sessionId: string,
   channel: string,
 ): Promise<void> {
-  const res = await fetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/discard`, {
+  const res = await sidecarFetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/discard`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId, channel }),
@@ -560,7 +579,7 @@ export async function discardDraft(
 }
 
 export async function approveDraft(draftId: string, payload: DraftApproveInput): Promise<void> {
-  const res = await fetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/approve`, {
+  const res = await sidecarFetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -571,7 +590,7 @@ export async function approveDraft(draftId: string, payload: DraftApproveInput):
 }
 
 export async function rejectDraft(draftId: string): Promise<void> {
-  const res = await fetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/reject`, {
+  const res = await sidecarFetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/reject`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',

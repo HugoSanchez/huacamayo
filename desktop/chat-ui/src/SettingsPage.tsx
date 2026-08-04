@@ -4,6 +4,7 @@ import {
   getCodexStatus,
   getIngestionSources,
   getSidecarPort,
+  sidecarFetch,
   toggleIngestionSource,
   type CodexStatus,
   type IngestionSourceView,
@@ -62,7 +63,7 @@ export function SettingsPage({ onBack }: Props) {
         return;
       }
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/managed/account`);
+        const res = await sidecarFetch(`http://127.0.0.1:${port}/managed/account`);
         const body = await res.json().catch(() => null);
         if (cancelled) return;
         if (!res.ok) {
@@ -95,7 +96,7 @@ export function SettingsPage({ onBack }: Props) {
       // We don't await success: the macOS shell separately clears Keychain
       // and the chat-ui will be torn down when the app reverts to SignInView.
       try {
-        await fetch(`http://127.0.0.1:${port}/managed/session`, { method: 'DELETE' });
+        await sidecarFetch(`http://127.0.0.1:${port}/managed/session`, { method: 'DELETE' });
       } catch {
         // best-effort — the app shell handles the rest
       }

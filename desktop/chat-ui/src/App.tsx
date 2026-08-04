@@ -21,6 +21,7 @@ import {
   getToolkits,
   openConnectionRequest,
   openExternalUrl,
+  setSidecarAuthToken,
   setSidecarPort,
   streamChatMessage,
   unarchiveChatSession,
@@ -32,6 +33,7 @@ import type {
   ActivityStep,
   ChatSessionSummary,
   ChatModel,
+  OutgoingAttachment,
   ConnectionRequestView,
   ConnectionView,
   ReasoningEffort,
@@ -50,6 +52,7 @@ declare global {
     };
     setSidecarPort?: (port: number) => void;
     __versoSidecarPort?: number;
+    __versoSidecarToken?: string;
     __versoShellMode?: 'native' | 'browser';
     __versoPendingCatalogOpen?: boolean;
     __versoPendingSkillsCatalogOpen?: boolean;
@@ -121,8 +124,8 @@ export function App() {
   // config default so the visible selection and actual behaviour line up.
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
   // Codex model for the next message. Sticky across sessions, like the effort
-  // selector. 'gpt-5.5' mirrors the gateway config default.
-  const [model, setModel] = useState<ChatModel>('gpt-5.5');
+  // selector. Keep this aligned with the managed entitlement and gateway config.
+  const [model, setModel] = useState<ChatModel>('gpt-5.4');
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const sessionIdRef = useRef<string | null>(null);
   // Per-session streams: one stream per session, multiple sessions can stream
@@ -447,6 +450,7 @@ export function App() {
   useEffect(() => {
     const applyPort = (port: number) => {
       setSidecarPort(port);
+      setSidecarAuthToken(window.__versoSidecarToken);
       setConnected(true);
       // Session bootstrap is now driven by the shell host (Swift in native,
       // `useBrowserShellHost` in browser) — both fetch and dispatch a
@@ -469,10 +473,11 @@ export function App() {
     }
 
     const onPortEvent = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ port?: unknown }>).detail;
+      const detail = (ev as CustomEvent<{ port?: unknown; token?: unknown }>).detail;
       const rawPort = detail?.port;
       const port = typeof rawPort === 'number' ? rawPort : Number(rawPort);
       if (Number.isFinite(port) && port > 0) {
+        if (typeof detail?.token === 'string') window.__versoSidecarToken = detail.token;
         window.__versoSidecarPort = port;
         applyPort(port);
       }
@@ -819,7 +824,7 @@ export function App() {
   // Wires up the SSE handlers for an assistant placeholder that's already in
   // the pending/current bucket. Shared by the normal send path and the
   // post-connect replay so both flows produce identical streaming behaviour.
-  const streamInto = useCallback((assistantId: string, text: string, attached: AttachedContext | null) => {
+  const streamInto = useCallback((assistantId: string, text: string, attached: AttachedContext | null, attachments: OutgoingAttachment[] = []) => {
     // Bucket the placeholder lives in *right now*. Used only by the
     // pre-ensureSession error path; once ensureSession resolves, all SSE writes
     // target the real session id captured below.
@@ -850,6 +855,7 @@ export function App() {
                       kind: 'codex_connect_required' as const,
                       pendingText: text,
                       pendingAttached: attached,
+                      pendingAttachments: attachments,
                       content: '',
                       steps: [],
                       isStreaming: false,
@@ -890,6 +896,7 @@ export function App() {
                       kind: 'codex_connect_required' as const,
                       pendingText: text,
                       pendingAttached: attached,
+                      pendingAttachments: attachments,
                       content: '',
                       steps: [],
                       isStreaming: false,
@@ -912,7 +919,7 @@ export function App() {
             postShellAction({ kind: 'session-mutated', id: sessionId });
             notifyNativeResponseReady(isNativeShell);
           },
-          { attached, reasoningEffort, model },
+          { attached, attachments, reasoningEffort, model },
         );
 
         // Register the stream now that we have both the sessionId and the
@@ -932,6 +939,7 @@ export function App() {
                   kind: 'codex_connect_required' as const,
                   pendingText: text,
                   pendingAttached: attached,
+                  pendingAttachments: attachments,
                   content: '',
                   steps: [],
                   isStreaming: false,
@@ -951,8 +959,8 @@ export function App() {
     })();
   }, [ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, model, reasoningEffort, updateSessionMessages]);
 
-  const handleSend = useCallback((text: string, attached: AttachedContext | null = null) => {
-    const hasContent = text.trim().length > 0 || attached?.kind === 'cron';
+  const handleSend = useCallback((text: string, attached: AttachedContext | null = null, attachments: OutgoingAttachment[] = []) => {
+    const hasContent = text.trim().length > 0 || attached?.kind === 'cron' || attachments.length > 0;
     if (!hasContent || !connected) return;
 
     const sessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
@@ -961,9 +969,15 @@ export function App() {
     // pre-stream; let them through so the optimistic placeholder lands.
     if (sessionIdRef.current && streamingSessions.has(sessionIdRef.current)) return;
 
-    const displayText = attached?.kind === 'cron' && text.trim().length === 0
+    let displayText = attached?.kind === 'cron' && text.trim().length === 0
       ? `[Reviewing routine: ${attached.name}]`
       : text;
+    // Mirror the orchestrator's stored form (`appendAttachmentMarkers`) so the
+    // optimistic message matches what a reload hydrates from the store.
+    if (attachments.length > 0) {
+      const markers = attachments.map((a) => `[attached image: ${a.name}]`).join('\n');
+      displayText = displayText ? `${displayText}\n\n${markers}` : markers;
+    }
 
     // If we know the user hasn't connected Codex yet, don't bother hitting
     // Hermes — it'll just error with a CLI-flavoured "no credentials"
@@ -978,6 +992,7 @@ export function App() {
         kind: 'codex_connect_required',
         pendingText: text,
         pendingAttached: attached,
+        pendingAttachments: attachments,
       };
       updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, widgetMsg]);
       return;
@@ -994,7 +1009,7 @@ export function App() {
     };
 
     updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, assistantMsg]);
-    streamInto(assistantMsg.id, text, attached);
+    streamInto(assistantMsg.id, text, attached, attachments);
   }, [codexConnected, connected, streamInto, streamingSessions, updateSessionMessages]);
 
   const handleCodexConnected = useCallback((widgetId: string) => {
@@ -1004,8 +1019,9 @@ export function App() {
     const widget = currentMessages.find((m) => m.id === widgetId && m.kind === 'codex_connect_required');
     const pendingText = widget?.pendingText ?? '';
     const pendingAttached = widget?.pendingAttached ?? null;
+    const pendingAttachments = widget?.pendingAttachments ?? [];
 
-    if (!pendingText) {
+    if (!pendingText && pendingAttachments.length === 0) {
       // Nothing to replay (shouldn't happen — handleSend always stashes text
       // before showing the widget). Just remove the widget.
       updateSessionMessages(sessionKey, (prev) => prev.filter((m) => m.id !== widgetId));
@@ -1024,7 +1040,7 @@ export function App() {
       startedAt: Date.now(),
     };
     updateSessionMessages(sessionKey, (prev) => prev.map((m) => m.id === widgetId ? assistantMsg : m));
-    streamInto(assistantMsg.id, pendingText, pendingAttached);
+    streamInto(assistantMsg.id, pendingText, pendingAttached, pendingAttachments);
   }, [messagesBySession, streamInto, updateSessionMessages]);
 
   const handleOpenSkillInNewSession = useCallback((slug: string) => {

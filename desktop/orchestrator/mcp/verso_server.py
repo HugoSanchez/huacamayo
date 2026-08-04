@@ -36,7 +36,7 @@ mcp = FastMCP(
     instructions=(
         "verso app bridge. Use search_toolkits to find the right app first when needed, "
         "then request_connection/list_connections/get_connection_status for auth and connection state. "
-        "For Composio-backed app actions, use the native mcp_verso_* connected-app "
+        "For Composio-backed app actions, use the native verso connected-app "
         "tools that Hermes exposes from this server. If the right native tool is not "
         "visible, use Hermes native tool search/describe/call to discover it.\n\n"
         "Connection management for ALL apps goes through verso, not Composio. "

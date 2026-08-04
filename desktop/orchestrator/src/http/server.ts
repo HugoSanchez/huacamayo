@@ -73,7 +73,7 @@ function buildRoutes(
   ];
 }
 
-export async function startServer(opts: { port?: number } = {}): Promise<{
+export async function startServer(opts: { port?: number; authSecret?: string | null; allowUnauthenticated?: boolean } = {}): Promise<{
   server: http.Server;
   port: number;
   close: () => Promise<void>;
@@ -192,8 +192,18 @@ export async function startServer(opts: { port?: number } = {}): Promise<{
     ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction),
   ];
 
+  const authSecret = opts.authSecret ?? process.env.VERSO_SIDECAR_AUTH_SECRET ?? null;
+  const nativeLaunch = Boolean(process.env.VERSO_PARENT_PID);
+  const allowUnauthenticated = !nativeLaunch && (
+    opts.allowUnauthenticated === true
+    || process.env.VERSO_ALLOW_UNAUTHENTICATED_SIDECAR === '1'
+  );
+  if (!authSecret && !allowUnauthenticated) {
+    throw new Error('VERSO_SIDECAR_AUTH_SECRET is required. For local browser development only, set VERSO_ALLOW_UNAUTHENTICATED_SIDECAR=1.');
+  }
+
   const server = http.createServer((req, res) => {
-    dispatch(routes, req, res);
+    dispatch(routes, req, res, { authSecret, allowUnauthenticated });
   });
   server.on('close', () => {
     void hermes.shutdown();

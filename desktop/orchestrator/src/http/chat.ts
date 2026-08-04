@@ -16,6 +16,12 @@ import {
   findSkillBySlug,
 } from './skills.ts';
 import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts';
+import {
+  AttachmentValidationError,
+  appendAttachmentMarkers,
+  parseChatAttachments,
+  type ChatAttachment,
+} from './attachments.ts';
 import { type MemoryExtractionScheduler } from './memory-extraction.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 
@@ -151,7 +157,16 @@ export function buildChatRoutes(
       const content = typeof (body as { content?: unknown } | null)?.content === 'string'
         ? ((body as { content?: string }).content ?? '').trim()
         : '';
-      if (!content) {
+      let attachments: ChatAttachment[];
+      try {
+        attachments = parseChatAttachments(body);
+      } catch (error: unknown) {
+        const message = error instanceof AttachmentValidationError
+          ? error.message
+          : 'Invalid "attachments"';
+        return json(res, 400, { error: 'bad_request', message });
+      }
+      if (!content && attachments.length === 0) {
         return json(res, 400, { error: 'bad_request', message: 'Missing "content"' });
       }
 
@@ -167,7 +182,7 @@ export function buildChatRoutes(
       const priorMessageCount = store.getMessages(params.id)?.length ?? 0;
       const isFirstUserMessage = priorMessageCount === 0;
 
-      store.appendMessage(params.id, 'user', content);
+      store.appendMessage(params.id, 'user', appendAttachmentMarkers(content, attachments));
       managedBackend.recordAnalyticsEvent({ eventType: 'message_sent', sessionId: params.id });
 
       const attached = parseAttached(body);
@@ -188,6 +203,10 @@ export function buildChatRoutes(
           promptForHermes = buildSkillInvocationPrompt(skill, slashRequest.remainder, params.id);
         }
       }
+      // Markers ride inside the prompt text (and thus Hermes' own transcript
+      // and any history rebuild); the actual image bytes only travel on the
+      // live request as `input_image` parts.
+      promptForHermes = appendAttachmentMarkers(promptForHermes, attachments);
 
       const session = hydrateSessionSummary(record, store);
 
@@ -202,6 +221,7 @@ export function buildChatRoutes(
           session,
           sessionRecord: record,
           userPrompt: promptForHermes,
+          attachments,
           isFirstUserMessage,
           reasoningEffort,
           model,
@@ -435,6 +455,7 @@ async function runHermesMessage(
     session: ChatSessionSummary;
     sessionRecord: ChatSessionRecord;
     userPrompt: string;
+    attachments?: ChatAttachment[];
     isFirstUserMessage: boolean;
     reasoningEffort?: ReasoningEffort | null;
     model?: ChatModel | null;
@@ -569,6 +590,7 @@ async function runHermesMessage(
     await streamHermesConversation(config, {
       conversation: opts.session.id,
       userPrompt: opts.userPrompt,
+      attachments: opts.attachments,
       conversationHistory: null,
       reasoningEffort: opts.reasoningEffort ?? null,
       model: opts.model ?? null,
@@ -596,6 +618,7 @@ async function runHermesMessage(
       await streamHermesConversation(config, {
         conversation: opts.session.id,
         userPrompt: opts.userPrompt,
+        attachments: opts.attachments,
         conversationHistory: recoveryMessages,
         reasoningEffort: opts.reasoningEffort ?? null,
         model: opts.model ?? null,
@@ -736,6 +759,7 @@ async function streamHermesConversation(
   opts: {
     conversation: string;
     userPrompt: string;
+    attachments?: ChatAttachment[];
     conversationHistory: ChatMessageRecord[] | null;
     reasoningEffort?: ReasoningEffort | null;
     model?: ChatModel | null;
@@ -750,6 +774,7 @@ async function streamHermesConversation(
     opts.conversationHistory,
     opts.reasoningEffort ?? null,
     opts.model ?? null,
+    opts.attachments ?? [],
   );
   await streamHermesResponse(config, payload, opts.signal, opts.onSessionId, opts.onEvent);
 }
@@ -760,9 +785,26 @@ function buildHermesRequestBody(
   conversationHistory: ChatMessageRecord[] | null,
   reasoningEffort: ReasoningEffort | null = null,
   model: ChatModel | null = null,
+  attachments: ChatAttachment[] = [],
 ): Record<string, unknown> {
+  // With image attachments, `input` switches from a plain string to the
+  // Responses message-array shape the gateway also accepts. Images travel as
+  // base64 data URLs; the gateway validates and forwards them to the model.
+  const input = attachments.length > 0
+    ? [{
+        role: 'user',
+        content: [
+          ...(userPrompt ? [{ type: 'input_text', text: userPrompt }] : []),
+          ...attachments.map((attachment) => ({
+            type: 'input_image',
+            image_url: `data:${attachment.mimeType};base64,${attachment.dataBase64}`,
+          })),
+        ],
+      }]
+    : userPrompt;
+
   const body: Record<string, unknown> = {
-    input: userPrompt,
+    input,
     conversation,
     truncation: 'auto',
     stream: true,

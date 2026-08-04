@@ -177,7 +177,7 @@ describe('Draft resolutions', () => {
   ): Promise<number> {
     const routes = buildDraftsRoutes(bridge as any, store);
     const server = http.createServer((req, res) => {
-      dispatch(routes, req, res);
+      dispatch(routes, req, res, { allowUnauthenticated: true });
     });
     servers.push(server);
 

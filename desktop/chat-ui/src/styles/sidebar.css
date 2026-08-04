@@ -99,13 +99,13 @@
 .session-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .session-list-item {
   width: 100%;
   text-align: left;
-  padding: 12px;
+  padding: 14px 12px;
   border-radius: 16px;
   border: 1px solid transparent;
   background: var(--session-item-bg);
@@ -139,7 +139,7 @@
 
 .session-list-item-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -167,4 +167,3 @@
   color: var(--ink-dim);
   font-size: 11px;
 }
-
