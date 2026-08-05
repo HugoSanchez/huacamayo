@@ -1,4 +1,5 @@
 import type {
+  ChatModel,
   ChatSessionSummary,
   ChatSSEEvent,
   ConnectionRequestView,
@@ -51,14 +52,27 @@ export function sidecarFetch(input: RequestInfo | URL, init: RequestInit = {}): 
   return fetch(input, { ...init, headers });
 }
 
-export async function createChatSession(title?: string): Promise<ChatSessionSummary> {
+export async function createChatSession(title?: string, model?: ChatModel): Promise<ChatSessionSummary> {
   const res = await sidecarFetch(`${baseURL()}/chat/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(title ? { title } : {}),
+    body: JSON.stringify({ ...(title ? { title } : {}), ...(model ? { model } : {}) }),
   });
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to create chat session'));
+  }
+  const body = await res.json() as { session: ChatSessionSummary };
+  return body.session;
+}
+
+export async function updateChatSessionModel(sessionId: string, model: ChatModel): Promise<ChatSessionSummary> {
+  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/model`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to save chat model'));
   }
   const body = await res.json() as { session: ChatSessionSummary };
   return body.session;
@@ -523,6 +537,39 @@ export async function disconnectCodex(): Promise<{ removed: number }> {
 
 export function codexConnectUrl(): string {
   return `${baseURL()}/model-auth/codex/start`;
+}
+
+export interface AnthropicStatus {
+  connected: boolean;
+}
+
+export async function getAnthropicStatus(): Promise<AnthropicStatus> {
+  const res = await sidecarFetch(`${baseURL()}/model-auth/anthropic/status`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load Anthropic status'));
+  }
+  return await res.json() as AnthropicStatus;
+}
+
+// Validates the key against the Anthropic API before storing, so this can
+// take a few seconds; a rejected key surfaces as a thrown error with the
+// orchestrator's message ("Anthropic rejected this API key…").
+export async function connectAnthropic(apiKey: string): Promise<void> {
+  const res = await sidecarFetch(`${baseURL()}/model-auth/anthropic/connect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey }),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to connect Anthropic'));
+  }
+}
+
+export async function disconnectAnthropic(): Promise<void> {
+  const res = await sidecarFetch(`${baseURL()}/model-auth/anthropic/disconnect`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to disconnect Anthropic'));
+  }
 }
 
 // Generic draft channel — the agent picks whatever toolkit slug it wants

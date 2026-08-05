@@ -81,13 +81,21 @@ The default Conductor run script:
 - runs the built Debug app binary in the foreground so Conductor Stop controls
   the launched process
 - refuses to start if another `verso` process is already running
+- scrubs stale `VERSO_*` debugging overrides, then uses the deployed Privy
+  frontend/backend and a durable Conductor Hermes profile. On its first run it
+  migrates the existing workspace profile and restores the installed app's
+  additive capabilities (Codex credentials, scheduled jobs, and connected
+  tool manifest), without mixing in its conflicting model configuration.
+  Indexed memory remains in the shared Verso memory DB, so it is available to
+  the agent after every rebuild.
 
 The runtime symlink keeps workspace execution clean without Spotlight testing:
 the workspace builds and runs its own checked-out code, while the generated,
 gitignored runtime bundle is reused from the repository root after validation.
 The symlink points only at the validated root bundle and setup refuses any
-mismatched existing runtime path. Nonconcurrent run mode remains necessary until
-Verso/Hermes account databases and Hermes home are isolated per workspace.
+mismatched existing runtime path. Nonconcurrent run mode remains necessary
+because the product-like Conductor run deliberately uses shared per-user
+account and memory state plus one durable Conductor Hermes profile.
 
 If setup reports a missing or stale runtime bundle, repair it from the repository
 root:

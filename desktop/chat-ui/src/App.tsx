@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { MessageList } from './MessageList';
 import { InputBar } from './InputBar';
 import { CatalogOverlay } from './CatalogOverlay';
@@ -12,6 +12,8 @@ import {
   cancelChatRequest,
   createConnectionRequest,
   createChatSession,
+  updateChatSessionModel,
+  getAnthropicStatus,
   getChatMessages,
   getChatSessions,
   getCodexStatus,
@@ -40,6 +42,7 @@ import type {
   StoredChatMessage,
   ToolkitView,
 } from './types';
+import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS } from './types';
 import type { ShellAction, ShellState } from './shell-protocol';
 import { useBrowserShellHost } from './browser-shell-host';
 
@@ -95,6 +98,7 @@ export function App() {
   // flight). We only intercept sends when we're sure the user is disconnected,
   // so unknown lets the normal Hermes flow proceed and surface its own error.
   const [codexConnected, setCodexConnected] = useState<boolean | null>(null);
+  const [anthropicConnected, setAnthropicConnected] = useState<boolean | null>(null);
   const [connections, setConnections] = useState<ConnectionView[]>([]);
   // Full toolkit catalog — used by the chat UI to render logos in tool-call
   // rows for toolkits the user may not have connected (or whose connection
@@ -123,9 +127,24 @@ export function App() {
   // global model/effort footer in Cursor/Claude). 'medium' mirrors the gateway
   // config default so the visible selection and actual behaviour line up.
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
-  // Codex model for the next message. Sticky across sessions, like the effort
-  // selector. Keep this aligned with the managed entitlement and gateway config.
-  const [model, setModel] = useState<ChatModel>('gpt-5.4');
+  // Mirrors the active session's persisted model. A choice made before a
+  // session exists is carried into that session when it is created.
+  const [model, setModel] = useState<ChatModel | null>('gpt-5.4');
+  // Models the cycler offers: only those whose provider is connected. While
+  // the Codex status is still unknown (null) we keep the Codex models
+  // visible so the selector renders immediately; Claude models appear only
+  // once the Anthropic key is confirmed.
+  const availableModels = useMemo<readonly ChatModel[]>(() => {
+    const models: ChatModel[] = [];
+    if (codexConnected !== false) models.push(...CODEX_CHAT_MODELS);
+    if (anthropicConnected === true) models.push(...ANTHROPIC_CHAT_MODELS);
+    return models.length > 0 ? models : CODEX_CHAT_MODELS;
+  }, [anthropicConnected, codexConnected]);
+  // If the selected model's provider disconnects, snap to the first
+  // available model so we never send an unroutable model string.
+  useEffect(() => {
+    if (model && !availableModels.includes(model)) setModel(availableModels[0]);
+  }, [availableModels, model]);
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const sessionIdRef = useRef<string | null>(null);
   // Per-session streams: one stream per session, multiple sessions can stream
@@ -298,6 +317,20 @@ export function App() {
       // Best-effort: leave codexConnected as-is so we don't accidentally
       // block sends because of a transient status fetch failure.
     }
+    try {
+      const anthropic = await getAnthropicStatus();
+      setAnthropicConnected(anthropic.connected);
+    } catch {
+      // Same best-effort stance as Codex above.
+    }
+  }, []);
+
+  // Settings broadcasts this after any provider connect/disconnect so the
+  // model selector updates immediately, without waiting for a page switch.
+  useEffect(() => {
+    const onModelAuthChanged = () => { void refreshCodexStatus(); };
+    window.addEventListener('verso:model-auth-changed', onModelAuthChanged);
+    return () => window.removeEventListener('verso:model-auth-changed', onModelAuthChanged);
   }, []);
 
   const refreshToolkitCatalog = useCallback(async () => {
@@ -419,6 +452,7 @@ export function App() {
     const prevSessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
     sessionIdRef.current = nextSession.id;
     setSelectedSessionId(nextSession.id);
+    setModel(nextSession.model);
     setSessions((prev) => sortSessions(replaceSession(prev, nextSession)));
     persistSelectedSessionId(nextSession.id);
     setMessagesBySession((prev) => {
@@ -552,6 +586,8 @@ export function App() {
     if (!shellState) return;
     const next = shellState.selectedSessionId;
     if (next === sessionIdRef.current) return;
+    const nextSession = shellState.sessions.find((session) => session.id === next);
+    if (nextSession) setModel(nextSession.model);
     // Leaving overlays open while switching sessions is jarring — every
     // session click from the leftbar should land you in the chat surface.
     if (next) {
@@ -767,9 +803,9 @@ export function App() {
     // default — that's the whole "name this chat after the first response"
     // feature. The leftbar will briefly show 'New chat' during streaming and
     // then refresh to the AI-generated title once the stream completes.
-    const session = normalizeSession(await createChatSession());
+    const session = normalizeSession(await createChatSession(undefined, model ?? undefined));
     return adoptSession(session, true);
-  }, [adoptSession]);
+  }, [adoptSession, model]);
 
   const handleNewChat = useCallback(() => {
     // Per-session streams: a new chat creates a fresh session, so it can't
@@ -780,13 +816,31 @@ export function App() {
 
     void (async () => {
       try {
-        const session = normalizeSession(await createChatSession());
+        const session = normalizeSession(await createChatSession(undefined, model ?? undefined));
         adoptSession(session, false);
       } catch (error: unknown) {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, connected, isHydratingSession]);
+  }, [adoptSession, connected, isHydratingSession, model]);
+
+  const handleModelChange = useCallback((nextModel: ChatModel) => {
+    setModel(nextModel);
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+
+    // Save on selection, rather than on the next send. This makes the choice
+    // durable for empty sessions and prevents a reopen from switching a
+    // conversation to a different provider.
+    void updateChatSessionModel(sessionId, nextModel)
+      .then((session) => {
+        const normalized = normalizeSession(session);
+        setSessions((prev) => sortSessions(replaceSession(prev, normalized)));
+      })
+      .catch((error: unknown) => {
+        setSessionError(error instanceof Error ? error.message : String(error));
+      });
+  }, []);
 
   const handleSelectSession = useCallback((sessionId: string) => {
     // Switching sessions while another is streaming is now first-class
@@ -962,6 +1016,10 @@ export function App() {
   const handleSend = useCallback((text: string, attached: AttachedContext | null = null, attachments: OutgoingAttachment[] = []) => {
     const hasContent = text.trim().length > 0 || attached?.kind === 'cron' || attachments.length > 0;
     if (!hasContent || !connected) return;
+    if (!model) {
+      setSessionError('Choose a model for this conversation before sending.');
+      return;
+    }
 
     const sessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
     // Per-session: block only if *this* session is already streaming. Other
@@ -979,11 +1037,13 @@ export function App() {
       displayText = displayText ? `${displayText}\n\n${markers}` : markers;
     }
 
-    // If we know the user hasn't connected Codex yet, don't bother hitting
-    // Hermes — it'll just error with a CLI-flavoured "no credentials"
-    // message that doesn't help our users. Stash the user's message on the
-    // synthetic widget so we can replay the send once they finish auth.
-    if (codexConnected === false) {
+    // If we know the user hasn't connected any provider yet, don't bother
+    // hitting Hermes — it'll just error with a CLI-flavoured "no
+    // credentials" message that doesn't help our users. Stash the user's
+    // message on the synthetic widget so we can replay the send once they
+    // finish auth. An Anthropic API key counts as connected: Claude models
+    // route to it, and it may even be the default provider.
+    if (codexConnected === false && anthropicConnected !== true) {
       const userMsg: ChatMessage = { id: nextId(), role: 'user', content: displayText };
       const widgetMsg: ChatMessage = {
         id: nextId(),
@@ -1010,7 +1070,7 @@ export function App() {
 
     updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, assistantMsg]);
     streamInto(assistantMsg.id, text, attached, attachments);
-  }, [codexConnected, connected, streamInto, streamingSessions, updateSessionMessages]);
+  }, [anthropicConnected, codexConnected, connected, model, streamInto, streamingSessions, updateSessionMessages]);
 
   const handleCodexConnected = useCallback((widgetId: string) => {
     setCodexConnected(true);
@@ -1062,14 +1122,14 @@ export function App() {
     handleCloseSkillsCatalog();
     void (async () => {
       try {
-        const session = normalizeSession(await createChatSession(slug.replace(/-/g, ' ')));
+        const session = normalizeSession(await createChatSession(slug.replace(/-/g, ' '), model ?? undefined));
         adoptSession(session, false);
         handleSend(`/${slug}`);
       } catch (error: unknown) {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, persistSelectedSessionId]);
+  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, model, persistSelectedSessionId]);
 
   const handleStop = useCallback(() => {
     // Per-session streams: the Stop button is in the InputBar of the
@@ -1208,7 +1268,9 @@ export function App() {
             reasoningEffort={reasoningEffort}
             onReasoningEffortChange={setReasoningEffort}
             model={model}
-            onModelChange={setModel}
+            onModelChange={handleModelChange}
+            availableModels={availableModels}
+            onModelMenuOpen={refreshCodexStatus}
             isStreaming={selectedSessionId !== null && streamingSessions.has(selectedSessionId)}
             disabled={!connected || isHydratingSession || !!selectedSession?.archivedAt}
             focusRecoveryEnabled={!isCatalogOpen && !isSkillsCatalogOpen}

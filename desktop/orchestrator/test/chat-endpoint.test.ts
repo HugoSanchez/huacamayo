@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { startServer } from '../src/http/server.ts';
 
 describe('Chat HTTP Endpoints', () => {
@@ -76,6 +78,61 @@ describe('Chat HTTP Endpoints', () => {
     const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
     expect(messages.status).toBe(200);
     expect(messages.body.messages).toEqual([]);
+  });
+
+  it('persists the selected model with the session', async () => {
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Provider-specific thread', model: 'claude-opus-4-8' }),
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.session.model).toBe('claude-opus-4-8');
+
+    const sessionId = created.body.session.id as string;
+    const changed = await fetchJson(`/chat/sessions/${sessionId}/model`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-5.5' }),
+    });
+    expect(changed.status).toBe(200);
+    expect(changed.body.session.model).toBe('gpt-5.5');
+
+    const reopened = await fetchJson(`/chat/sessions/${sessionId}`);
+    expect(reopened.body.session.model).toBe('gpt-5.5');
+
+    const listed = await fetchJson('/chat/sessions');
+    expect(listed.body.sessions.find((session: { id: string }) => session.id === sessionId)?.model).toBe('gpt-5.5');
+  });
+
+  it('rejects an unsupported session model', async () => {
+    const created = await fetchJson('/chat/sessions', { method: 'POST' });
+    const sessionId = created.body.session.id as string;
+    const result = await fetchJson(`/chat/sessions/${sessionId}/model`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'not-a-real-model' }),
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it('requires an explicit choice for a legacy session with no stored model', async () => {
+    const id = `legacy-${randomUUID()}`;
+    const now = new Date().toISOString();
+    const db = new DatabaseSync(process.env.VERSO_CHAT_STORE_PATH!);
+    db.prepare(`
+      INSERT INTO chat_sessions (id, title, created_at, updated_at, hermes_session_id, model, archived_at)
+      VALUES (?, 'Legacy thread', ?, ?, NULL, NULL, NULL)
+    `).run(id, now, now);
+    db.close();
+
+    const result = await fetchJson(`/chat/sessions/${id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'Do not guess a model' }),
+    });
+    expect(result.status).toBe(409);
+    expect(result.body.error).toBe('model_required');
   });
 
   it('archives and restores a session', async () => {

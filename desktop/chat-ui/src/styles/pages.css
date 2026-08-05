@@ -869,6 +869,28 @@
   margin: 4px 0 0;
 }
 
+.settings-key-input {
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-key-input:focus {
+  border-color: var(--line);
+}
+
+.settings-key-input::placeholder {
+  color: var(--ink-dim);
+}
+
 .settings-button {
   appearance: none;
   display: inline-flex;

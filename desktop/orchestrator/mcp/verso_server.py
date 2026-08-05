@@ -26,6 +26,12 @@ from mcp.server.stdio import stdio_server
 SERVER_NAME = "verso"
 ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
 COMPOSIO_TOOLS_MANIFEST = os.environ.get("VERSO_COMPOSIO_TOOLS_MANIFEST", "").strip()
+# The native app issues a fresh loopback token for every launch. The MCP
+# process is configured with an explicit environment by Hermes, so retain and
+# send it with every bridge request instead of relying on inherited process
+# state. Without this, the authenticated sidecar correctly rejects memory and
+# connected-tool calls with HTTP 401.
+SIDECAR_AUTH_SECRET = os.environ.get("VERSO_SIDECAR_AUTH_SECRET", "").strip()
 # Memory tool surface for this Hermes profile: "full" or unset/anything else
 # for none. The orchestrator owns the in-process memory store; these tools
 # proxy to it.
@@ -304,10 +310,14 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict
     if not ORCHESTRATOR_BASE_URL:
         raise RuntimeError("VERSO_ORCHESTRATOR_BASE_URL is not set")
 
+    headers = {"Content-Type": "application/json"}
+    if SIDECAR_AUTH_SECRET:
+        headers["X-Verso-Sidecar-Token"] = SIDECAR_AUTH_SECRET
+
     request = urllib.request.Request(
         f"{ORCHESTRATOR_BASE_URL}{path}",
         method=method,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
 
     data = None

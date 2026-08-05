@@ -350,16 +350,14 @@ final class SidecarManager: ObservableObject {
         let currentPath = env["PATH"] ?? ""
         env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
 
-        // Release builds (Archive) point the orchestrator at the deployed
-        // managed backend. Debug builds (Xcode → Run) keep the orchestrator
-        // default of http://127.0.0.1:8788 so local dev iterates against the
-        // local backend. A pre-set VERSO_BACKEND_URL in the parent env always
-        // wins (useful for testing prod from a debug build).
-        #if !DEBUG
+        // The native app normally needs the deployed managed backend: it owns
+        // the Privy exchange and account/session APIs. This applies to Debug
+        // too, because Cmd+R and Conductor Run are product testing paths, not
+        // an implicit request to boot a separate frontend/backend stack. A
+        // scheme VERSO_BACKEND_URL remains an explicit local-dev override.
         if env["VERSO_BACKEND_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
             env["VERSO_BACKEND_URL"] = "https://verso-backend-2lg3.onrender.com"
         }
-        #endif
         // Release builds also point the orchestrator at the bundled Python /
         // Hermes / wheels so it can build the user's venv from offline files
         // on first launch — no `brew install python` and no PyPI access
@@ -663,7 +661,12 @@ final class SidecarManager: ObservableObject {
         env["VERSO_BUNDLED_PYTHON_DIR"] = pythonDir
         env["VERSO_BUNDLED_SITE_PACKAGES_DIR"] = sitePackagesDir
         env["VERSO_BUNDLED_DEFAULTS"] = defaultsDir
-        env["VERSO_HERMES_HOME"] = hermesHome
+        // Respect an explicit launch-environment override for isolated test
+        // profiles. Normal app and Conductor launches pass the durable
+        // App Support profile so credentials, connections, and Hermes state
+        // survive a rebuild.
+        env["VERSO_HERMES_HOME"] =
+            ProcessInfo.processInfo.environment["VERSO_HERMES_HOME"] ?? hermesHome
         env["VERSO_PYTHON_CACHE_DIR"] = pythonCacheDir
 
         // CRITICAL: prevent Python from writing __pycache__/*.pyc files into

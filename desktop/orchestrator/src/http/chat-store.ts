@@ -36,6 +36,10 @@ export interface ChatSessionRecord {
   createdAt: string;
   updatedAt: string;
   hermesSessionId: string | null;
+  // The model is session state, not a composer preference. Keeping it with
+  // the transcript prevents a reopened conversation from silently switching
+  // providers (and their pricing) after an app restart.
+  model: string | null;
   archivedAt: string | null;
 }
 
@@ -45,6 +49,7 @@ export interface ChatSessionSummary {
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  model: string | null;
   messageCount: number;
   lastMessagePreview: string | null;
 }
@@ -105,6 +110,7 @@ export class ChatStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         hermes_session_id TEXT,
+        model TEXT,
         archived_at TEXT
       );
 
@@ -144,6 +150,13 @@ export class ChatStore {
       CREATE INDEX IF NOT EXISTS idx_memory_extraction_status
         ON memory_extraction_state(status, pending_since);
     `);
+    this.ensureColumn('chat_sessions', 'model', 'TEXT');
+  }
+
+  private ensureColumn(table: 'chat_sessions', column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>;
+    if (columns.some((entry) => entry.name === column)) return;
+    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 
   get path(): string {
@@ -157,6 +170,7 @@ export class ChatStore {
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       archivedAt: session.archivedAt,
+      model: session.model,
       messageCount: 0,
       lastMessagePreview: null,
     }));
@@ -164,7 +178,7 @@ export class ChatStore {
 
   listSessionRecords(): ChatSessionRecord[] {
     const rows = this.db.prepare(`
-      SELECT id, title, created_at, updated_at, hermes_session_id, archived_at
+      SELECT id, title, created_at, updated_at, hermes_session_id, model, archived_at
       FROM chat_sessions
       ORDER BY updated_at DESC
     `).all() as unknown as SessionRow[];
@@ -182,6 +196,7 @@ export class ChatStore {
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       archivedAt: session.archivedAt,
+      model: session.model,
       messageCount: 0,
       lastMessagePreview: null,
     };
@@ -189,7 +204,7 @@ export class ChatStore {
 
   getSessionRecord(sessionId: string): ChatSessionRecord | null {
     const row = this.db.prepare(`
-      SELECT id, title, created_at, updated_at, hermes_session_id, archived_at
+      SELECT id, title, created_at, updated_at, hermes_session_id, model, archived_at
       FROM chat_sessions
       WHERE id = ?
     `).get(sessionId) as SessionRow | undefined;
@@ -197,15 +212,15 @@ export class ChatStore {
     return row ? rowToSessionRecord(row) : null;
   }
 
-  createSession(title?: string): ChatSessionSummary {
+  createSession(title?: string, model: string | null = null): ChatSessionSummary {
     const now = new Date().toISOString();
     const id = randomUUID();
     const resolvedTitle = normalizeTitle(title) || 'New chat';
 
     this.db.prepare(`
-      INSERT INTO chat_sessions (id, title, created_at, updated_at, hermes_session_id, archived_at)
-      VALUES (?, ?, ?, ?, NULL, NULL)
-    `).run(id, resolvedTitle, now, now);
+      INSERT INTO chat_sessions (id, title, created_at, updated_at, hermes_session_id, model, archived_at)
+      VALUES (?, ?, ?, ?, NULL, ?, NULL)
+    `).run(id, resolvedTitle, now, now, model);
 
     return {
       id,
@@ -213,9 +228,49 @@ export class ChatStore {
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
+      model,
       messageCount: 0,
       lastMessagePreview: null,
     };
+  }
+
+  setSessionModel(sessionId: string, model: string | null): ChatSessionRecord | null {
+    const session = this.getSessionRecord(sessionId);
+    if (!session) return null;
+
+    this.db.prepare(`
+      UPDATE chat_sessions
+      SET model = ?
+      WHERE id = ?
+    `).run(model, sessionId);
+
+    return { ...session, model };
+  }
+
+  // Sessions created before `chat_sessions.model` existed can still be
+  // recovered exactly when their linked Hermes session retained a model. The
+  // caller supplies only validated model ids; unknown rows intentionally stay
+  // unset so no conversation is silently routed to another provider.
+  backfillSessionModels(resolveModel: (hermesSessionId: string) => string | null): number {
+    const rows = this.db.prepare(`
+      SELECT id, hermes_session_id
+      FROM chat_sessions
+      WHERE (model IS NULL OR trim(model) = '')
+        AND hermes_session_id IS NOT NULL
+        AND trim(hermes_session_id) <> ''
+    `).all() as Array<{ id: unknown; hermes_session_id: unknown }>;
+    const update = this.db.prepare('UPDATE chat_sessions SET model = ? WHERE id = ?');
+    let restored = 0;
+
+    for (const row of rows) {
+      if (typeof row.id !== 'string' || typeof row.hermes_session_id !== 'string') continue;
+      const model = resolveModel(row.hermes_session_id);
+      if (!model) continue;
+      update.run(model, row.id);
+      restored += 1;
+    }
+
+    return restored;
   }
 
   appendMessage(sessionId: string, role: ChatRole, content: string): ChatMessageRecord | null {
@@ -556,6 +611,7 @@ interface SessionRow {
   created_at: string;
   updated_at: string;
   hermes_session_id: string | null;
+  model: string | null;
   archived_at: string | null;
 }
 
@@ -593,6 +649,7 @@ function rowToSessionRecord(row: SessionRow): ChatSessionRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     hermesSessionId: row.hermes_session_id,
+    model: row.model,
     archivedAt: row.archived_at,
   };
 }

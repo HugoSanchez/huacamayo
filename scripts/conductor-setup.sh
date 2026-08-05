@@ -64,9 +64,23 @@ if [ "${WORKSPACE_PATH}" != "${ROOT_PATH}" ]; then
             exit 1
         fi
     elif [ -e "${WORKSPACE_BUNDLE}" ]; then
-        echo "[conductor-setup] ERROR: ${WORKSPACE_BUNDLE} exists and is not the managed symlink." >&2
-        echo "Remove or inspect it manually; setup will not replace local runtime data." >&2
-        exit 1
+        # A workspace created before the shared-root cache convention may
+        # already contain a generated (and gitignored) runtime bundle. It is
+        # safe to replace only that recognizable cache with the managed
+        # symlink: all source-controlled runtime inputs live elsewhere and
+        # the validated root cache is the canonical replacement. Refuse any
+        # other directory so setup never deletes user-owned local data.
+        if [ -f "${WORKSPACE_BUNDLE}/BUNDLE_VERSION" ] \
+            && [ -d "${WORKSPACE_BUNDLE}/node" ] \
+            && [ -d "${WORKSPACE_BUNDLE}/site-packages" ]; then
+            echo "[conductor-setup] migrating generated workspace runtime bundle to root cache"
+            rm -rf "${WORKSPACE_BUNDLE}"
+            ln -s "${ROOT_BUNDLE}" "${WORKSPACE_BUNDLE}"
+        else
+            echo "[conductor-setup] ERROR: ${WORKSPACE_BUNDLE} exists and is not the managed symlink." >&2
+            echo "Refusing to replace an unrecognized local directory; inspect it manually." >&2
+            exit 1
+        fi
     else
         ln -s "${ROOT_BUNDLE}" "${WORKSPACE_BUNDLE}"
         echo "[conductor-setup] linked workspace runtime bundle -> ${ROOT_BUNDLE}"

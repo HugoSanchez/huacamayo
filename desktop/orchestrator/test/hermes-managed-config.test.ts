@@ -25,6 +25,7 @@ describe('HermesSupervisor: managed config override', () => {
       VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
       VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
       VERSO_MEMORY_ENABLED: process.env.VERSO_MEMORY_ENABLED,
+      VERSO_SIDECAR_AUTH_SECRET: process.env.VERSO_SIDECAR_AUTH_SECRET,
     };
     process.env.HERMES_HOME = templateHome;
     // Pretend Hermes is launchable so the supervisor doesn't bail out.
@@ -258,6 +259,22 @@ describe('HermesSupervisor: managed config override', () => {
     };
     expect(parsed.mcp_servers?.verso?.env?.VERSO_MEMORY_TOOLS).toBe('full');
     expect(parsed.mcp_servers?.verso?.env?.VERSO_MEMORY_BACKEND).toBeUndefined();
+  });
+
+  it('forwards the native sidecar token to the verso MCP bridge', () => {
+    const fakePython = path.join(tempRoot, 'hermes-agent', 'venv', 'bin', 'python');
+    mkdirSync(path.dirname(fakePython), { recursive: true });
+    writeFileSync(fakePython, '#!/bin/sh\n', 'utf8');
+    process.env.VERSO_SIDECAR_AUTH_SECRET = 'test-sidecar-token';
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      mcp_servers?: Record<string, { env?: Record<string, string> }>;
+    };
+    expect(parsed.mcp_servers?.verso?.env?.VERSO_SIDECAR_AUTH_SECRET).toBe('test-sidecar-token');
   });
 
   it('omits the memory tools env when memory is disabled', () => {

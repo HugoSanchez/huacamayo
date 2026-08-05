@@ -9,7 +9,12 @@ import {
 } from './chat-store.ts';
 import { applyDraftResolutions } from './draft-resolutions.ts';
 import { HermesSupervisor, hermesGatewayAuthHeaders, type HermesGatewayConfig } from './hermes-supervisor.ts';
-import { readHermesChatMessages } from './hermes-history.ts';
+import {
+  hermesHistoryHomeCandidates,
+  readHermesChatMessages,
+  readHermesSessionModelFromHomes,
+} from './hermes-history.ts';
+import { DEFAULT_CHAT_MODEL, VALID_CHAT_MODELS, type ChatModel } from './model-catalog.ts';
 import {
   buildSkillInvocationPrompt,
   extractSlashSkillRequest,
@@ -90,7 +95,11 @@ export function buildChatRoutes(
       const title = typeof (body as { title?: unknown } | null)?.title === 'string'
         ? ((body as { title?: string }).title ?? undefined)
         : undefined;
-      const session = store.createSession(title);
+      const requestedModel = parseChatModel(body);
+      if (hasModelField(body) && !requestedModel) {
+        return json(res, 400, { error: 'bad_request', message: 'Invalid "model"' });
+      }
+      const session = store.createSession(title, requestedModel ?? DEFAULT_CHAT_MODEL);
       managedBackend.recordAnalyticsEvent({ eventType: 'session_created', sessionId: session.id });
       json(res, 201, { session });
     }),
@@ -148,8 +157,20 @@ export function buildChatRoutes(
       json(res, 200, { session });
     }),
 
+    route('POST', '/chat/sessions/:id/model', async (_req, res, params, body) => {
+      const model = parseChatModel(body);
+      if (!model) {
+        return json(res, 400, { error: 'bad_request', message: 'Invalid "model"' });
+      }
+      const record = store.setSessionModel(params.id, model);
+      if (!record) {
+        return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
+      }
+      json(res, 200, { session: hydrateSessionSummary(record, store) });
+    }),
+
     route('POST', '/chat/sessions/:id/messages', async (req, res, params, body) => {
-      const record = store.getSessionRecord(params.id);
+      let record = store.getSessionRecord(params.id);
       if (!record) {
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
@@ -179,15 +200,41 @@ export function buildChatRoutes(
         });
       }
 
+      const attached = parseAttached(body);
+      const reasoningEffort = parseReasoningEffort(body);
+      // The composer sends its selection with every message so a click and an
+      // immediate send are atomic from the user's perspective. Persist it
+      // before dispatching so a relaunch or reopen cannot route this session
+      // through a different provider later.
+      const requestedModel = parseChatModel(body);
+      if (requestedModel && requestedModel !== record.model) {
+        record = store.setSessionModel(params.id, requestedModel) ?? record;
+      }
+      // A sidecar can remain alive during an upgrade, so recover from Hermes
+      // here too instead of relying solely on the startup migration.
+      if (!requestedModel && !parseStoredChatModel(record.model)) {
+        const hermesModel = readHermesSessionModelFromHomes({
+          hermesHomes: hermesHistoryHomeCandidates(hermes.hermesHome),
+          hermesSessionId: record.hermesSessionId,
+        });
+        const recoveredModel = parseStoredChatModel(hermesModel);
+        if (recoveredModel) {
+          record = store.setSessionModel(params.id, recoveredModel) ?? record;
+        }
+      }
+      const model = requestedModel ?? parseStoredChatModel(record.model);
+      if (!model) {
+        return json(res, 409, {
+          error: 'model_required',
+          message: 'Choose a model for this legacy conversation before sending.',
+        });
+      }
+
       const priorMessageCount = store.getMessages(params.id)?.length ?? 0;
       const isFirstUserMessage = priorMessageCount === 0;
 
       store.appendMessage(params.id, 'user', appendAttachmentMarkers(content, attachments));
       managedBackend.recordAnalyticsEvent({ eventType: 'message_sent', sessionId: params.id });
-
-      const attached = parseAttached(body);
-      const reasoningEffort = parseReasoningEffort(body);
-      const model = parseChatModel(body);
       let promptForHermes = content;
       if (attached?.kind === 'cron') {
         // Fetch the cron's current state and prepend it as a system block so
@@ -302,11 +349,12 @@ function parseReasoningEffort(body: unknown): ReasoningEffort | null {
     : null;
 }
 
-// Codex models the chat-input model selector may pick. Allowlisted so a stray
-// client value can't ask the gateway to load an unauthenticated model; absent
-// values let the gateway use its config.yaml default.
-const VALID_CHAT_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const;
-type ChatModel = (typeof VALID_CHAT_MODELS)[number];
+// Models the chat-input model selector may pick (Codex + Anthropic).
+// Allowlisted so a stray client value can't ask the gateway to load an
+// unauthenticated model; absent values let the gateway use its config.yaml
+// default. Cross-provider dispatch happens via the api_server model_routes
+// the supervisor writes — the gateway re-resolves provider credentials per
+// routed alias.
 
 function parseChatModel(body: unknown): ChatModel | null {
   const raw = body && typeof body === 'object' && !Array.isArray(body)
@@ -314,7 +362,16 @@ function parseChatModel(body: unknown): ChatModel | null {
     : undefined;
   if (typeof raw !== 'string') return null;
   const value = raw.trim().toLowerCase();
-  return (VALID_CHAT_MODELS as readonly string[]).includes(value)
+  return parseStoredChatModel(value);
+}
+
+function hasModelField(body: unknown): boolean {
+  return Boolean(body && typeof body === 'object' && !Array.isArray(body)
+    && Object.hasOwn(body as Record<string, unknown>, 'model'));
+}
+
+function parseStoredChatModel(value: string | null | undefined): ChatModel | null {
+  return typeof value === 'string' && (VALID_CHAT_MODELS as readonly string[]).includes(value)
     ? (value as ChatModel)
     : null;
 }
@@ -445,6 +502,7 @@ function hydrateSessionSummaryRecord(
     createdAt: record.createdAt,
     updatedAt,
     archivedAt: record.archivedAt,
+    model: parseStoredChatModel(record.model),
     messageCount: messages.length,
     lastMessagePreview: lastMessage ? preview(lastMessage.content) : null,
   };

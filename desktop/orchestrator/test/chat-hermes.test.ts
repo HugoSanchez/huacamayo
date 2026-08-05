@@ -245,6 +245,32 @@ describe('Hermes Chat Streaming', () => {
     expect(requestLog[0].conversation_history).toBeUndefined();
   });
 
+  it('uses the stored session model when a message does not repeat it', async () => {
+    requestLog = [];
+    breakConversationChain = false;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Opus thread', model: 'claude-opus-4-8' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const response = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'Use the session choice' }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(requestLog).toHaveLength(1);
+    expect(requestLog[0].model).toBe('claude-opus-4-8');
+  });
+
   it('forwards image attachments as multimodal input and stores marker text', async () => {
     requestLog = [];
     breakConversationChain = false;

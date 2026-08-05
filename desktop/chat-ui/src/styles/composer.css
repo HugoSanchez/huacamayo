@@ -247,6 +247,64 @@
   font-weight: 500;
 }
 
+/* Model picker dropdown (composer footer) */
+.model-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.model-menu-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  width: max-content;
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: var(--popover-shadow);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.model-menu-row {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.model-menu-row:hover:not(:disabled) {
+  background: var(--highlight-bg);
+}
+
+.model-menu-row.is-selected {
+  font-weight: 600;
+}
+
+.model-menu-row:disabled {
+  color: var(--ink-dim);
+  cursor: default;
+}
+
+.model-menu-hint {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
 /* Slash autocomplete popover */
 .slash-popover {
   position: absolute;

@@ -16,6 +16,8 @@ import {
 import { isMemoryEnabled } from './lexical-provider.ts';
 import { applyMemorySoulSection } from './memory-soul.ts';
 import { computePinnedToolNames, findInertCorePins } from './hermes-pinned-tools.ts';
+import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS } from './model-catalog.ts';
+import { readAnthropicKeyFromEnvFile } from './model-auth.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -46,11 +48,19 @@ export interface HermesRuntimeSnapshot {
   command: string | null;
   cwd: string | null;
   lastError: string | null;
+  // Core pinned tools the gateway did not register (base names). null while
+  // unchecked or when the gateway doesn't expose /v1/toolsets; non-empty
+  // means product-critical tools are invisible to the model.
+  inertCorePins: string[] | null;
 }
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 8642;
-const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
+// Cold starts have to load the local embedding model and register the MCP
+// bridge before the gateway can answer /health. Allow enough time for that on
+// a busy developer machine so the UI never reports a false "not ready" error
+// while Hermes is still coming online.
+const DEFAULT_STARTUP_TIMEOUT_MS = 90_000;
 const MANAGED_API_SERVER_KEY = randomBytes(32).toString('hex');
 export function getHermesGatewayConfig(): HermesGatewayConfig {
   const baseUrl = normalizeBaseUrl(
@@ -394,6 +404,17 @@ export class HermesSupervisor {
     this.source = 'none';
   }
 
+  /**
+   * Full child restart. Needed after credential/config changes the gateway
+   * only reads at startup (.env API keys, api_server model_routes). Chat
+   * sessions survive: the orchestrator rebuilds conversation history from
+   * its own store when Hermes forgets a previous_response_id.
+   */
+  async restart(): Promise<void> {
+    await this.shutdown();
+    await this.ensureReady();
+  }
+
   private async ensureResolvedBaseUrl(): Promise<void> {
     if (this.baseUrlResolved) return;
     if (this.resolveBaseUrlPromise) {
@@ -427,6 +448,7 @@ export class HermesSupervisor {
       command: this.describeLaunch(),
       cwd: this.launch.cwd,
       lastError: this.lastError,
+      inertCorePins: this.inertCorePins,
     };
   }
 
@@ -660,6 +682,7 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
+    this.configureModelRoutes();
     this.restoreManagedModelConfigIfProxyOwned();
     this.seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed);
     this.enforceAlwaysDisabledSkills();
@@ -819,6 +842,80 @@ export class HermesSupervisor {
    * find the exact old proxy-owned model config, restore the template model
    * section. Other model configs are left untouched.
    */
+  /**
+   * Reconcile api_server model_routes with the credentials that actually
+   * exist, so the chat-input model selector can switch providers per
+   * request. A routed alias makes the gateway re-resolve provider
+   * credentials for that request (gateway/platforms/api_server.py route
+   * handling) — without a route, the verso-request-overrides patch swaps
+   * only the model string and the request would go to the default
+   * provider's endpoint with the wrong model name.
+   *
+   * Runs on every managed start, so routes appear/disappear as keys are
+   * connected/disconnected (both flows restart the child). Only the
+   * aliases in the model catalog are touched; any hand-added route is
+   * preserved.
+   */
+  private configureModelRoutes(): void {
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    if (!existsSync(configPath)) return;
+
+    let config: Record<string, unknown> = {};
+    try {
+      const raw = readFileSync(configPath, 'utf8');
+      const parsed = YAML.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        config = parsed as Record<string, unknown>;
+      }
+    } catch {
+      config = {};
+    }
+
+    const hasAnthropic = readAnthropicKeyFromEnvFile(this.managedHermesHome) !== null;
+    const hasCodex = this.hasCodexPoolCredentials();
+
+    const platforms = asRecord(config.platforms) ?? {};
+    const apiServer = asRecord(platforms.api_server) ?? {};
+    const extra = asRecord(apiServer.extra) ?? {};
+    const routes = asRecord(extra.model_routes) ?? {};
+
+    for (const model of CODEX_CHAT_MODELS) {
+      if (hasCodex) {
+        routes[model] = { model, provider: 'openai-codex' };
+      } else {
+        delete routes[model];
+      }
+    }
+    for (const model of ANTHROPIC_CHAT_MODELS) {
+      if (hasAnthropic) {
+        routes[model] = { model, provider: 'anthropic' };
+      } else {
+        delete routes[model];
+      }
+    }
+
+    if (Object.keys(routes).length > 0) {
+      extra.model_routes = routes;
+    } else {
+      delete extra.model_routes;
+    }
+    apiServer.extra = extra;
+    platforms.api_server = apiServer;
+    config.platforms = platforms;
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
+  }
+
+  private hasCodexPoolCredentials(): boolean {
+    try {
+      const raw = readFileSync(join(this.managedHermesHome, 'auth.json'), 'utf8');
+      const parsed = JSON.parse(raw) as { credential_pool?: Record<string, unknown[]> };
+      const pool = parsed?.credential_pool?.['openai-codex'];
+      return Array.isArray(pool) && pool.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   private restoreManagedModelConfigIfProxyOwned(): void {
     if (this.runtimeMode !== 'managed') return;
 
@@ -884,6 +981,14 @@ export class HermesSupervisor {
           VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
           VERSO_COMPOSIO_TOOLS_MANIFEST: this.composioToolsManifestPath,
         };
+        // The native app protects every sidecar endpoint with a fresh token
+        // for each launch. Hermes starts MCP servers from this explicit env
+        // map (rather than inheriting its parent environment), so forward the
+        // token to the verso bridge or memory/tool calls will fail with 401.
+        const sidecarAuthSecret = process.env.VERSO_SIDECAR_AUTH_SECRET?.trim();
+        if (sidecarAuthSecret) {
+          env.VERSO_SIDECAR_AUTH_SECRET = sidecarAuthSecret;
+        }
         if (bundled) {
           env.PYTHONPATH = bundled.sitePackages;
         }

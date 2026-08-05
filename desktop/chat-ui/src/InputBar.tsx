@@ -18,8 +18,14 @@ interface Props {
   onStop: () => void;
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
-  model: ChatModel;
+  model: ChatModel | null;
   onModelChange: (model: ChatModel) => void;
+  // Models the picker offers — App filters CHAT_MODELS down to the
+  // providers that are actually connected.
+  availableModels: readonly ChatModel[];
+  // Called when the model menu opens; App re-checks provider status so
+  // availability is fresh at the moment the user is looking at it.
+  onModelMenuOpen?: () => void;
   isStreaming: boolean;
   disabled: boolean;
   focusRecoveryEnabled: boolean;
@@ -63,11 +69,14 @@ export function InputBar({
   onReasoningEffortChange,
   model,
   onModelChange,
+  availableModels,
+  onModelMenuOpen,
   isStreaming,
   disabled,
   focusRecoveryEnabled,
 }: Props) {
   const isAttached = attached !== null;
+  const requiresModelSelection = model === null;
   const [skills, setSkills] = useState<SkillSummaryView[]>([]);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [chipWidth, setChipWidth] = useState(0);
@@ -328,7 +337,7 @@ export function InputBar({
       onStop();
       return;
     }
-    if (disabled) return;
+    if (disabled || requiresModelSelection) return;
     const trimmedBody = text.trim();
     let payload = trimmedBody;
     if (attached?.kind === 'skill') {
@@ -341,7 +350,7 @@ export function InputBar({
     onAttachedChange(null);
     setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [text, attached, attachments, isStreaming, disabled, onSend, onStop, onTextChange, onAttachedChange]);
+  }, [text, attached, attachments, isStreaming, disabled, onSend, onStop, onTextChange, onAttachedChange, requiresModelSelection]);
 
   // Pasted images (Cmd+V of a screenshot or a copied image) arrive as
   // clipboard files; take those and leave plain-text pastes untouched.
@@ -520,7 +529,7 @@ export function InputBar({
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <ModelCycler value={model} onChange={onModelChange} disabled={disabled} />
+            <ModelMenu value={model} available={availableModels} onChange={onModelChange} onOpen={onModelMenuOpen} disabled={disabled} />
             <ReasoningEffortCycler
               value={reasoningEffort}
               onChange={onReasoningEffortChange}
@@ -531,8 +540,8 @@ export function InputBar({
             <span className="composer-send-hint"><b>↵</b> return to send</span>
             <button
               onClick={handleSubmit}
-              disabled={disabled || !canSend}
-              className={`input-send-button${canSend && !disabled ? ' is-active' : ''}${disabled ? ' is-blocked' : ''}`}
+              disabled={disabled || !canSend || (!isStreaming && requiresModelSelection)}
+              className={`input-send-button${canSend && !disabled && (!requiresModelSelection || isStreaming) ? ' is-active' : ''}${disabled || (!isStreaming && requiresModelSelection) ? ' is-blocked' : ''}`}
               aria-label={isStreaming ? 'Stop' : 'Send'}
             >
               {isStreaming ? (
@@ -656,26 +665,84 @@ function ReasoningEffortCycler({
   );
 }
 
-function ModelCycler({
+// Dropdown model picker. Lists every model the product knows: available ones
+// are selectable, the rest are disabled with a hint pointing at Settings —
+// so "where are the Claude models?" answers itself instead of silently
+// hiding entries whose provider isn't connected.
+function ModelMenu({
   value,
+  available,
   onChange,
+  onOpen,
   disabled,
 }: {
-  value: ChatModel;
+  value: ChatModel | null;
+  available: readonly ChatModel[];
   onChange: (model: ChatModel) => void;
+  onOpen?: () => void;
   disabled: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
   return (
-    <button
-      type="button"
-      onClick={() => onChange(cycleNext(CHAT_MODELS, value))}
-      disabled={disabled}
-      aria-label={`Model: ${CHAT_MODEL_LABELS[value]} (click to change)`}
-      title="Model"
-      className="footer-cycle-button footer-model-button"
-    >
-      <SparkGlyph />
-      <span>{CHAT_MODEL_LABELS[value]}</span>
-    </button>
+    <div className="model-menu" ref={containerRef}>
+      {open ? (
+        <div className="model-menu-popover" role="listbox" aria-label="Model">
+          {CHAT_MODELS.map((m) => {
+            const isAvailable = available.includes(m);
+            return (
+              <button
+                key={m}
+                type="button"
+                role="option"
+                aria-selected={m === value}
+                className={`model-menu-row${m === value ? ' is-selected' : ''}`}
+                disabled={!isAvailable}
+                onClick={() => { onChange(m); setOpen(false); }}
+              >
+                <span>{CHAT_MODEL_LABELS[m]}</span>
+                {!isAvailable ? (
+                  <span className="model-menu-hint">
+                    {m.startsWith('claude') ? 'add API key in Settings' : 'connect Codex in Settings'}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => {
+          if (!open) onOpen?.();
+          setOpen((v) => !v);
+        }}
+        disabled={disabled}
+        aria-label={value ? `Model: ${CHAT_MODEL_LABELS[value]} (click to choose)` : 'Choose model before sending'}
+        aria-expanded={open}
+        title="Model"
+        className="footer-cycle-button footer-model-button"
+      >
+        <SparkGlyph />
+        <span>{value ? CHAT_MODEL_LABELS[value] : 'Choose model'}</span>
+      </button>
+    </div>
   );
 }

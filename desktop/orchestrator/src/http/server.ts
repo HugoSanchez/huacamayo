@@ -9,6 +9,7 @@ import { ComposioToolUsageStore } from './composio-tool-usage-store.ts';
 import { buildConnectionsRoutes } from './connections.ts';
 import { ConnectionsStore } from './connections-store.ts';
 import { HermesSupervisor } from './hermes-supervisor.ts';
+import { hermesHistoryHomeCandidates, readHermesSessionModelFromHomes } from './hermes-history.ts';
 import { MemoryExtractionScheduler } from './memory-extraction.ts';
 import { IngestionStore } from './ingestion-store.ts';
 import { GdriveSource } from './gdrive-source.ts';
@@ -36,7 +37,8 @@ import { ConnectionsService } from '../integrations/composio.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 import { readRuntimeMode } from '../integrations/runtime-mode.ts';
 import { buildManagedAccountRoutes } from './managed-account.ts';
-import { CodexAuthService, buildModelAuthRoutes } from './model-auth.ts';
+import { AnthropicAuthService, CodexAuthService, buildModelAuthRoutes } from './model-auth.ts';
+import { VALID_CHAT_MODELS } from './model-catalog.ts';
 import { applyLocalStateIsolation, type LocalStateSnapshot } from './local-state.ts';
 
 function buildRoutes(
@@ -83,6 +85,20 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
   const hermes = new HermesSupervisor({ runtimeMode });
+  const hermesHistoryHomes = hermesHistoryHomeCandidates(hermes.hermesHome);
+  // Hermes has the exact model for conversations it executed. Restore that
+  // durable per-session state for databases created before Verso stored model
+  // selection locally. Never fill unknown/non-product models by inference.
+  const recoveredModels = store.backfillSessionModels((hermesSessionId) => {
+    const model = readHermesSessionModelFromHomes({
+      hermesHomes: hermesHistoryHomes,
+      hermesSessionId,
+    });
+    return model && (VALID_CHAT_MODELS as readonly string[]).includes(model) ? model : null;
+  });
+  if (recoveredModels > 0) {
+    console.info(`[chat] restored persisted Hermes model for ${recoveredModels} legacy session(s)`);
+  }
   // The one memory backend: an in-process SQLite FTS5 store, ready as soon
   // as the file opens. The local embedder upgrades search to hybrid
   // (BM25 + cosine, RRF-fused) once its model loads — it backfills in the
@@ -167,6 +183,10 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const pinnedSkills = new PinnedSkillsStore();
   const cronDescriptions = new CronDescriptionsStore();
   const codexAuth = new CodexAuthService(hermes);
+  const anthropicAuth = new AnthropicAuthService(
+    hermes,
+    async () => (await codexAuth.getStatus()).connected,
+  );
   const routes = [
     ...buildRoutes(store, hermes, memoryExtraction, managedBackend, composioBridge, localState, memoryProvider),
     ...buildMemoryRoutes(memoryProvider),
@@ -188,7 +208,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
-    ...buildModelAuthRoutes(codexAuth),
+    ...buildModelAuthRoutes(codexAuth, anthropicAuth),
     ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction),
   ];
 

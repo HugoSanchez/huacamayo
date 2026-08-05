@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import {
+  connectAnthropic,
+  disconnectAnthropic,
   disconnectCodex,
+  getAnthropicStatus,
   getCodexStatus,
   getIngestionSources,
   getSidecarPort,
   sidecarFetch,
   toggleIngestionSource,
+  type AnthropicStatus,
   type CodexStatus,
   type IngestionSourceView,
 } from './chat';
@@ -152,6 +156,8 @@ export function SettingsPage({ onBack }: Props) {
 
           <CodexSection />
 
+          <AnthropicSection />
+
           <IngestionSection />
 
           <section className="settings-section settings-section-signout">
@@ -286,12 +292,125 @@ function IngestionSection() {
   );
 }
 
+// Tells App (listening on window) that provider auth changed so the model
+// selector's availability updates immediately — without waiting for the
+// user to leave Settings.
+function notifyModelAuthChanged(): void {
+  window.dispatchEvent(new CustomEvent('verso:model-auth-changed'));
+}
+
+// Anthropic is an API-key provider (no OAuth device flow like Codex): the
+// user pastes a key, the orchestrator validates it against the Anthropic API
+// before storing it in the Hermes profile, and Claude models appear in the
+// chat-input model selector.
+function AnthropicSection() {
+  const [status, setStatus] = useState<AnthropicStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [isBusy, setIsBusy] = useState(false);
+
+  useEffect(() => { void refreshStatus(); }, []);
+
+  async function refreshStatus() {
+    try {
+      setStatus(await getAnthropicStatus());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleConnect() {
+    const key = keyDraft.trim();
+    if (!key || isBusy) return;
+    setIsBusy(true);
+    setError(null);
+    try {
+      await connectAnthropic(key);
+      setKeyDraft('');
+      await refreshStatus();
+      notifyModelAuthChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    if (isBusy) return;
+    setIsBusy(true);
+    setError(null);
+    try {
+      await disconnectAnthropic();
+      await refreshStatus();
+      notifyModelAuthChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h2>Anthropic</h2>
+
+      {error ? (
+        <p className="settings-footnote codex-error">{error}</p>
+      ) : null}
+
+      {status === null ? null : status.connected ? (
+        <div className="settings-row">
+          <span className="settings-label">API key</span>
+          <button
+            type="button"
+            className="settings-button settings-button-primary"
+            onClick={handleDisconnect}
+            disabled={isBusy}
+          >
+            {isBusy ? 'Removing…' : 'Remove key'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="settings-row">
+            <input
+              type="password"
+              className="settings-key-input"
+              placeholder="sk-ant-…"
+              value={keyDraft}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setKeyDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleConnect(); }}
+              disabled={isBusy}
+            />
+            <button
+              type="button"
+              className="settings-button settings-button-primary"
+              onClick={handleConnect}
+              disabled={isBusy || keyDraft.trim().length === 0}
+            >
+              {isBusy ? 'Verifying…' : 'Connect'}
+            </button>
+          </div>
+          <p className="settings-footnote">
+            Paste an Anthropic API key to use Claude models. The key is verified,
+            then stored locally with your Hermes profile.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 function CodexSection() {
   const [status, setStatus] = useState<CodexStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const { phase, start, cancel, reset } = useCodexConnect({
-    onConnected: () => { void refreshStatus(); },
+    onConnected: () => { void refreshStatus(); notifyModelAuthChanged(); },
   });
 
   useEffect(() => { void refreshStatus(); }, []);
@@ -312,6 +431,7 @@ function CodexSection() {
     try {
       await disconnectCodex();
       await refreshStatus();
+      notifyModelAuthChanged();
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : String(err));
     } finally {

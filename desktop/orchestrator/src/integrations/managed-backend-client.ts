@@ -98,18 +98,27 @@ export class ManagedBackendError extends Error {
  * carry the session forward across sidecar restarts where the app is still
  * running.
  */
+
+// `VERSO_BACKEND_URL=off` disables the managed backend entirely. Without
+// this, dev/test runs silently adopt whatever service happens to be
+// listening on the default local port (e.g. another workspace's backend)
+// and surface its half-configured sign-in flow as "Verso is broken".
+function resolveDefaultBackendUrl(): string {
+  const raw = process.env.VERSO_BACKEND_URL?.trim();
+  if (raw && ['off', 'none', 'disabled'].includes(raw.toLowerCase())) return '';
+  return raw || 'http://127.0.0.1:8788';
+}
+
 export class ManagedBackendClient {
   private readonly baseUrl: string;
 
   private currentSession: ManagedSessionRecord | null;
 
-  constructor(
-    baseUrl = process.env.VERSO_BACKEND_URL?.trim() || 'http://127.0.0.1:8788',
-  ) {
+  constructor(baseUrl = resolveDefaultBackendUrl()) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.currentSession = readSessionFromEnv();
     const source = process.env.VERSO_BACKEND_URL?.trim() ? 'env VERSO_BACKEND_URL' : 'default';
-    console.error(`[managed-backend] baseUrl=${this.baseUrl} (${source})`);
+    console.error(`[managed-backend] baseUrl=${this.baseUrl || '(disabled)'} (${source})`);
   }
 
   get configured(): boolean {

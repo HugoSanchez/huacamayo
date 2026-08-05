@@ -1,7 +1,10 @@
 import { spawn, execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { json, route, type Route } from './router.ts';
+import { ANTHROPIC_CHAT_MODELS } from './model-catalog.ts';
 import type { HermesSupervisor } from './hermes-supervisor.ts';
 
 const execFile = promisify(execFileCb);
@@ -212,6 +215,181 @@ export class CodexAuthService {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Anthropic (API-key provider)
+//
+// Unlike Codex (OAuth device flow via `hermes auth add`), Anthropic is an
+// api_key-type provider in Hermes. The runtime resolver reads the key from
+// `<HERMES_HOME>/.env` ANTHROPIC_API_KEY (the credential-pool path is
+// OAuth-only — see agent/anthropic_adapter.py resolve_anthropic_token), so
+// "connect" means: validate the key live, persist it via Hermes's own
+// rotation-safe writer, point config.yaml at the anthropic provider, and
+// restart the gateway (it loads .env into its environment only at startup).
+// ---------------------------------------------------------------------------
+
+const ANTHROPIC_ENV_VAR = 'ANTHROPIC_API_KEY';
+const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
+// Written as model.default when the key is connected.
+const DEFAULT_ANTHROPIC_MODEL: string = ANTHROPIC_CHAT_MODELS[0];
+
+interface AnthropicStatus {
+  connected: boolean;
+}
+
+export class AnthropicAuthService {
+  constructor(
+    private readonly hermes: HermesSupervisor,
+    // True when a Codex credential exists — used on disconnect to hand the
+    // default provider back to Codex instead of leaving a dangling
+    // provider:anthropic config with no key.
+    private readonly hasCodexCredentials: () => Promise<boolean>,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+
+  async getStatus(): Promise<AnthropicStatus> {
+    return { connected: this.readStoredKey() !== null };
+  }
+
+  async connect(apiKey: string): Promise<{ gatewayReady: boolean }> {
+    const key = apiKey.trim();
+    if (!key || /\s/.test(key)) {
+      throw new AnthropicAuthError(400, 'API key must be a single non-empty token.');
+    }
+    await this.validateKey(key);
+    await this.runHermesPython(
+      'import os; '
+      + 'from hermes_cli.credential_lifecycle import save_provider_env_credential; '
+      + 'from hermes_cli.auth import _update_config_for_provider; '
+      + `save_provider_env_credential("${ANTHROPIC_ENV_VAR}", os.environ["VERSO_PENDING_ANTHROPIC_KEY"]); `
+      + `_update_config_for_provider("anthropic", "${ANTHROPIC_BASE_URL}", default_model="${DEFAULT_ANTHROPIC_MODEL}"); `
+      + forceDefaultModelScript(DEFAULT_ANTHROPIC_MODEL),
+      { VERSO_PENDING_ANTHROPIC_KEY: key },
+    );
+    return { gatewayReady: await this.restartGateway() };
+  }
+
+  async disconnect(): Promise<{ gatewayReady: boolean }> {
+    // Clearing = writing an empty value; the resolver treats "" as absent.
+    // Same idiom Hermes itself uses (config.py save_env_value("ANTHROPIC_TOKEN", "")).
+    let script =
+      'from hermes_cli.config import save_env_value; '
+      + `save_env_value("${ANTHROPIC_ENV_VAR}", "")`;
+    if (await this.hasCodexCredentials()) {
+      script += '; from hermes_cli.auth import _update_config_for_provider, DEFAULT_CODEX_BASE_URL'
+        + `; _update_config_for_provider("openai-codex", DEFAULT_CODEX_BASE_URL, default_model="${DEFAULT_CODEX_MODEL}")`
+        + '; ' + forceDefaultModelScript(DEFAULT_CODEX_MODEL);
+    }
+    await this.runHermesPython(script);
+    return { gatewayReady: await this.restartGateway() };
+  }
+
+  // .env and model_routes are read at gateway startup; a running gateway
+  // never re-reads them (reload_env() has no callers). The chat layer
+  // rebuilds conversation history from its own store after a restart, so a
+  // restart is safe mid-session. A slow cold boot must NOT fail the request
+  // though — by this point the credential change is already persisted and
+  // correct; the gateway just needs time to warm up. Report readiness so
+  // the caller can surface it, but never throw.
+  private async restartGateway(): Promise<boolean> {
+    try {
+      await this.hermes.restart();
+      return true;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[anthropic-auth] gateway restart still warming:', message);
+      return false;
+    }
+  }
+
+  // Reads <HERMES_HOME>/.env directly. Mirrors the presence check the
+  // supervisor uses for model_routes so status and routing can't disagree.
+  private readStoredKey(): string | null {
+    return readAnthropicKeyFromEnvFile(this.hermes.hermesHome);
+  }
+
+  private async validateKey(key: string): Promise<void> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${ANTHROPIC_BASE_URL}/v1/models`, {
+        headers: {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new AnthropicAuthError(502, `Could not reach the Anthropic API to verify the key: ${message}`);
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new AnthropicAuthError(401, 'Anthropic rejected this API key. Check the key and try again.');
+    }
+    if (!res.ok) {
+      throw new AnthropicAuthError(502, `Anthropic API returned HTTP ${res.status} while verifying the key.`);
+    }
+  }
+
+  // The secret travels via the child's environment, never argv (argv is
+  // visible to `ps`) and never the script text (which may end up in logs).
+  private async runHermesPython(script: string, extraEnv: Record<string, string> = {}): Promise<void> {
+    const invocation = this.hermes.invoke([]);
+    if (!invocation) {
+      throw new AnthropicAuthError(500, 'Hermes is not configured; cannot update credentials.');
+    }
+    await execFile(invocation.command, ['-c', script], {
+      env: {
+        ...process.env,
+        ...invocation.env,
+        ...extraEnv,
+        HERMES_HOME: this.hermes.hermesHome,
+        PYTHONUNBUFFERED: '1',
+      },
+      timeout: 30_000,
+    });
+  }
+}
+
+export class AnthropicAuthError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+// _update_config_for_provider deliberately preserves an existing
+// model.default unless it is empty or OpenRouter-formatted ("vendor/model"),
+// so switching providers can leave e.g. provider=anthropic with
+// default=gpt-5.4 — every unrouted request (crons, side tasks) would then
+// send the wrong model name to the new provider. Force the default
+// explicitly using Hermes's own atomic config writer.
+function forceDefaultModelScript(defaultModel: string): string {
+  return 'from hermes_cli.config import get_config_path, read_raw_config; '
+    + 'from utils import atomic_yaml_write; '
+    + '_cfg = read_raw_config(); '
+    + '_m = _cfg.get("model") if isinstance(_cfg.get("model"), dict) else {}; '
+    + `_m["default"] = "${defaultModel}"; `
+    + '_cfg["model"] = _m; '
+    + 'atomic_yaml_write(get_config_path(), _cfg, sort_keys=False)';
+}
+
+// Minimal .env line parse: KEY=value with optional single/double quotes.
+// Only used for a presence check, so nuances of full dotenv escaping don't
+// matter — Hermes's own save_env_value writes plain or simply-quoted values.
+export function readAnthropicKeyFromEnvFile(hermesHome: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(join(hermesHome, '.env'), 'utf8');
+  } catch {
+    return null;
+  }
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?ANTHROPIC_API_KEY\s*=\s*(.*)\s*$/);
+    if (!match) continue;
+    const value = match[1].trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+    return value.length > 0 ? value : null;
+  }
+  return null;
+}
+
 // Default Codex model to write into config.yaml after a successful auth.
 // Keep this aligned with the managed entitlement returned by the Verso backend;
 // gpt-5.5 can silently hang on accounts that are only entitled for gpt-5.4.
@@ -257,7 +435,7 @@ function sendEvent(res: ServerResponse, data: Record<string, unknown>): void {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-export function buildModelAuthRoutes(service: CodexAuthService): Route[] {
+export function buildModelAuthRoutes(service: CodexAuthService, anthropic: AnthropicAuthService): Route[] {
   return [
     route('GET', '/model-auth/codex/status', async (_req, res) => {
       const status = await service.getStatus();
@@ -271,6 +449,34 @@ export function buildModelAuthRoutes(service: CodexAuthService): Route[] {
     route('POST', '/model-auth/codex/disconnect', async (_req, res) => {
       const result = await service.disconnect();
       json(res, 200, result);
+    }),
+
+    route('GET', '/model-auth/anthropic/status', async (_req, res) => {
+      const status = await anthropic.getStatus();
+      json(res, 200, status);
+    }),
+
+    route('POST', '/model-auth/anthropic/connect', async (_req, res, _params, body) => {
+      const apiKey = (body as { apiKey?: unknown } | null)?.apiKey;
+      if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+        json(res, 400, { error: 'bad_request', message: 'Missing apiKey' });
+        return;
+      }
+      try {
+        const result = await anthropic.connect(apiKey);
+        json(res, 200, { connected: true, ...result });
+      } catch (error: unknown) {
+        if (error instanceof AnthropicAuthError) {
+          json(res, error.status, { error: 'anthropic_auth_failed', message: error.message });
+          return;
+        }
+        throw error;
+      }
+    }),
+
+    route('POST', '/model-auth/anthropic/disconnect', async (_req, res) => {
+      const result = await anthropic.disconnect();
+      json(res, 200, { connected: false, ...result });
     }),
   ];
 }

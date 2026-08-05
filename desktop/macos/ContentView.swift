@@ -1798,6 +1798,7 @@ struct SidebarChatSession: Codable, Identifiable, Equatable {
     let createdAt: String
     let updatedAt: String
     let archivedAt: String?
+    let model: String?
     let messageCount: Int
     let lastMessagePreview: String?
 }
