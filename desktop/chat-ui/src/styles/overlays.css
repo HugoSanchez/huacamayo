@@ -12,7 +12,6 @@
   box-shadow: var(--catalog-shadow);
   animation: catalog-slide-in 0.18s ease-out;
 }
-
 @keyframes catalog-slide-in {
   from { transform: translateX(-100%); opacity: 0; }
   to   { transform: translateX(0);     opacity: 1; }
@@ -627,4 +626,3 @@
   text-overflow: ellipsis;
   max-width: 240px;
 }
-
