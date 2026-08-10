@@ -26,7 +26,7 @@ describe('Hermes gateway config', () => {
 
     const config = getHermesGatewayConfig();
     expect(config.baseUrl).toBe('http://127.0.0.1:8642');
-    expect(config.startupTimeoutMs).toBe(45_000);
+    expect(config.startupTimeoutMs).toBe(90_000);
     expect(config.apiKey).toMatch(/^[0-9a-f]{64}$/);
   });
 

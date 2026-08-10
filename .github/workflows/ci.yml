@@ -6,6 +6,15 @@ on:
     branches: [main]
 
 jobs:
+  style-guard:
+    name: Style guard (color literals funnel through tokens)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check color literals live in the design tokens / palette
+        run: bash scripts/check-style-tokens.sh
+
   orchestrator-tests:
     name: Orchestrator tests (vitest)
     runs-on: macos-latest

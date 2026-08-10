@@ -102,6 +102,28 @@ describe('local state isolation', () => {
     }
   });
 
+  it('prefers an existing app-support Hermes home for legacy state', () => {
+    const fixture = makeFixture();
+    try {
+      writeFileSync(fixture.legacyChatStore, '', 'utf8');
+      mkdirSync(fixture.legacyAppSupportHermesHome, { recursive: true });
+      const defaultHermesHome = path.join(fixture.home, '.hermes', 'profiles', 'verso');
+      mkdirSync(defaultHermesHome, { recursive: true });
+      const env: NodeJS.ProcessEnv = {
+        VERSO_LOCAL_STATE_ROOT: fixture.root,
+        VERSO_MANAGED_USER_ID: 'usr_owner',
+      };
+
+      const snapshot = applyLocalStateIsolation(env, { homeDir: fixture.home });
+
+      expect(snapshot.mode).toBe('legacy_owned');
+      expect(snapshot.legacyDataDetected).toBe(true);
+      expect(env.VERSO_HERMES_HOME).toBe(fixture.legacyAppSupportHermesHome);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it('keeps the legacy paths for the recorded legacy owner', () => {
     const fixture = makeFixture();
     try {
@@ -247,7 +269,7 @@ describe('local state isolation', () => {
         VERSO_LEGACY_CONNECTIONS_STORE_PATH: path.join(fixture.tempDir, 'missing-connections.json'),
         VERSO_LEGACY_COMPOSIO_TOOLS_REFRESH_MARKER_PATH: path.join(fixture.tempDir, 'missing-marker'),
         VERSO_LEGACY_HERMES_HOME: path.join(fixture.tempDir, 'missing-hermes-home'),
-      }, async () => startServer({ port: 0 }));
+      }, async () => startServer({ port: 0, allowUnauthenticated: true }));
 
       const res = await fetch(`http://127.0.0.1:${result.port}/diagnostics`);
       const body = await res.json() as {
@@ -290,6 +312,7 @@ function makeFixture(): {
   legacyConnectionsStore: string;
   legacyMarker: string;
   legacyHermesHome: string;
+  legacyAppSupportHermesHome: string;
   cleanup: () => void;
 } {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'verso-local-state-'));
@@ -307,6 +330,7 @@ function makeFixture(): {
     legacyConnectionsStore: path.join(legacyRoot, 'connections.json'),
     legacyMarker: path.join(legacyRoot, 'composio-tools-refresh.marker'),
     legacyHermesHome: path.join(root, 'hermes-home'),
+    legacyAppSupportHermesHome: path.join(legacyRoot, 'hermes-home'),
     cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
   };
 }

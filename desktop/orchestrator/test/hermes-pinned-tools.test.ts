@@ -2,21 +2,26 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { computePinnedToolNames } from '../src/http/hermes-pinned-tools.ts';
+import { computePinnedToolNames, findInertCorePins } from '../src/http/hermes-pinned-tools.ts';
 
-const STATIC_PINNED = [
-  'mcp_verso_request_connection',
-  'mcp_verso_search_toolkits',
-  'mcp_verso_list_connections',
-  'mcp_verso_get_connection_status',
-  'mcp_verso_propose_message_draft',
-];
+// Every pin is emitted in both Hermes wire forms: ≤0.18 `mcp_verso_<tool>`
+// and 0.19+ `mcp__verso__<tool>`.
+const bothForms = (names: string[]): string[] =>
+  names.flatMap((name) => [`mcp_verso_${name}`, `mcp__verso__${name}`]);
 
-const MEMORY_PINNED = [
-  'mcp_verso_search_memory',
-  'mcp_verso_get_memory_page',
-  'mcp_verso_write_memory_page',
-];
+const STATIC_PINNED = bothForms([
+  'request_connection',
+  'search_toolkits',
+  'list_connections',
+  'get_connection_status',
+  'propose_message_draft',
+]);
+
+const MEMORY_PINNED = bothForms([
+  'search_memory',
+  'get_memory_page',
+  'write_memory_page',
+]);
 
 interface FixtureTool {
   nativeName: string;
@@ -88,8 +93,10 @@ describe('computePinnedToolNames', () => {
     ]);
     const pinned = computePinnedToolNames(manifestPath, { includeMemoryTools: false });
     expect(pinned).toContain('mcp_verso_slack_search_messages');
+    expect(pinned).toContain('mcp__verso__slack_search_messages');
     expect(pinned).toContain('mcp_verso_gmail_fetch_emails');
     expect(pinned).not.toContain('mcp_verso_slack_kick_user');
+    expect(pinned).not.toContain('mcp__verso__slack_kick_user');
   });
 
   it('stops pinning usage tools when the schema budget runs out', () => {
@@ -117,6 +124,7 @@ describe('computePinnedToolNames', () => {
     const usagePins = pinned.filter((name) => name.startsWith('mcp_verso_tool_'));
     expect(usagePins).toHaveLength(20);
     expect(usagePins[0]).toBe('mcp_verso_tool_0');
+    expect(pinned.filter((name) => name.startsWith('mcp__verso__tool_'))).toHaveLength(20);
   });
 
   it('seeds a connected toolkit that has no usage pins', () => {
@@ -139,6 +147,40 @@ describe('computePinnedToolNames', () => {
     const pinned = computePinnedToolNames(manifestPath, { includeMemoryTools: false });
     expect(pinned).toContain('mcp_verso_slack_search_all');
     expect(pinned).not.toContain('mcp_verso_slack_search_messages');
+  });
+
+  describe('findInertCorePins', () => {
+    const CORE_BASE = [
+      'request_connection', 'search_toolkits', 'list_connections',
+      'get_connection_status', 'propose_message_draft',
+    ];
+    const MEMORY_BASE = ['search_memory', 'get_memory_page', 'write_memory_page'];
+
+    it('reports nothing when the gateway registered 0.18-style names', () => {
+      const registered = [...CORE_BASE, ...MEMORY_BASE].map((n) => `mcp_verso_${n}`);
+      expect(findInertCorePins(registered, { includeMemoryTools: true })).toEqual([]);
+    });
+
+    it('reports nothing when the gateway registered 0.19-style names', () => {
+      const registered = [...CORE_BASE, ...MEMORY_BASE].map((n) => `mcp__verso__${n}`);
+      expect(findInertCorePins(registered, { includeMemoryTools: true })).toEqual([]);
+    });
+
+    it('reports memory pins as inert when only non-memory tools registered', () => {
+      const registered = CORE_BASE.map((n) => `mcp__verso__${n}`);
+      expect(findInertCorePins(registered, { includeMemoryTools: true })).toEqual(MEMORY_BASE);
+    });
+
+    it('ignores memory pins when memory tools are disabled', () => {
+      const registered = CORE_BASE.map((n) => `mcp__verso__${n}`);
+      expect(findInertCorePins(registered, { includeMemoryTools: false })).toEqual([]);
+    });
+
+    it('reports everything inert under an unknown future naming convention', () => {
+      const registered = [...CORE_BASE, ...MEMORY_BASE].map((n) => `mcp.verso.${n}`);
+      expect(findInertCorePins(registered, { includeMemoryTools: true }))
+        .toEqual([...CORE_BASE, ...MEMORY_BASE]);
+    });
   });
 
   it('handles a pre-origin manifest (all entries unmarked) via seeds only', () => {

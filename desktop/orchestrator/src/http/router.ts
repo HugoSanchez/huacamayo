@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 
 export type RouteHandler = (
   req: IncomingMessage,
@@ -15,6 +16,19 @@ export interface Route {
 }
 
 const MAX_BODY = 10 * 1024 * 1024; // 10MB
+const AUTH_HEADER = 'x-verso-sidecar-token';
+// WKWebView serializes the chat page's origin as "file://" because the shell
+// enables allowFileAccessFromFileURLs (see ChatWebView.swift). Deliberately
+// NOT "null": sandboxed iframes on arbitrary websites also send Origin: null,
+// so allowlisting it would let them read public-route responses.
+const ALLOWED_ORIGINS = new Set(['file://']);
+const ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
+const ALLOWED_HEADERS = `Content-Type, ${AUTH_HEADER}, Authorization`;
+
+export interface DispatchOptions {
+  authSecret?: string | null;
+  allowUnauthenticated?: boolean;
+}
 
 /** Read request body as parsed JSON (or null for empty bodies). */
 export function readBody(req: IncomingMessage): Promise<unknown> {
@@ -68,20 +82,31 @@ export function route(method: string, path: string, handler: RouteHandler): Rout
 }
 
 /** Dispatch a request to the matching route. */
-export async function dispatch(routes: Route[], req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // CORS headers — allow the WKWebView (file:// origin) to call the sidecar
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+export async function dispatch(
+  routes: Route[],
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: DispatchOptions = {},
+): Promise<void> {
+  if (!isAllowedLoopbackHost(req)) {
+    json(res, 400, { error: 'bad_request', message: 'Invalid Host header' });
+    return;
+  }
 
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const url = new URL(req.url || '/', 'http://127.0.0.1');
   const pathname = url.pathname;
   const method = req.method?.toUpperCase() || 'GET';
+  applyCors(req, res);
 
   // Handle CORS preflight
   if (method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  if (!isPublicRoute(method, pathname) && !isAuthorized(req, opts.authSecret, opts.allowUnauthenticated)) {
+    json(res, 401, { error: 'unauthorized', message: 'Missing or invalid sidecar token' });
     return;
   }
 
@@ -118,4 +143,62 @@ export async function dispatch(routes: Route[], req: IncomingMessage, res: Serve
   }
 
   json(res, 404, { error: 'not_found', message: `No route for ${method} ${pathname}` });
+}
+
+function isAllowedLoopbackHost(req: IncomingMessage): boolean {
+  const header = req.headers.host;
+  if (typeof header !== 'string' || header.trim() !== header || header.length === 0) return false;
+  const match = header.match(/^(127\.0\.0\.1|localhost):([0-9]{1,5})$/);
+  if (!match) return false;
+
+  let url: URL;
+  try {
+    url = new URL(`http://${header}`);
+  } catch {
+    return false;
+  }
+
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return false;
+  if (url.hostname !== match[1]) return false;
+  if (!url.port) return false;
+
+  const port = Number(match[2]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
+  const localPort = req.socket.localPort;
+  return typeof localPort !== 'number' || localPort === port;
+}
+
+function applyCors(req: IncomingMessage, res: ServerResponse): void {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', ALLOWED_METHODS);
+  res.setHeader('Access-Control-Allow-Headers', ALLOWED_HEADERS);
+}
+
+function isPublicRoute(method: string, pathname: string): boolean {
+  if (method === 'GET' && pathname === '/health') return true;
+  if (method === 'GET' && /^\/connections\/requests\/[^/]+\/open$/.test(pathname)) return true;
+  if (method === 'GET' && pathname === '/connections/callback') return true;
+  return false;
+}
+
+function isAuthorized(req: IncomingMessage, secret: string | null | undefined, allowUnauthenticated = false): boolean {
+  if (!secret) return allowUnauthenticated;
+  const token = readToken(req);
+  if (!token) return false;
+  const expected = Buffer.from(secret, 'utf8');
+  const actual = Buffer.from(token, 'utf8');
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function readToken(req: IncomingMessage): string | null {
+  const header = req.headers[AUTH_HEADER];
+  if (typeof header === 'string' && header.length > 0) return header;
+  if (Array.isArray(header) && typeof header[0] === 'string' && header[0].length > 0) return header[0];
+  const authorization = req.headers.authorization;
+  const match = typeof authorization === 'string' ? authorization.match(/^Bearer\s+(.+)$/i) : null;
+  return match?.[1] ?? null;
 }

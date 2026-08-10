@@ -1,8 +1,41 @@
-import { describe, expect, it } from 'vitest';
-import { mapHermesRowsToChatMessages } from '../src/http/hermes-history.ts';
+import { describe, expect, it, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import {
+  mapHermesRowsToChatMessages,
+  readHermesSessionModel,
+  readHermesSessionModelFromHomes,
+} from '../src/http/hermes-history.ts';
 import type { ChatMessageRecord } from '../src/http/chat-store.ts';
 
 describe('Hermes history mapper', () => {
+  const directories: string[] = [];
+
+  afterEach(() => {
+    for (const directory of directories.splice(0)) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the persisted model for a Hermes session', () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'verso-hermes-history-'));
+    directories.push(directory);
+    const db = new DatabaseSync(path.join(directory, 'state.db'));
+    db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT);');
+    db.prepare('INSERT INTO sessions (id, model) VALUES (?, ?)').run('hermes-session', 'claude-opus-4-8');
+    db.close();
+
+    expect(readHermesSessionModel({ hermesHome: directory, hermesSessionId: 'hermes-session' }))
+      .toBe('claude-opus-4-8');
+    expect(readHermesSessionModel({ hermesHome: directory, hermesSessionId: 'missing' })).toBeNull();
+    expect(readHermesSessionModelFromHomes({
+      hermesHomes: [path.join(directory, 'missing'), directory],
+      hermesSessionId: 'hermes-session',
+    })).toBe('claude-opus-4-8');
+  });
+
   it('hydrates assistant tool activity from Hermes message rows', () => {
     const localMessages: ChatMessageRecord[] = [
       {

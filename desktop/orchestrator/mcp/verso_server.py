@@ -26,6 +26,12 @@ from mcp.server.stdio import stdio_server
 SERVER_NAME = "verso"
 ORCHESTRATOR_BASE_URL = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
 COMPOSIO_TOOLS_MANIFEST = os.environ.get("VERSO_COMPOSIO_TOOLS_MANIFEST", "").strip()
+# The native app issues a fresh loopback token for every launch. The MCP
+# process is configured with an explicit environment by Hermes, so retain and
+# send it with every bridge request instead of relying on inherited process
+# state. Without this, the authenticated sidecar correctly rejects memory and
+# connected-tool calls with HTTP 401.
+SIDECAR_AUTH_SECRET = os.environ.get("VERSO_SIDECAR_AUTH_SECRET", "").strip()
 # Memory tool surface for this Hermes profile: "full" or unset/anything else
 # for none. The orchestrator owns the in-process memory store; these tools
 # proxy to it.
@@ -36,7 +42,7 @@ mcp = FastMCP(
     instructions=(
         "verso app bridge. Use search_toolkits to find the right app first when needed, "
         "then request_connection/list_connections/get_connection_status for auth and connection state. "
-        "For Composio-backed app actions, use the native mcp_verso_* connected-app "
+        "For Composio-backed app actions, use the native verso connected-app "
         "tools that Hermes exposes from this server. If the right native tool is not "
         "visible, use Hermes native tool search/describe/call to discover it.\n\n"
         "Connection management for ALL apps goes through verso, not Composio. "
@@ -304,10 +310,14 @@ def _request(method: str, path: str, body: dict[str, Any] | None = None) -> dict
     if not ORCHESTRATOR_BASE_URL:
         raise RuntimeError("VERSO_ORCHESTRATOR_BASE_URL is not set")
 
+    headers = {"Content-Type": "application/json"}
+    if SIDECAR_AUTH_SECRET:
+        headers["X-Verso-Sidecar-Token"] = SIDECAR_AUTH_SECRET
+
     request = urllib.request.Request(
         f"{ORCHESTRATOR_BASE_URL}{path}",
         method=method,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
 
     data = None

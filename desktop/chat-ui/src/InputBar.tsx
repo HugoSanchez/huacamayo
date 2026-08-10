@@ -1,6 +1,7 @@
-import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect, type CSSProperties } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, useLayoutEffect } from 'react';
 import { getSkills } from './chat';
-import type { AttachedContext, ChatModel, ReasoningEffort, SkillSummaryView } from './types';
+import { useToast } from './Toaster';
+import type { AttachedContext, ChatModel, OutgoingAttachment, ReasoningEffort, SkillSummaryView } from './types';
 import {
   CHAT_MODELS,
   CHAT_MODEL_LABELS,
@@ -13,12 +14,18 @@ interface Props {
   attached: AttachedContext | null;
   onTextChange: (text: string) => void;
   onAttachedChange: (attached: AttachedContext | null) => void;
-  onSend: (text: string, attached: AttachedContext | null) => void;
+  onSend: (text: string, attached: AttachedContext | null, attachments: OutgoingAttachment[]) => void;
   onStop: () => void;
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
-  model: ChatModel;
+  model: ChatModel | null;
   onModelChange: (model: ChatModel) => void;
+  // Models the picker offers — App filters CHAT_MODELS down to the
+  // providers that are actually connected.
+  availableModels: readonly ChatModel[];
+  // Called when the model menu opens; App re-checks provider status so
+  // availability is fresh at the moment the user is looking at it.
+  onModelMenuOpen?: () => void;
   isStreaming: boolean;
   disabled: boolean;
   focusRecoveryEnabled: boolean;
@@ -26,6 +33,30 @@ interface Props {
 
 const SLASH_PATTERN = /^\/([a-z0-9-]*)/i;
 const MAX_SUGGESTIONS = 8;
+
+// Client-side gate for image attachments; the orchestrator re-validates by
+// magic bytes and enforces the same caps server-side.
+const ACCEPTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const MAX_ATTACHMENT_COUNT = 6;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      if (comma < 0) {
+        reject(new Error('Failed to read file'));
+        return;
+      }
+      resolve(result.slice(comma + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 export function InputBar({
   text,
@@ -38,16 +69,120 @@ export function InputBar({
   onReasoningEffortChange,
   model,
   onModelChange,
+  availableModels,
+  onModelMenuOpen,
   isStreaming,
   disabled,
   focusRecoveryEnabled,
 }: Props) {
   const isAttached = attached !== null;
+  const requiresModelSelection = model === null;
   const [skills, setSkills] = useState<SkillSummaryView[]>([]);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [chipWidth, setChipWidth] = useState(0);
+  const [attachments, setAttachments] = useState<OutgoingAttachment[]>([]);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [attachRowHeight, setAttachRowHeight] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chipRef = useRef<HTMLSpanElement>(null);
+  const attachRowRef = useRef<HTMLDivElement>(null);
+  const toast = useToast();
+
+  // The attachments row lives inside the field, above the textarea. The skill
+  // chip is absolutely pinned to the field's top inset, so when the row is
+  // present we push the chip down by the row's rendered height (it wraps).
+  useLayoutEffect(() => {
+    if (attachments.length === 0) {
+      setAttachRowHeight(0);
+      return;
+    }
+    const el = attachRowRef.current;
+    if (!el) return;
+    setAttachRowHeight(Math.ceil(el.getBoundingClientRect().height) + 8);
+  }, [attachments]);
+
+  const addFiles = useCallback(async (files: File[]) => {
+    const room = MAX_ATTACHMENT_COUNT - attachments.length;
+    let totalBytes = attachments.reduce(
+      (sum, attachment) => sum + Math.floor(attachment.dataBase64.length * 0.75),
+      0,
+    );
+    const accepted: OutgoingAttachment[] = [];
+    const rejections: string[] = [];
+
+    for (const file of files) {
+      const label = file.name || 'file';
+      if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
+        rejections.push(`${label}: only PNG, JPEG, WebP, and GIF images are supported`);
+        continue;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        rejections.push(`${label}: larger than 5MB`);
+        continue;
+      }
+      if (accepted.length >= room) {
+        rejections.push(`${label}: at most ${MAX_ATTACHMENT_COUNT} images per message`);
+        continue;
+      }
+      if (totalBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
+        rejections.push(`${label}: attachments exceed 10MB total`);
+        continue;
+      }
+      try {
+        const dataBase64 = await readFileAsBase64(file);
+        totalBytes += file.size;
+        accepted.push({ name: file.name || 'image', mimeType: file.type, dataBase64 });
+      } catch {
+        rejections.push(`${label}: could not read file`);
+      }
+    }
+
+    if (accepted.length > 0) {
+      setAttachments((prev) => [...prev, ...accepted]);
+    }
+    if (rejections.length > 0) {
+      toast.show({ title: 'Some files were not attached', description: rejections.join('\n'), tone: 'error' });
+    }
+  }, [attachments, toast]);
+
+  // The whole window is the drop target — dropping an image anywhere attaches
+  // it. The window-level preventDefault also stops WebKit from navigating to
+  // the dropped file, which is the default behavior in WKWebView.
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      depth += 1;
+      setIsDraggingOver(true);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (hasFiles(event)) event.preventDefault();
+    };
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setIsDraggingOver(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      setIsDraggingOver(false);
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length > 0) void addFiles(files);
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [addFiles]);
 
   // Skills fetch races the sidecar port assignment in App.tsx — if our
   // mount fires before the port is set, getSkills() throws (silently),
@@ -202,19 +337,35 @@ export function InputBar({
       onStop();
       return;
     }
-    if (disabled) return;
+    if (disabled || requiresModelSelection) return;
     const trimmedBody = text.trim();
     let payload = trimmedBody;
     if (attached?.kind === 'skill') {
       // Skills travel via slash text — orchestrator parses it back out.
       payload = trimmedBody.length > 0 ? `/${attached.slug} ${trimmedBody}` : `/${attached.slug}`;
     }
-    if (!payload && attached?.kind !== 'cron') return;
-    onSend(payload, attached);
+    if (!payload && attached?.kind !== 'cron' && attachments.length === 0) return;
+    onSend(payload, attached, attachments);
     onTextChange('');
     onAttachedChange(null);
+    setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [text, attached, isStreaming, disabled, onSend, onStop, onTextChange, onAttachedChange]);
+  }, [text, attached, attachments, isStreaming, disabled, onSend, onStop, onTextChange, onAttachedChange, requiresModelSelection]);
+
+  // Pasted images (Cmd+V of a screenshot or a copied image) arrive as
+  // clipboard files; take those and leave plain-text pastes untouched.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files: File[] = [];
+    for (const item of Array.from(e.clipboardData?.items ?? [])) {
+      if (item.kind !== 'file') continue;
+      const file = item.getAsFile();
+      if (file && ACCEPTED_IMAGE_TYPES.has(file.type)) files.push(file);
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void addFiles(files);
+    }
+  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (showSuggestions) {
@@ -265,7 +416,7 @@ export function InputBar({
     el.style.height = Math.min(el.scrollHeight, 160) + 'px';
   };
 
-  const canSend = isStreaming || text.trim().length > 0 || isAttached;
+  const canSend = isStreaming || text.trim().length > 0 || isAttached || attachments.length > 0;
   const placeholder = disabled
     ? 'Connecting... you can type while things load.'
     : attached?.kind === 'skill'
@@ -275,21 +426,14 @@ export function InputBar({
         : 'Write a message...';
 
   return (
-    <div style={{ padding: '10px 12px', background: 'var(--bg)' }}>
+    <div className="input-bar">
       <div
         onMouseDown={(event) => {
           const target = event.target;
           if (target instanceof HTMLElement && target.closest('button')) return;
           window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
         }}
-        style={{
-          position: 'relative',
-          background: 'var(--bg-input)',
-          border: '1px solid var(--border)',
-          borderRadius: '16px',
-          padding: '12px 16px',
-          minHeight: '100px',
-        }}
+        className={`input-bar-field${isDraggingOver ? ' is-dragging-over' : ''}`}
       >
         {showSuggestions && (
           <SlashSuggestions
@@ -299,13 +443,42 @@ export function InputBar({
             onHover={setHighlightIndex}
           />
         )}
+        {attachments.length > 0 && (
+          <div className="input-attachments-row" ref={attachRowRef}>
+            {attachments.map((attachment, index) => (
+              <span key={`${attachment.name}-${index}`} className="input-skill-chip input-attachment-chip">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="1" y="1" width="8" height="8" rx="1.5" />
+                  <circle cx="3.6" cy="3.6" r="0.9" fill="currentColor" stroke="none" />
+                  <path d="M1.5 7.5 L4 5 L6 7 L7.4 5.6 L9 7.2" />
+                </svg>
+                <span className="input-attachment-chip-name">{attachment.name}</span>
+                <button
+                  type="button"
+                  className="input-skill-chip-remove"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    setAttachments((prev) => prev.filter((_, i) => i !== index));
+                  }}
+                  aria-label={`Remove ${attachment.name}`}
+                  title={`Remove ${attachment.name}`}
+                >
+                  <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <line x1="1.5" y1="1.5" x2="6.5" y2="6.5" />
+                    <line x1="6.5" y1="1.5" x2="1.5" y2="6.5" />
+                  </svg>
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {attached && (
           <span
             ref={chipRef}
             className={`input-skill-chip${attached.kind === 'cron' ? ' is-cron' : ''}`}
             style={{
               position: 'absolute',
-              top: '12px',
+              top: `${12 + attachRowHeight}px`,
               left: '16px',
               pointerEvents: 'auto',
             }}
@@ -348,64 +521,41 @@ export function InputBar({
           value={text}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={placeholder}
           rows={2}
-          style={{
-            width: '100%',
-            border: 'none',
-            outline: 'none',
-            background: 'transparent',
-            color: 'var(--text)',
-            fontSize: '14px',
-            lineHeight: '1.5',
-            resize: 'none',
-            fontFamily: 'inherit',
-            maxHeight: '160px',
-            minHeight: '48px',
-            textIndent: isAttached ? `${chipWidth}px` : 0,
-          }}
+          className="input-bar-textarea"
+          style={{ textIndent: isAttached ? `${chipWidth}px` : 0 }}
         />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <ModelCycler value={model} onChange={onModelChange} disabled={disabled} />
+            <ModelMenu value={model} available={availableModels} onChange={onModelChange} onOpen={onModelMenuOpen} disabled={disabled} />
             <ReasoningEffortCycler
               value={reasoningEffort}
               onChange={onReasoningEffortChange}
               disabled={disabled}
             />
           </div>
-          <button
-            onClick={handleSubmit}
-            disabled={disabled || !canSend}
-            style={{
-              border: '1px solid var(--border)',
-              background: canSend && !disabled ? 'var(--text)' : 'transparent',
-              color: canSend && !disabled ? 'var(--bg)' : 'var(--text-dim)',
-              borderRadius: '8px',
-              width: '28px',
-              height: '28px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              opacity: disabled ? 0.3 : 1,
-              padding: 0,
-              fontSize: '16px',
-              lineHeight: 1,
-            }}
-            aria-label={isStreaming ? 'Stop' : 'Send'}
-          >
-            {isStreaming ? (
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                <rect x="2" y="2" width="10" height="10" rx="1.5" />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="8" y1="12" x2="8" y2="4" />
-                <polyline points="4,7 8,3 12,7" />
-              </svg>
-            )}
-          </button>
+          <div className="composer-send-group">
+            <span className="composer-send-hint"><b>↵</b> return to send</span>
+            <button
+              onClick={handleSubmit}
+              disabled={disabled || !canSend || (!isStreaming && requiresModelSelection)}
+              className={`input-send-button${canSend && !disabled && (!requiresModelSelection || isStreaming) ? ' is-active' : ''}${disabled || (!isStreaming && requiresModelSelection) ? ' is-blocked' : ''}`}
+              aria-label={isStreaming ? 'Stop' : 'Send'}
+            >
+              {isStreaming ? (
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                  <rect x="2" y="2" width="10" height="10" rx="1.5" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="8" y1="12" x2="8" y2="4" />
+                  <polyline points="4,7 8,3 12,7" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -480,25 +630,11 @@ function SparkGlyph() {
   );
 }
 
-// Shared styling for the footer cycle buttons. Clicking advances to the next
-// option; the tooltip names the control. No menu — matching the lightweight
-// Cursor/Claude footer affordance the user asked for.
-function footerCycleStyle(disabled: boolean): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px',
-    border: 'none',
-    background: 'transparent',
-    color: 'var(--text-dim)',
-    borderRadius: '7px',
-    padding: '3px 6px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontSize: '12px',
-    fontFamily: 'inherit',
-    opacity: disabled ? 0.4 : 1,
-  };
-}
+// Footer cycle buttons (model / reasoning-effort). Clicking advances to the
+// next option; the tooltip names the control. No menu — matching the
+// lightweight Cursor/Claude footer affordance. Styling lives in
+// .footer-cycle-button (composer.css); the disabled state is driven by the
+// button's own :disabled, so no dynamic inline style is needed.
 
 function cycleNext<T>(items: readonly T[], current: T): T {
   const index = items.indexOf(current);
@@ -521,7 +657,7 @@ function ReasoningEffortCycler({
       disabled={disabled}
       aria-label={`Reasoning effort: ${REASONING_EFFORT_LABELS[value]} (click to change)`}
       title="Reasoning effort"
-      style={footerCycleStyle(disabled)}
+      className="footer-cycle-button footer-effort-button"
     >
       <EffortBars level={REASONING_EFFORTS.indexOf(value) + 1} />
       <span>{REASONING_EFFORT_LABELS[value]}</span>
@@ -529,26 +665,84 @@ function ReasoningEffortCycler({
   );
 }
 
-function ModelCycler({
+// Dropdown model picker. Lists every model the product knows: available ones
+// are selectable, the rest are disabled with a hint pointing at Settings —
+// so "where are the Claude models?" answers itself instead of silently
+// hiding entries whose provider isn't connected.
+function ModelMenu({
   value,
+  available,
   onChange,
+  onOpen,
   disabled,
 }: {
-  value: ChatModel;
+  value: ChatModel | null;
+  available: readonly ChatModel[];
   onChange: (model: ChatModel) => void;
+  onOpen?: () => void;
   disabled: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
   return (
-    <button
-      type="button"
-      onClick={() => onChange(cycleNext(CHAT_MODELS, value))}
-      disabled={disabled}
-      aria-label={`Model: ${CHAT_MODEL_LABELS[value]} (click to change)`}
-      title="Model"
-      style={footerCycleStyle(disabled)}
-    >
-      <SparkGlyph />
-      <span>{CHAT_MODEL_LABELS[value]}</span>
-    </button>
+    <div className="model-menu" ref={containerRef}>
+      {open ? (
+        <div className="model-menu-popover" role="listbox" aria-label="Model">
+          {CHAT_MODELS.map((m) => {
+            const isAvailable = available.includes(m);
+            return (
+              <button
+                key={m}
+                type="button"
+                role="option"
+                aria-selected={m === value}
+                className={`model-menu-row${m === value ? ' is-selected' : ''}`}
+                disabled={!isAvailable}
+                onClick={() => { onChange(m); setOpen(false); }}
+              >
+                <span>{CHAT_MODEL_LABELS[m]}</span>
+                {!isAvailable ? (
+                  <span className="model-menu-hint">
+                    {m.startsWith('claude') ? 'add API key in Settings' : 'connect Codex in Settings'}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => {
+          if (!open) onOpen?.();
+          setOpen((v) => !v);
+        }}
+        disabled={disabled}
+        aria-label={value ? `Model: ${CHAT_MODEL_LABELS[value]} (click to choose)` : 'Choose model before sending'}
+        aria-expanded={open}
+        title="Model"
+        className="footer-cycle-button footer-model-button"
+      >
+        <SparkGlyph />
+        <span>{value ? CHAT_MODEL_LABELS[value] : 'Choose model'}</span>
+      </button>
+    </div>
   );
 }

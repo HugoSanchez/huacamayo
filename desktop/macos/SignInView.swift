@@ -25,9 +25,9 @@ struct SignInView: View {
         ZStack {
             HStack {
                 HStack(spacing: 8) {
-                    WindowControlButton(color: Color(red: 1.0, green: 0.38, blue: 0.35), action: .close)
-                    WindowControlButton(color: Color(red: 1.0, green: 0.78, blue: 0.24), action: .miniaturize)
-                    WindowControlButton(color: Color(red: 0.30, green: 0.85, blue: 0.39), action: .zoom)
+                    WindowControlButton(color: Color(red: 1.0, green: 95/255, blue: 87/255), action: .close)
+                    WindowControlButton(color: Color(red: 254/255, green: 188/255, blue: 46/255), action: .miniaturize)
+                    WindowControlButton(color: Color(red: 40/255, green: 200/255, blue: 64/255), action: .zoom)
                 }
                 Spacer()
             }
@@ -94,16 +94,13 @@ struct SignInView: View {
         NSWorkspace.shared.open(url)
     }
 
-    /// Debug builds (Xcode → Run) use localhost so day-to-day dev still works.
-    /// Release builds (Archive) point at the deployed frontend so friends sign
-    /// in via the real domain. The `VERSO_FRONTEND_URL` env var still wins if
-    /// set, useful for testing prod from a debug build or vice versa.
+    /// The native app normally signs in through the deployed frontend, which
+    /// carries the Privy public configuration. This applies to Debug too:
+    /// Cmd+R and Conductor Run should work without separately running a local
+    /// Next server and provisioning its secrets. `VERSO_FRONTEND_URL` remains
+    /// an explicit override for local frontend development.
     private static var defaultFrontendURL: String {
-        #if DEBUG
-        return "http://127.0.0.1:3000/login"
-        #else
         return "https://www.itsverso.xyz/login"
-        #endif
     }
 
     private static func freshPrivySessionURL(from raw: String) -> URL? {

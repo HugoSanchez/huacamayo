@@ -124,6 +124,46 @@ terminal="$(grep -Eo "^event: response\.(completed|failed)" "${response_file}" |
 echo "[smoke] PASS: HTTP 200, SSE stream terminated with ${terminal#event: }"
 echo "[smoke] (response.failed is expected without model credentials — the handler is healthy either way)"
 
+# ── Pin-liveness contract ────────────────────────────────────────────────
+# Hermes silently ignores pinned tool names that match nothing registered,
+# so a drift in the MCP naming convention (0.19 renamed mcp_verso_* to
+# mcp__verso__*) strips memory/product-core tools from the model with no
+# error anywhere. Ask THIS bundle's own naming function what wire name each
+# core tool gets, and assert the orchestrator's pinned list contains it.
+echo "[smoke] checking pinned-tool naming contract against the bundle"
+CORE_TOOLS="request_connection search_toolkits list_connections get_connection_status propose_message_draft search_memory get_memory_page write_memory_page"
+
+expected_names="$(PYTHONPATH="${SITE_PACKAGES}" "${PYTHON_BIN}" - "${CORE_TOOLS}" <<'PYEOF'
+import sys
+try:
+    from tools.mcp_tool import mcp_prefixed_tool_name
+except ImportError:  # pre-0.19 bundles: single-underscore convention
+    def mcp_prefixed_tool_name(server, tool):
+        return f"mcp_{server}_{tool}"
+for tool in sys.argv[1].split():
+    print(mcp_prefixed_tool_name("verso", tool))
+PYEOF
+)"
+
+pinned_names="$(node --experimental-strip-types --no-warnings -e "
+import('${REPO_ROOT}/desktop/orchestrator/src/http/hermes-pinned-tools.ts').then((m) => {
+  console.log(m.computePinnedToolNames('/nonexistent-manifest', { includeMemoryTools: true }).join('\n'));
+});")"
+
+missing=""
+while IFS= read -r name; do
+    if ! printf '%s\n' "${pinned_names}" | grep -qx "${name}"; then
+        missing="${missing} ${name}"
+    fi
+done <<< "${expected_names}"
+
+if [ -n "${missing}" ]; then
+    echo "[smoke] FAIL: bundle registers core tools under names the orchestrator does not pin:${missing}" >&2
+    echo "[smoke] update PIN_PREFIXES in desktop/orchestrator/src/http/hermes-pinned-tools.ts" >&2
+    exit 1
+fi
+echo "[smoke] PASS: all core pins match the bundle's MCP naming convention"
+
 # Record the pass, keyed to the exact site-packages build we just validated.
 # The marker is a copy of the venv stage's .stamp; a rebuild wipes the arch
 # dir (marker included), so a stale pass can never vouch for new bytes.

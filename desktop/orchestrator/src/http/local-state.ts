@@ -189,6 +189,8 @@ function buildLocalStateRoots(env: NodeJS.ProcessEnv, homeDir: string): {
   const appSupportRoot = env.VERSO_LOCAL_STATE_ROOT?.trim()
     || path.join(homeDir, 'Library', 'Application Support', 'Verso');
   const legacySupportRoot = path.join(homeDir, 'Library', 'Application Support', 'verso');
+  const appSupportHermesHome = path.join(legacySupportRoot, 'hermes-home');
+  const existingAppSupportHermesHome = existsSync(appSupportHermesHome) ? appSupportHermesHome : null;
 
   return {
     appSupportRoot,
@@ -201,6 +203,7 @@ function buildLocalStateRoots(env: NodeJS.ProcessEnv, homeDir: string): {
       || path.join(legacySupportRoot, 'composio-tools-refresh.marker'),
     legacyHermesHome: env.VERSO_LEGACY_HERMES_HOME?.trim()
       || env.VERSO_HERMES_HOME?.trim()
+      || existingAppSupportHermesHome
       || defaultManagedHermesHome(env, homeDir),
   };
 }

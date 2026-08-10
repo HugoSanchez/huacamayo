@@ -51,7 +51,7 @@ export async function registerComposioRoutes(app: FastifyInstance, deps: Composi
       const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
       const body = (request.body ?? {}) as Record<string, unknown>;
       const toolkit = requiredString(body, 'toolkit');
-      const callbackUrl = requiredString(body, 'callbackUrl');
+      const callbackUrl = validateLoopbackCallbackUrl(requiredString(body, 'callbackUrl'));
       const result = await deps.composioService.requestConnection(auth.user.id, toolkit, callbackUrl);
       return reply.code(201).send({ request: result });
     } catch (error) {
@@ -120,6 +120,40 @@ export async function registerComposioRoutes(app: FastifyInstance, deps: Composi
       return handleError(reply, error);
     }
   });
+}
+
+function validateLoopbackCallbackUrl(value: string): string {
+  const rawMatch = value.match(/^http:\/\/127\.0\.0\.1:([0-9]{1,5})\/connections\/callback$/);
+  if (!rawMatch) {
+    throw new ComposioServiceError(400, 'Invalid callbackUrl.');
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ComposioServiceError(400, 'Invalid callbackUrl.');
+  }
+
+  if (
+    url.protocol !== 'http:'
+    || url.hostname !== '127.0.0.1'
+    || !url.port
+    || url.username
+    || url.password
+    || url.pathname !== '/connections/callback'
+    || url.search
+    || url.hash
+  ) {
+    throw new ComposioServiceError(400, 'Invalid callbackUrl.');
+  }
+
+  const port = Number(rawMatch[1]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new ComposioServiceError(400, 'Invalid callbackUrl.');
+  }
+
+  return url.toString();
 }
 
 function extractBearerToken(request: FastifyRequest): string {

@@ -21,18 +21,24 @@ import { readFileSync } from 'node:fs';
  * toolkit, renamed slug) between config writes.
  */
 
+// Hermes ≤0.18 registers MCP tools as `mcp_<server>_<tool>`; 0.19 moved to
+// the Claude Code-style `mcp__<server>__<tool>` (tools/mcp_tool.py
+// MCP_TOOL_NAME_PREFIX). Unmatched pin names are inert, so every pin is
+// emitted in both wire forms and the same config works under either bundle.
+const PIN_PREFIXES = ['mcp_verso_', 'mcp__verso__'];
+
 const STATIC_PINNED_TOOLS = [
-  'mcp_verso_request_connection',
-  'mcp_verso_search_toolkits',
-  'mcp_verso_list_connections',
-  'mcp_verso_get_connection_status',
-  'mcp_verso_propose_message_draft',
+  'request_connection',
+  'search_toolkits',
+  'list_connections',
+  'get_connection_status',
+  'propose_message_draft',
 ];
 
 const MEMORY_PINNED_TOOLS = [
-  'mcp_verso_search_memory',
-  'mcp_verso_get_memory_page',
-  'mcp_verso_write_memory_page',
+  'search_memory',
+  'get_memory_page',
+  'write_memory_page',
 ];
 
 // Composio schemas riding in the prompt prefix on every turn. ~4 chars per
@@ -65,11 +71,11 @@ export function computePinnedToolNames(
   manifestPath: string,
   opts: { includeMemoryTools: boolean },
 ): string[] {
-  const pinned: string[] = [...STATIC_PINNED_TOOLS];
-  if (opts.includeMemoryTools) pinned.push(...MEMORY_PINNED_TOOLS);
+  const baseNames: string[] = [...STATIC_PINNED_TOOLS];
+  if (opts.includeMemoryTools) baseNames.push(...MEMORY_PINNED_TOOLS);
 
   const tools = readManifestTools(manifestPath);
-  if (tools.length === 0) return pinned;
+  if (tools.length === 0) return toWireNames(baseNames);
 
   let budget = PINNED_SCHEMA_CHAR_BUDGET;
   let usagePinned = 0;
@@ -101,8 +107,36 @@ export function computePinnedToolNames(
     pinnedToolkits.add(tool.toolkitSlug);
   }
 
-  pinned.push(...Array.from(pinnedNames, (name) => `mcp_verso_${name}`));
-  return pinned;
+  baseNames.push(...pinnedNames);
+  return toWireNames(baseNames);
+}
+
+function toWireNames(baseNames: string[]): string[] {
+  return baseNames.flatMap((name) => PIN_PREFIXES.map((prefix) => `${prefix}${name}`));
+}
+
+/**
+ * Returns the core (product-critical) pins that match nothing in the
+ * gateway's registered tool names. Hermes silently ignores unmatched pins,
+ * so naming drift between this module and the bundled Hermes produces no
+ * error anywhere — the tools just vanish from the model's view (this is how
+ * the 0.19 `mcp_verso_*` → `mcp__verso__*` rename broke memory search
+ * unnoticed). Callers log/report a non-empty result loudly.
+ *
+ * Results are base names (e.g. `search_memory`); a pin counts as live when
+ * any registered name matches it under any known prefix convention.
+ */
+export function findInertCorePins(
+  registeredToolNames: Iterable<string>,
+  opts: { includeMemoryTools: boolean },
+): string[] {
+  const registered = new Set(registeredToolNames);
+  const coreBaseNames = opts.includeMemoryTools
+    ? [...STATIC_PINNED_TOOLS, ...MEMORY_PINNED_TOOLS]
+    : [...STATIC_PINNED_TOOLS];
+  return coreBaseNames.filter(
+    (name) => !PIN_PREFIXES.some((prefix) => registered.has(`${prefix}${name}`)),
+  );
 }
 
 function schemaCost(tool: ManifestToolEntry): number {

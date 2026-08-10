@@ -17,6 +17,16 @@ export interface ChatMessage {
   // this send in place of the widget so the chat continues seamlessly.
   pendingText?: string;
   pendingAttached?: AttachedContext | null;
+  pendingAttachments?: OutgoingAttachment[];
+}
+
+// An image the user attached in the composer, ready to POST. `dataBase64` is
+// the raw base64 payload (no data-URL prefix); the orchestrator re-validates
+// by magic bytes and forwards it to the model on the live request only.
+export interface OutgoingAttachment {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
 }
 
 export interface ChatSessionSummary {
@@ -25,6 +35,8 @@ export interface ChatSessionSummary {
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  // `null` denotes a legacy session created before model choice was stored.
+  model: ChatModel | null;
   messageCount: number;
   lastMessagePreview: string | null;
 }
@@ -200,17 +212,28 @@ export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
   high: 'High',
 };
 
-// Codex models offered in the chat-input model selector. Order defines the
+// Models offered in the chat-input model selector, grouped by the provider
+// that serves them (Codex OAuth vs Anthropic API key). Order defines the
 // click-to-cycle sequence. Sent per message as `model` and applied by the
-// gateway over its config.yaml default (validated server-side too).
-export const CHAT_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const;
+// gateway over its config.yaml default (validated server-side too; the
+// orchestrator mirror lives in src/http/model-catalog.ts). The selector
+// only cycles models whose provider is connected.
+export const CODEX_CHAT_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const;
+export const ANTHROPIC_CHAT_MODELS = ['claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5', 'claude-haiku-4-5'] as const;
+export const CHAT_MODELS = [...CODEX_CHAT_MODELS, ...ANTHROPIC_CHAT_MODELS] as const;
 export type ChatModel = (typeof CHAT_MODELS)[number];
 
 export const CHAT_MODEL_LABELS: Record<ChatModel, string> = {
   'gpt-5.5': 'GPT-5.5',
   'gpt-5.4': 'GPT-5.4',
   'gpt-5.4-mini': 'GPT-5.4 mini',
+  'claude-opus-4-8': 'Claude Opus 4.8',
+  'claude-fable-5': 'Claude Fable 5',
+  'claude-sonnet-5': 'Claude Sonnet 5',
+  'claude-haiku-4-5': 'Claude Haiku 4.5',
 };
+
+export const DEFAULT_ANTHROPIC_CHAT_MODEL: ChatModel = ANTHROPIC_CHAT_MODELS[0];
 
 export type ActivityStep =
   | { type: 'text'; text: string }
@@ -233,6 +256,7 @@ export interface ChatSSEEvent {
   delta?: { text?: string } | string;
   reasoning?: string | null;
   reason?: string;
+  provider?: string;
   session_id?: string;
   role?: string;
   content?: Array<{ type: string; text?: string; name?: string; input?: unknown }>;

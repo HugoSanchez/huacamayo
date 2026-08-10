@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import os from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
@@ -24,6 +25,16 @@ interface ReadHermesMessagesOptions {
   hermesSessionId: string | null;
   versoSessionId: string;
   localMessages: ChatMessageRecord[];
+}
+
+interface ReadHermesSessionModelOptions {
+  hermesHome: string | null;
+  hermesSessionId: string | null;
+}
+
+interface ReadHermesSessionModelFromHomesOptions {
+  hermesHomes: readonly string[];
+  hermesSessionId: string | null;
 }
 
 interface MapHermesRowsOptions {
@@ -73,6 +84,58 @@ export function readHermesChatMessages(
   } finally {
     db?.close();
   }
+}
+
+// Hermes is the authoritative execution record for an already-run turn. Use
+// its persisted model when migrating Verso sessions created before the model
+// field existed, rather than guessing from today's global gateway default.
+export function readHermesSessionModel(
+  options: ReadHermesSessionModelOptions,
+): string | null {
+  if (!options.hermesHome || !options.hermesSessionId) return null;
+
+  const dbPath = join(options.hermesHome, 'state.db');
+  if (!existsSync(dbPath)) return null;
+
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    if (!tableColumns(db, 'sessions').has('model')) return null;
+    const row = db.prepare('SELECT model FROM sessions WHERE id = ?')
+      .get(options.hermesSessionId) as { model?: unknown } | undefined;
+    return normalizedText(typeof row?.model === 'string' ? row.model : null);
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
+// Verso originally wrote Hermes state into this app-support home. Keep it as
+// a read-only migration source after moving to a profile-specific Hermes home;
+// otherwise a profile migration would make historical model selection appear
+// unknowable even though Hermes retained the execution record.
+export function hermesHistoryHomeCandidates(activeHermesHome: string | null): string[] {
+  const legacyHermesHome = join(
+    os.homedir(),
+    'Library',
+    'Application Support',
+    'Verso',
+    'hermes-home',
+  );
+  return Array.from(new Set([activeHermesHome, legacyHermesHome].filter(
+    (home): home is string => Boolean(home?.trim()),
+  )));
+}
+
+export function readHermesSessionModelFromHomes(
+  options: ReadHermesSessionModelFromHomesOptions,
+): string | null {
+  for (const hermesHome of options.hermesHomes) {
+    const model = readHermesSessionModel({ hermesHome, hermesSessionId: options.hermesSessionId });
+    if (model) return model;
+  }
+  return null;
 }
 
 export function mapHermesRowsToChatMessages(

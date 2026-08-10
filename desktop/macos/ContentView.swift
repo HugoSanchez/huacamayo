@@ -27,62 +27,155 @@ private struct ConductorThemePalette {
     let footerIcon: Color
     let windowBorder: Color
 
+    // Text roles (semantic ink hierarchy). Phase 2 collapses the Phase-1b
+    // micro-drift onto the canonical editorial ink scale: `ink2` = ink-2 and
+    // `inkDimRow` = ink-dim (they no longer diverge from ink2 / inkDim).
+    let ink: Color        // primary text — session-row titles (ink)
+    let ink2: Color       // list-item names — connections, routines, skills (ink-2)
+    let inkDim: Color     // section labels, chevrons, empty/secondary text (ink-dim)
+    let inkDimRow: Color  // session-row trailing meta (timestamps, hover icons) (ink-dim)
+    let inkFaint: Color   // index numbers, row meta / times (ink-faint)
+    let green: Color      // active session + streaming/unread accent (green)
+    let orange: Color     // needs-auth / failed connection status (orange)
+    let iconRing: Color   // traffic-light idle ring (icon-ring)
+
+    // Sidebar surface fills.
+    let rowSelectedFill: Color
+    let rowHoverFill: Color
+    let cardFill: Color
+
+    // Destructive / warning text (system red at per-mode opacities).
+    let danger: Color        // inline error text
+    let dangerSoft: Color    // "Disconnect" affordance
+    let dangerStrong: Color  // routine delete confirmation
+
+    // Connection-logo fallback tile.
+    let iconFallbackFill: Color
+    let iconFallbackText: Color
+
+    // Floating sidebar toast.
+    let toastText: Color
+    let toastFill: Color
+    let toastStroke: Color
+
     static let windowCornerRadius: CGFloat = 10
 }
 
 private enum ConductorThemes {
+    // Editorial palette (Phase 2). Flat paper surfaces — the sidebar gradient
+    // collapses to a single paper stop and `sidebarTintOpacity` = 1.0 fully
+    // covers the blur material, so no structural edits are needed.
     static let dark = ConductorThemePalette(
-        sidebarTop: Color(red: 38/255, green: 47/255, blue: 45/255),      // #262F2D
-        sidebarBottom: Color(red: 34/255, green: 47/255, blue: 55/255),   // #222F37
-        sidebarTintOpacity: 0.94,
-        mainCanvas: Color(red: 20/255, green: 22/255, blue: 24/255),      // #141618
-        inputFill: Color(red: 37/255, green: 40/255, blue: 43/255),       // #25282B
-        inputStroke: Color.white.opacity(0.10),
-        rightTop: Color(red: 19/255, green: 21/255, blue: 23/255),        // #131517
-        rightBottom: Color(red: 19/255, green: 21/255, blue: 23/255),     // #131517
-        verticalDivider: Color(red: 42/255, green: 45/255, blue: 48/255), // #2A2D30
-        horizontalDivider: Color(red: 42/255, green: 45/255, blue: 48/255), // #2A2D30
+        sidebarTop: Color(red: 30/255, green: 32/255, blue: 34/255),      // #1E2022 paper
+        sidebarBottom: Color(red: 30/255, green: 32/255, blue: 34/255),   // #1E2022 paper
+        sidebarTintOpacity: 1.0,
+        mainCanvas: Color(red: 30/255, green: 32/255, blue: 34/255),      // #1E2022 paper
+        inputFill: Color(red: 38/255, green: 40/255, blue: 43/255),       // #26282B paper-2
+        inputStroke: Color.white.opacity(0.10),                           // line
+        rightTop: Color(red: 30/255, green: 32/255, blue: 34/255),        // #1E2022 paper
+        rightBottom: Color(red: 30/255, green: 32/255, blue: 34/255),     // #1E2022 paper
+        verticalDivider: Color.white.opacity(0.10),                       // line
+        horizontalDivider: Color.white.opacity(0.10),                     // line
         rightDividerThickness: 1,
         centerRightDividerThickness: 1,
-        headerTopStart: Color(red: 43/255, green: 43/255, blue: 42/255, opacity: 0.52),
-        headerTopEnd: Color(red: 33/255, green: 33/255, blue: 32/255, opacity: 0.52),
-        headerTabsStart: Color(red: 41/255, green: 41/255, blue: 40/255, opacity: 0.48),
-        headerTabsEnd: Color(red: 30/255, green: 30/255, blue: 29/255, opacity: 0.48),
-        headerDivider: Color.white.opacity(0.10),
-        headerBottomDivider: Color.white.opacity(0.10),
+        headerTopStart: Color(red: 30/255, green: 32/255, blue: 34/255),  // #1E2022 paper (flat)
+        headerTopEnd: Color(red: 30/255, green: 32/255, blue: 34/255),    // #1E2022 paper (flat)
+        headerTabsStart: Color(red: 30/255, green: 32/255, blue: 34/255), // #1E2022 paper (flat)
+        headerTabsEnd: Color(red: 30/255, green: 32/255, blue: 34/255),   // #1E2022 paper (flat)
+        headerDivider: Color.white.opacity(0.10),                         // line
+        headerBottomDivider: Color.white.opacity(0.06),                   // line-soft
         headerBottomDividerThickness: 1,
-        headerActiveLine: Color.white.opacity(0.65),
-        footerDivider: Color.white.opacity(0.10),
-        footerIcon: Color.white.opacity(0.52),
-        windowBorder: Color.white.opacity(0.08)
+        headerActiveLine: Color.white.opacity(0.90),                      // ink
+        footerDivider: Color.white.opacity(0.06),                         // line-soft
+        footerIcon: Color.white.opacity(0.46),                            // ink-dim
+        windowBorder: Color.white.opacity(0.10),                          // line
+        ink: Color.white.opacity(0.90),
+        ink2: Color.white.opacity(0.74),
+        inkDim: Color.white.opacity(0.46),
+        inkDimRow: Color.white.opacity(0.46),
+        inkFaint: Color.white.opacity(0.30),
+        green: Color(red: 166/255, green: 192/255, blue: 122/255),   // #A6C07A
+        orange: Color(red: 214/255, green: 143/255, blue: 92/255),   // #D68F5C
+        iconRing: Color.white.opacity(0.14),
+        rowSelectedFill: Color.white.opacity(0.05),
+        rowHoverFill: Color.white.opacity(0.03),
+        cardFill: Color(red: 38/255, green: 40/255, blue: 43/255).opacity(0.38), // paper-2 × 0.38
+        danger: Color.red.opacity(0.88),
+        dangerSoft: Color.red.opacity(0.72),
+        dangerStrong: Color.red.opacity(0.92),
+        iconFallbackFill: Color.white.opacity(0.08),
+        iconFallbackText: Color.white.opacity(0.7),
+        toastText: Color.white.opacity(0.90),                             // ink
+        toastFill: Color(red: 38/255, green: 40/255, blue: 43/255),       // #26282B paper-2
+        toastStroke: Color.white.opacity(0.10)                            // line
     )
 
-    // Light mode equivalent that preserves the same panel hierarchy and contrast steps.
+    // Light mode — same editorial palette, warm paper. Row fills switch from
+    // white overlays (invisible on paper) to ink-tinted lines.
     static let light = ConductorThemePalette(
-        sidebarTop: Color(red: 236/255, green: 242/255, blue: 246/255),      // #ECF2F6
-        sidebarBottom: Color(red: 227/255, green: 235/255, blue: 241/255),   // #E3EBF1
-        sidebarTintOpacity: 0.46,
-        mainCanvas: Color(red: 243/255, green: 245/255, blue: 247/255),      // #F3F5F7
-        inputFill: Color(red: 235/255, green: 238/255, blue: 242/255),       // #EBEEF2
-        inputStroke: Color.black.opacity(0.10),
-        rightTop: Color(red: 241/255, green: 244/255, blue: 247/255),        // #F1F4F7
-        rightBottom: Color(red: 241/255, green: 244/255, blue: 247/255),     // #F1F4F7
-        verticalDivider: Color(red: 214/255, green: 220/255, blue: 226/255), // #D6DCE2
-        horizontalDivider: Color(red: 214/255, green: 220/255, blue: 226/255), // #D6DCE2
+        sidebarTop: Color(red: 245/255, green: 242/255, blue: 234/255),     // #F5F2EA paper
+        sidebarBottom: Color(red: 245/255, green: 242/255, blue: 234/255),  // #F5F2EA paper
+        sidebarTintOpacity: 1.0,
+        mainCanvas: Color(red: 245/255, green: 242/255, blue: 234/255),     // #F5F2EA paper
+        inputFill: Color(red: 239/255, green: 235/255, blue: 224/255),      // #EFEBE0 paper-2
+        inputStroke: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),  // line
+        rightTop: Color(red: 245/255, green: 242/255, blue: 234/255),       // #F5F2EA paper
+        rightBottom: Color(red: 245/255, green: 242/255, blue: 234/255),    // #F5F2EA paper
+        verticalDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),   // line
+        horizontalDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11), // line
         rightDividerThickness: 0.5,
         centerRightDividerThickness: 0,
-        headerTopStart: Color(red: 250/255, green: 251/255, blue: 253/255, opacity: 0.26),
-        headerTopEnd: Color(red: 239/255, green: 243/255, blue: 247/255, opacity: 0.26),
-        headerTabsStart: Color(red: 248/255, green: 250/255, blue: 252/255, opacity: 0.22),
-        headerTabsEnd: Color(red: 236/255, green: 241/255, blue: 246/255, opacity: 0.22),
-        headerDivider: Color.black.opacity(0.12),
-        headerBottomDivider: Color.black.opacity(0.06),
+        headerTopStart: Color(red: 245/255, green: 242/255, blue: 234/255),  // paper (flat)
+        headerTopEnd: Color(red: 245/255, green: 242/255, blue: 234/255),    // paper (flat)
+        headerTabsStart: Color(red: 245/255, green: 242/255, blue: 234/255), // paper (flat)
+        headerTabsEnd: Color(red: 245/255, green: 242/255, blue: 234/255),   // paper (flat)
+        headerDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),        // line
+        headerBottomDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.07),  // line-soft
         headerBottomDividerThickness: 0.5,
-        headerActiveLine: Color.black.opacity(0.55),
-        footerDivider: Color.black.opacity(0.10),
-        footerIcon: Color.black.opacity(0.52),
-        windowBorder: Color.black.opacity(0.10)
+        headerActiveLine: Color(red: 52/255, green: 51/255, blue: 45/255),   // #34332D ink
+        footerDivider: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.07),  // line-soft
+        footerIcon: Color(red: 143/255, green: 140/255, blue: 127/255),      // #8F8C7F ink-dim
+        windowBorder: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11),   // line
+        ink: Color(red: 52/255, green: 51/255, blue: 45/255),                // #34332D
+        ink2: Color(red: 85/255, green: 83/255, blue: 74/255),               // #55534A
+        inkDim: Color(red: 143/255, green: 140/255, blue: 127/255),          // #8F8C7F
+        inkDimRow: Color(red: 143/255, green: 140/255, blue: 127/255),       // #8F8C7F ink-dim
+        inkFaint: Color(red: 182/255, green: 179/255, blue: 165/255),        // #B6B3A5
+        green: Color(red: 109/255, green: 122/255, blue: 76/255),            // #6D7A4C
+        orange: Color(red: 178/255, green: 106/255, blue: 57/255),           // #B26A39
+        iconRing: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.14),
+        rowSelectedFill: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.07),
+        rowHoverFill: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.045),
+        cardFill: Color(red: 239/255, green: 235/255, blue: 224/255).opacity(0.82), // paper-2 × 0.82
+        danger: Color.red.opacity(0.74),
+        dangerSoft: Color.red.opacity(0.58),
+        dangerStrong: Color.red.opacity(0.78),
+        iconFallbackFill: Color.black.opacity(0.06),
+        iconFallbackText: Color.black.opacity(0.55),
+        toastText: Color(red: 52/255, green: 51/255, blue: 45/255),          // #34332D ink
+        toastFill: Color(red: 245/255, green: 242/255, blue: 234/255),       // #F5F2EA paper
+        toastStroke: Color(red: 50/255, green: 48/255, blue: 40/255).opacity(0.11)  // line
     )
+}
+
+/// Shared font ramp for the native shell. Phase 2 swaps the UI typeface to the
+/// bundled JetBrains Mono here rather than at ~20 call sites. Sizes are unchanged;
+/// emphasized roles reference bundled face weights directly (guaranteed real
+/// weights, not synthesized ones). One-off fonts stay inline.
+private enum ConductorType {
+    static let sectionLabel = Font.custom("JetBrains Mono SemiBold", size: 11)
+    static let disclosure = Font.custom("JetBrains Mono SemiBold", size: 8)
+    static let rowTitle = Font.custom("JetBrains Mono", size: 13)
+    static let rowTitleStrong = Font.custom("JetBrains Mono Bold", size: 13) // selected session title
+    static let meta = Font.custom("JetBrains Mono", size: 12)      // ago / status / row meta (ink-faint)
+    static let caption = Font.custom("JetBrains Mono", size: 11)
+    static let captionStrong = Font.custom("JetBrains Mono Bold", size: 11)
+    static let placeholder = Font.custom("JetBrains Mono", size: 12)
+    // SF Symbol glyph sizes (kept on Font.system since they size symbols, not
+    // the mono UI text). Centralized here so call sites carry no font literals.
+    static let rowActionIcon = Font.system(size: 11, weight: .medium)      // session hover pencil/archive
+    static let rowActionIconSmall = Font.system(size: 10, weight: .medium)  // cron hover delete
+    static let trafficGlyph = Font.system(size: 8, weight: .bold)          // traffic-light hover glyph
 }
 
 struct ContentView: View {
@@ -154,7 +247,8 @@ struct ContentView: View {
                 if isLeftSidebarExpanded {
                     TopChromeControls(
                         isLeftSidebarExpanded: $isLeftSidebarExpanded,
-                        iconColor: theme.footerIcon
+                        iconColor: theme.footerIcon,
+                        ringColor: theme.iconRing
                     )
                     .padding(.leading, 14)
                     .padding(.top, 14)
@@ -217,10 +311,7 @@ struct ContentView: View {
                     SidebarFooter(
                         isDarkMode: $isDarkMode,
                         sidecarState: sidecar.state,
-                        managedAccount: sidecar.managedAccount,
-                        managedSession: managedSessionStore.currentSession,
                         theme: theme,
-                        onSignOut: { managedSessionStore.clearSession() },
                         onOpenSettings: {
                             pendingSettingsOpen = SettingsOpenRequest(token: UUID())
                         }
@@ -248,7 +339,7 @@ struct ContentView: View {
             }
             .overlay(alignment: .bottom) {
                 if let sidebarToast {
-                    SidebarToastView(toast: sidebarToast, isDarkMode: isDarkMode)
+                    SidebarToastView(toast: sidebarToast, theme: theme, isDarkMode: isDarkMode)
                         .padding(.bottom, 52)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -261,6 +352,7 @@ struct ContentView: View {
             // span the full window height like the left sidebar.
             ChatWebView(
                 sidecarPort: sidecarPort,
+                sidecarAuthToken: sidecar.authToken,
                 isDarkMode: isDarkMode,
                 isCatalogOpen: isConnectionsCatalogExpanded,
                 isSkillsCatalogOpen: isSkillsCatalogExpanded,
@@ -292,7 +384,8 @@ struct ContentView: View {
                 if !isLeftSidebarExpanded {
                     TopChromeControls(
                         isLeftSidebarExpanded: $isLeftSidebarExpanded,
-                        iconColor: theme.footerIcon
+                        iconColor: theme.footerIcon,
+                        ringColor: theme.iconRing
                     )
                     .padding(.leading, 14)
                     .padding(.top, 14)
@@ -300,7 +393,7 @@ struct ContentView: View {
             }
             .overlay(alignment: .topTrailing) {
                 Button(action: { isRightSidebarExpanded.toggle() }) {
-                    SidebarToggleIcon(side: .right, color: theme.footerIcon.opacity(0.82))
+                    SidebarToggleIcon(side: .right, color: theme.footerIcon)
                         .frame(width: 18, height: 14)
                         .padding(3)
                         .contentShape(Rectangle())
@@ -405,7 +498,7 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("chat/sessions")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 throw SidebarRequestError.invalidResponse
@@ -433,13 +526,25 @@ struct ContentView: View {
         isLoadingSessions = false
     }
 
+    private func sidecarRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        applySidecarAuthHeader(&request)
+        return request
+    }
+
+    private func applySidecarAuthHeader(_ request: inout URLRequest) {
+        if let authToken = sidecar.authToken {
+            request.setValue(authToken, forHTTPHeaderField: "X-Verso-Sidecar-Token")
+        }
+    }
+
     @MainActor
     private func refreshConnections() async {
         guard let baseURL = sidecar.baseURL else { return }
 
         do {
             let url = baseURL.appendingPathComponent("connections")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 return
@@ -464,6 +569,7 @@ struct ContentView: View {
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("connections/\(connectedAccountId)"))
             request.httpMethod = "DELETE"
+            applySidecarAuthHeader(&request)
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
@@ -485,6 +591,7 @@ struct ContentView: View {
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("crons/\(id)"))
             request.httpMethod = "DELETE"
+            applySidecarAuthHeader(&request)
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
@@ -504,7 +611,7 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("crons")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 return
@@ -523,7 +630,7 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("skills")
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
                 return
@@ -545,6 +652,7 @@ struct ContentView: View {
             )
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            applySidecarAuthHeader(&request)
             request.httpBody = try JSONEncoder().encode(SidebarSkillToggleRequest(enabled: enabled))
             _ = try await URLSession.shared.data(for: request)
             await refreshSkills()
@@ -561,6 +669,7 @@ struct ContentView: View {
             var request = URLRequest(url: baseURL.appendingPathComponent("chat/sessions"))
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            applySidecarAuthHeader(&request)
             request.httpBody = Data("{}".utf8)
 
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -588,6 +697,7 @@ struct ContentView: View {
                 url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/archive")
             )
             request.httpMethod = "POST"
+            applySidecarAuthHeader(&request)
 
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
@@ -619,6 +729,7 @@ struct ContentView: View {
             )
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            applySidecarAuthHeader(&request)
             request.httpBody = try JSONEncoder().encode(SidebarRenameSessionRequest(title: title))
 
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -648,6 +759,7 @@ struct ContentView: View {
                 url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/unarchive")
             )
             request.httpMethod = "POST"
+            applySidecarAuthHeader(&request)
 
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
@@ -812,12 +924,8 @@ private struct SessionSidebar: View {
     @State private var renamingSessionId: String?
     @State private var draftTitle = ""
 
-    private var primaryText: Color {
-        isDarkMode ? Color.white.opacity(0.86) : Color.black.opacity(0.72)
-    }
-
     private var secondaryText: Color {
-        isDarkMode ? Color.white.opacity(0.44) : Color.black.opacity(0.42)
+        theme.inkDim
     }
 
     private var activeSessions: [SidebarChatSession] {
@@ -852,8 +960,8 @@ private struct SessionSidebar: View {
         VStack(alignment: .leading, spacing: 14) {
             if let sessionError, !sessionError.isEmpty {
                 Text(sessionError)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.red.opacity(isDarkMode ? 0.88 : 0.74))
+                    .font(ConductorType.caption)
+                    .foregroundStyle(theme.danger)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -866,39 +974,17 @@ private struct SessionSidebar: View {
             }
 
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    isSessionsExpanded.toggle()
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Text("SESSIONS")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .tracking(0.8)
-                                        .foregroundStyle(secondaryText)
-                                    Image(systemName: isSessionsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 8, weight: .semibold))
-                                        .foregroundStyle(secondaryText)
-                                    Spacer(minLength: 0)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-
-                            Button(action: onCreateSession) {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(secondaryText)
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!sidecarReady)
-                            .help("New session")
-                        }
+                VStack(alignment: .leading, spacing: 26) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SidebarSectionHead(
+                            label: "sessions",
+                            isExpanded: $isSessionsExpanded,
+                            dimText: secondaryText,
+                            faintText: theme.inkFaint,
+                            onAdd: onCreateSession,
+                            addEnabled: sidecarReady,
+                            addHelp: "New session"
+                        )
 
                         if isSessionsExpanded {
                             SessionSidebarSection(
@@ -908,6 +994,7 @@ private struct SessionSidebar: View {
                                 selectedSessionId: selectedSessionId,
                                 streamingSessionIds: streamingSessionIds,
                                 unreadSessionIds: unreadSessionIds,
+                                theme: theme,
                                 isDarkMode: isDarkMode,
                                 renamingSessionId: renamingSessionId,
                                 draftTitle: draftTitle,
@@ -920,163 +1007,90 @@ private struct SessionSidebar: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    isConnectionsExpanded.toggle()
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Text("CONNECTIONS")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .tracking(0.8)
-                                        .foregroundStyle(secondaryText)
-                                    Image(systemName: isConnectionsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 8, weight: .semibold))
-                                        .foregroundStyle(secondaryText)
-                                    Spacer(minLength: 0)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-
-                            Button(action: onToggleCatalog) {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(secondaryText)
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!sidecarReady)
-                            .help("Browse connections")
-                        }
+                    VStack(alignment: .leading, spacing: 12) {
+                        SidebarSectionHead(
+                            label: "connections",
+                            isExpanded: $isConnectionsExpanded,
+                            dimText: secondaryText,
+                            faintText: theme.inkFaint,
+                            onAdd: onToggleCatalog,
+                            addEnabled: sidecarReady,
+                            addHelp: "Browse connections"
+                        )
 
                         if isConnectionsExpanded {
-                            if connections.isEmpty {
-                                Text("No connected tools")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(secondaryText)
-                                    .padding(.horizontal, 10)
-                            } else {
-                                ForEach(connections) { connection in
-                                    SidebarConnectionRow(
-                                        connection: connection,
-                                        primaryText: primaryText,
-                                        secondaryText: secondaryText,
-                                        isDarkMode: isDarkMode,
-                                        onDisconnect: { onDisconnectConnection(connection.connectedAccountId) }
-                                    )
+                            VStack(alignment: .leading, spacing: 0) {
+                                if connections.isEmpty {
+                                    Text("No connected tools")
+                                        .font(ConductorType.placeholder)
+                                        .foregroundStyle(secondaryText)
+                                } else {
+                                    ForEach(connections) { connection in
+                                        SidebarConnectionRow(
+                                            connection: connection,
+                                            theme: theme,
+                                            onDisconnect: { onDisconnectConnection(connection.connectedAccountId) }
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Button(action: {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    isSkillsExpanded.toggle()
-                                }
-                            }) {
-                                HStack(spacing: 6) {
-                                    Text("SKILLS")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .tracking(0.8)
-                                        .foregroundStyle(secondaryText)
-                                    Image(systemName: isSkillsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.system(size: 8, weight: .semibold))
-                                        .foregroundStyle(secondaryText)
-                                    Spacer(minLength: 0)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-
-                            Button(action: onToggleSkillsCatalog) {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(secondaryText)
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!sidecarReady)
-                            .help("Browse skills")
-                        }
+                    VStack(alignment: .leading, spacing: 12) {
+                        SidebarSectionHead(
+                            label: "skills",
+                            isExpanded: $isSkillsExpanded,
+                            dimText: secondaryText,
+                            faintText: theme.inkFaint,
+                            onAdd: onToggleSkillsCatalog,
+                            addEnabled: sidecarReady,
+                            addHelp: "Browse skills"
+                        )
 
                         if isSkillsExpanded {
                             let pinnedSkills = skills.filter { $0.pinned }
-                            if pinnedSkills.isEmpty {
-                                Text("No skills pinned")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(secondaryText)
-                                    .padding(.horizontal, 10)
-                            } else {
-                                ForEach(pinnedSkills) { skill in
-                                    HStack(spacing: 10) {
-                                        Image(systemName: "sparkles")
-                                            .font(.system(size: 11, weight: .medium))
-                                            .foregroundStyle(secondaryText)
-                                            .frame(width: 18, height: 18)
-
-                                        Text(skill.name)
-                                            .font(.system(size: 13, weight: .regular))
-                                            .foregroundStyle(primaryText)
-                                            .lineLimit(1)
-
-                                        Spacer(minLength: 0)
-
-                                        Text("/" + skill.slug)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(secondaryText)
-                                            .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 0) {
+                                if pinnedSkills.isEmpty {
+                                    Text("No skills pinned")
+                                        .font(ConductorType.placeholder)
+                                        .foregroundStyle(secondaryText)
+                                } else {
+                                    ForEach(pinnedSkills) { skill in
+                                        SidebarSkillRow(skill: skill, theme: theme)
                                     }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
                                 }
                             }
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Button(action: {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                isCronsExpanded.toggle()
-                            }
-                        }) {
-                            HStack(spacing: 6) {
-                                Text("ROUTINES")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .tracking(0.8)
-                                    .foregroundStyle(secondaryText)
-                                Image(systemName: isCronsExpanded ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 8, weight: .semibold))
-                                    .foregroundStyle(secondaryText)
-                                Spacer(minLength: 0)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                    VStack(alignment: .leading, spacing: 12) {
+                        SidebarSectionHead(
+                            label: "routines",
+                            isExpanded: $isCronsExpanded,
+                            dimText: secondaryText,
+                            faintText: theme.inkFaint,
+                            onAdd: nil,
+                            addEnabled: false,
+                            addHelp: ""
+                        )
 
                         if isCronsExpanded {
-                            if crons.isEmpty {
-                                Text("No routines yet")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(secondaryText)
-                                    .padding(.horizontal, 10)
-                            } else {
-                                ForEach(crons) { cron in
-                                    SidebarCronRow(
-                                        cron: cron,
-                                        subtitle: cronSubtitle(cron),
-                                        primaryText: primaryText,
-                                        secondaryText: secondaryText,
-                                        isDarkMode: isDarkMode,
-                                        onOpen: { onOpenCron(cron.id) },
-                                        onDelete: { onDeleteCron(cron.id) }
-                                    )
+                            VStack(alignment: .leading, spacing: 0) {
+                                if crons.isEmpty {
+                                    Text("No routines yet")
+                                        .font(ConductorType.placeholder)
+                                        .foregroundStyle(secondaryText)
+                                } else {
+                                    ForEach(crons) { cron in
+                                        SidebarCronRow(
+                                            cron: cron,
+                                            subtitle: cronSubtitle(cron),
+                                            theme: theme,
+                                            onOpen: { onOpenCron(cron.id) },
+                                            onDelete: { onDeleteCron(cron.id) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1085,16 +1099,12 @@ private struct SessionSidebar: View {
                 .padding(.bottom, 8)
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 24)
         .padding(.top, 22)
     }
 
-    private var rowSelectionFill: Color {
-        isDarkMode ? Color.white.opacity(0.07) : Color.white.opacity(0.72)
-    }
-
     private var cardFill: Color {
-        theme.inputFill.opacity(isDarkMode ? 0.38 : 0.82)
+        theme.cardFill
     }
 
     private func beginRename(_ session: SidebarChatSession) {
@@ -1113,6 +1123,106 @@ private struct SessionSidebar: View {
     }
 }
 
+/// Lowercase, letterspaced section header (`sessions`, `connections (N)`, …)
+/// with a subtle expand/collapse chevron and the mockup's plain-`+` add glyph.
+/// Behaviors are unchanged — the label/chevron toggle `isExpanded`, the `+`
+/// fires `onAdd` — only the presentation is editorial.
+private struct SidebarSectionHead: View {
+    let label: String
+    @Binding var isExpanded: Bool
+    let dimText: Color    // ink-dim (label)
+    let faintText: Color  // ink-faint (chevron, add glyph)
+    let onAdd: (() -> Void)?
+    let addEnabled: Bool
+    let addHelp: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isExpanded.toggle()
+                }
+            }) {
+                HStack(spacing: 6) {
+                    Text(label)
+                        .font(ConductorType.sectionLabel)
+                        .tracking(1.5)
+                        .textCase(.lowercase)
+                        .foregroundStyle(dimText)
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(ConductorType.disclosure)
+                        .foregroundStyle(faintText)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let onAdd {
+                SidebarSectionAddButton(
+                    action: onAdd,
+                    faintText: faintText,
+                    dimText: dimText,
+                    enabled: addEnabled,
+                    help: addHelp
+                )
+            }
+        }
+    }
+}
+
+/// The mockup's `.sec-add`: a plain `+` text glyph, ink-faint, hover → ink-dim,
+/// no background. Keeps the section's create/browse action wiring untouched.
+private struct SidebarSectionAddButton: View {
+    let action: () -> Void
+    let faintText: Color
+    let dimText: Color
+    let enabled: Bool
+    let help: String
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("+")
+                .font(ConductorType.sectionLabel)
+                .foregroundStyle(isHovered ? dimText : faintText)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+}
+
+/// Pinned-skill row (`.row2`): name left (ink-2 → hover ink), `/slug` meta
+/// right (ink-faint). Display-only, matching the previous behavior.
+private struct SidebarSkillRow: View {
+    let skill: SidebarSkill
+    let theme: ConductorThemePalette
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(skill.name)
+                .font(ConductorType.rowTitle)
+                .foregroundStyle(isHovered ? theme.ink : theme.ink2)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            Text("/" + skill.slug)
+                .font(ConductorType.meta)
+                .foregroundStyle(theme.inkFaint)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+    }
+}
+
 private struct SessionSidebarSection: View {
     let title: String?
     let emptyText: String
@@ -1120,6 +1230,7 @@ private struct SessionSidebarSection: View {
     let selectedSessionId: String?
     let streamingSessionIds: Set<String>
     let unreadSessionIds: Set<String>
+    let theme: ConductorThemePalette
     let isDarkMode: Bool
     let renamingSessionId: String?
     let draftTitle: String
@@ -1129,37 +1240,35 @@ private struct SessionSidebarSection: View {
     let onBeginRename: (SidebarChatSession) -> Void
     let onCommitRename: (SidebarChatSession) -> Void
 
-    private var primaryText: Color {
-        isDarkMode ? Color.white.opacity(0.84) : Color.black.opacity(0.72)
-    }
-
     private var secondaryText: Color {
-        isDarkMode ? Color.white.opacity(0.44) : Color.black.opacity(0.42)
+        theme.inkDim
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let title {
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(0.8)
+                    .font(ConductorType.sectionLabel)
+                    .tracking(1.5)
+                    .textCase(.lowercase)
                     .foregroundStyle(secondaryText)
             }
 
             if sessions.isEmpty {
                 Text(emptyText)
-                    .font(.system(size: 12))
+                    .font(ConductorType.placeholder)
                     .foregroundStyle(secondaryText)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 6)
             } else {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(sessions) { session in
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                         SessionSidebarRow(
                             session: session,
+                            displayIndex: index + 1,
                             isSelected: session.id == selectedSessionId,
                             isStreaming: streamingSessionIds.contains(session.id),
                             isUnread: unreadSessionIds.contains(session.id),
+                            theme: theme,
                             isDarkMode: isDarkMode,
                             isRenaming: renamingSessionId == session.id,
                             draftTitle: draftTitle,
@@ -1178,9 +1287,11 @@ private struct SessionSidebarSection: View {
 
 private struct SessionSidebarRow: View {
     let session: SidebarChatSession
+    let displayIndex: Int
     let isSelected: Bool
     let isStreaming: Bool
     let isUnread: Bool
+    let theme: ConductorThemePalette
     let isDarkMode: Bool
     let isRenaming: Bool
     let draftTitle: String
@@ -1191,16 +1302,36 @@ private struct SessionSidebarRow: View {
     let onCommitRename: (SidebarChatSession) -> Void
     @State private var isHovered = false
 
-    private var primaryText: Color {
-        isDarkMode ? Color.white.opacity(0.88) : Color.black.opacity(0.76)
+    // Editorial `.sess` ink scale: index → ink-faint (ink-dim when selected),
+    // title → ink-2 (ink on hover, ink + SemiBold when selected). No fill.
+    private var indexColor: Color {
+        isSelected ? theme.inkDim : theme.inkFaint
     }
 
-    private var secondaryText: Color {
-        isDarkMode ? Color.white.opacity(0.46) : Color.black.opacity(0.42)
+    private var titleColor: Color {
+        if isSelected || isHovered { return theme.ink }
+        return theme.ink2
     }
+
+    private var titleFont: Font {
+        isSelected ? ConductorType.rowTitleStrong : ConductorType.rowTitle
+    }
+
+    // ink-faint for trailing meta; ink-dim for the hover action glyphs.
+    private var metaColor: Color { theme.inkFaint }
+    private var actionColor: Color { theme.inkDim }
 
     var body: some View {
+        // `.center` (not baseline) keeps the transient trailing controls
+        // (equalizer / unread dot / hover actions) vertically stable; the
+        // index and title share the same 13pt size so the visual result
+        // matches the mockup's baseline grid.
         HStack(alignment: .center, spacing: 10) {
+            Text(String(format: "%02d", displayIndex))
+                .font(ConductorType.rowTitle)
+                .foregroundStyle(indexColor)
+                .frame(width: 22, alignment: .leading)
+
             if isRenaming {
                 RenameTextField(
                     text: Binding(
@@ -1217,8 +1348,8 @@ private struct SessionSidebarRow: View {
                 .frame(maxWidth: .infinity)
             } else {
                 Text(session.title)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(primaryText)
+                    .font(titleFont)
+                    .foregroundStyle(titleColor)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1227,15 +1358,13 @@ private struct SessionSidebarRow: View {
                     }
             }
 
-            Spacer(minLength: 0)
-
             if isHovered, !isRenaming {
                 HStack(spacing: 2) {
                     Button(action: { onBeginRename(session) }) {
                         Image(systemName: "pencil")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(secondaryText)
-                            .frame(width: 20, height: 20)
+                            .font(ConductorType.rowActionIcon)
+                            .foregroundStyle(actionColor)
+                            .frame(width: 18, height: 16)
                     }
                     .buttonStyle(.plain)
                     .help("Rename session")
@@ -1243,9 +1372,9 @@ private struct SessionSidebarRow: View {
                     if let onArchiveSession, session.archivedAt == nil {
                         Button(action: { onArchiveSession(session.id) }) {
                             Image(systemName: "archivebox")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(secondaryText)
-                                .frame(width: 20, height: 20)
+                                .font(ConductorType.rowActionIcon)
+                                .foregroundStyle(actionColor)
+                                .frame(width: 18, height: 16)
                         }
                         .buttonStyle(.plain)
                         .help("Archive session")
@@ -1256,7 +1385,7 @@ private struct SessionSidebarRow: View {
                 // would otherwise occupy so the row height stays stable, and
                 // yields back to the hover-actions when the user is reaching
                 // for rename/archive.
-                EqualizerBars(color: secondaryText)
+                EqualizerBars(color: theme.green)
                     .help("Agent is working")
             } else if isUnread, !isRenaming {
                 // Unread response. Same slot as the working indicator so
@@ -1264,35 +1393,23 @@ private struct SessionSidebarRow: View {
                 // unread} can be true at a time (unread fires *after* a
                 // stream ends).
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(theme.green)
                     .frame(width: 7, height: 7)
                     .help("New response")
             } else if !isRenaming {
                 Text(sessionTimestampLabel(session))
-                    .font(.system(size: 11))
-                    .foregroundStyle(secondaryText)
+                    .font(ConductorType.meta)
+                    .foregroundStyle(metaColor)
             }
         }
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-        .background(backgroundFill)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isRenaming else { return }
             onSelectSession(session.id)
         }
         .onHover { isHovered = $0 }
-    }
-
-    private var backgroundFill: Color {
-        if isSelected {
-            return isDarkMode ? Color.white.opacity(0.05) : Color.white.opacity(0.32)
-        }
-        if isHovered {
-            return isDarkMode ? Color.white.opacity(0.03) : Color.white.opacity(0.18)
-        }
-        return .clear
     }
 }
 
@@ -1359,9 +1476,7 @@ struct ChatFocusRequest: Equatable {
 private struct SidebarCronRow: View {
     let cron: SidebarCron
     let subtitle: String?
-    let primaryText: Color
-    let secondaryText: Color
-    let isDarkMode: Bool
+    let theme: ConductorThemePalette
     let onOpen: () -> Void
     let onDelete: () -> Void
 
@@ -1373,30 +1488,28 @@ private struct SidebarCronRow: View {
         cron.state == "paused"
     }
 
+    // `.row2`: name left (ink-2 → hover ink; ink-dim when paused), meta right
+    // (the next-run / schedule subtitle, ink-faint).
+    private var nameColor: Color {
+        if isDisabled { return theme.inkDim }
+        return isHovered ? theme.ink : theme.ink2
+    }
+
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(cron.name)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(isDisabled ? secondaryText : primaryText)
-                        .lineLimit(1)
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(secondaryText)
-                            .opacity(isDisabled ? 0.86 : 1)
-                            .lineLimit(1)
-                    }
-                }
+            HStack(spacing: 12) {
+                Text(cron.name)
+                    .font(ConductorType.rowTitle)
+                    .foregroundStyle(nameColor)
+                    .lineLimit(1)
 
                 Spacer(minLength: 0)
 
                 if confirmingDelete {
                     Button(action: handleDeleteTap) {
                         Text("Confirm")
-                            .font(.system(size: 11, weight: .regular))
-                            .foregroundStyle(Color.red.opacity(isDarkMode ? 0.92 : 0.78))
+                            .font(ConductorType.caption)
+                            .foregroundStyle(theme.dangerStrong)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .contentShape(Rectangle())
@@ -1406,17 +1519,22 @@ private struct SidebarCronRow: View {
                 } else if isHovered {
                     Button(action: handleDeleteTap) {
                         Image(systemName: "archivebox")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(secondaryText)
-                            .frame(width: 18, height: 18)
+                            .font(ConductorType.rowActionIconSmall)
+                            .foregroundStyle(theme.inkDim)
+                            .frame(width: 16, height: 16)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Delete routine")
+                } else if let subtitle {
+                    Text(subtitle)
+                        .font(ConductorType.meta)
+                        .foregroundStyle(theme.inkFaint)
+                        .opacity(isDisabled ? 0.86 : 1)
+                        .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1509,52 +1627,60 @@ private struct SidebarConnection: Decodable, Identifiable {
     let status: String
 
     var id: String { connectedAccountId }
+    var displayToolkitName: String { sidebarDisplayToolkitName(toolkitName) }
 }
 
 private struct SidebarConnectionRow: View {
     let connection: SidebarConnection
-    let primaryText: Color
-    let secondaryText: Color
-    let isDarkMode: Bool
+    let theme: ConductorThemePalette
     let onDisconnect: () -> Void
 
     @State private var isHovered = false
 
     private var disconnectText: Color {
-        Color.red.opacity(isDarkMode ? 0.72 : 0.58)
+        theme.dangerSoft
+    }
+
+    // A live connection reads ink-faint; anything not active/connected
+    // (needs-auth, failed, expired, …) reads as the editorial orange warn.
+    private var isHealthy: Bool {
+        ["active", "connected"].contains(connection.status.lowercased())
+    }
+
+    private var statusColor: Color {
+        isHealthy ? theme.inkFaint : theme.orange
     }
 
     var body: some View {
         HStack(spacing: 10) {
             ConnectionLogo(
                 logoUrl: connection.logoUrl,
-                toolkitName: connection.toolkitName,
-                isDarkMode: isDarkMode
+                toolkitName: connection.displayToolkitName,
+                theme: theme
             )
 
-            Text(connection.toolkitName)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(primaryText)
+            Text(connection.displayToolkitName)
+                .font(ConductorType.rowTitle)
+                .foregroundStyle(isHovered ? theme.ink : theme.ink2)
 
             Spacer(minLength: 0)
 
             if isHovered {
                 Button(action: onDisconnect) {
                     Text("Disconnect")
-                        .font(.system(size: 11))
+                        .font(ConductorType.caption)
                         .foregroundStyle(disconnectText)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Revoke access and remove this connection")
-            } else {
+            } else if !isHealthy {
                 Text(connection.status.capitalized)
-                    .font(.system(size: 11))
-                    .foregroundStyle(secondaryText)
+                    .font(ConductorType.meta)
+                    .foregroundStyle(statusColor)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering
@@ -1565,11 +1691,11 @@ private struct SidebarConnectionRow: View {
 private struct ConnectionLogo: View {
     let logoUrl: String?
     let toolkitName: String
-    let isDarkMode: Bool
+    let theme: ConductorThemePalette
 
     @State private var image: NSImage?
 
-    private static let size: CGFloat = 18
+    private static let size: CGFloat = 16
 
     var body: some View {
         Group {
@@ -1583,7 +1709,7 @@ private struct ConnectionLogo: View {
             }
         }
         .frame(width: Self.size, height: Self.size)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .task(id: logoUrl) {
             await loadImage()
         }
@@ -1592,10 +1718,10 @@ private struct ConnectionLogo: View {
     private var fallback: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
+                .fill(theme.iconFallbackFill)
             Text(String(toolkitName.prefix(1)).uppercased())
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(isDarkMode ? Color.white.opacity(0.7) : Color.black.opacity(0.55))
+                .foregroundStyle(theme.iconFallbackText)
         }
     }
 
@@ -1618,6 +1744,31 @@ private struct ConnectionLogo: View {
         } catch {
             // Fallback view will render on failure.
         }
+    }
+}
+
+private func sidebarDisplayToolkitName(_ name: String) -> String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalized = trimmed.lowercased().replacingOccurrences(of: "_", with: " ")
+    switch normalized {
+    case "google calendar", "googlecalendar":
+        return "Calendar"
+    case "google docs", "googledocs":
+        return "Docs"
+    case "google drive", "googledrive":
+        return "Drive"
+    case "google sheets", "googlesheets":
+        return "Sheets"
+    case "granola mcp":
+        return "Granola"
+    default:
+        if normalized.hasPrefix("google ") {
+            return String(trimmed.dropFirst("Google ".count))
+        }
+        if normalized.hasSuffix(" mcp") {
+            return String(trimmed.dropLast(" MCP".count))
+        }
+        return trimmed.isEmpty ? name : trimmed
     }
 }
 
@@ -1647,6 +1798,7 @@ struct SidebarChatSession: Codable, Identifiable, Equatable {
     let createdAt: String
     let updatedAt: String
     let archivedAt: String?
+    let model: String?
     let messageCount: Int
     let lastMessagePreview: String?
 }
@@ -1699,7 +1851,25 @@ private func sortSessions(_ sessions: [SidebarChatSession]) -> [SidebarChatSessi
 private func sessionTimestampLabel(_ session: SidebarChatSession) -> String {
     let source = session.archivedAt ?? session.updatedAt
     guard let date = sidebarISO8601WithFractional.date(from: source) ?? sidebarISO8601.date(from: source) else { return "" }
-    return sidebarRelativeFormatter.localizedString(for: date, relativeTo: Date())
+    return compactRelativeAge(from: date)
+}
+
+/// Single-unit compact age used in the `.sess` trailing column: `3s`, `3m`,
+/// `26m`, `20h`, `3w`, then `mo` / `y` for older sessions.
+private func compactRelativeAge(from date: Date) -> String {
+    let seconds = Int(max(0, Date().timeIntervalSince(date)))
+    if seconds < 60 { return "\(seconds)s" }
+    let minutes = seconds / 60
+    if minutes < 60 { return "\(minutes)m" }
+    let hours = minutes / 60
+    if hours < 24 { return "\(hours)h" }
+    let days = hours / 24
+    if days < 7 { return "\(days)d" }
+    let weeks = days / 7
+    if weeks < 5 { return "\(weeks)w" }
+    let months = days / 30
+    if days < 365 { return "\(months)mo" }
+    return "\(days / 365)y"
 }
 
 private let sidebarISO8601WithFractional: ISO8601DateFormatter = {
@@ -1714,29 +1884,24 @@ private let sidebarISO8601: ISO8601DateFormatter = {
     return formatter
 }()
 
-private let sidebarRelativeFormatter: RelativeDateTimeFormatter = {
-    let formatter = RelativeDateTimeFormatter()
-    formatter.unitsStyle = .short
-    return formatter
-}()
-
 private struct SidebarToastView: View {
     let toast: SidebarToast
+    let theme: ConductorThemePalette
     let isDarkMode: Bool
 
     var body: some View {
         Text(toast.message)
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(isDarkMode ? Color.white.opacity(0.88) : Color.black.opacity(0.78))
+            .foregroundStyle(theme.toastText)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 999, style: .continuous)
-                    .fill(isDarkMode ? Color.black.opacity(0.42) : Color.white.opacity(0.82))
+                    .fill(theme.toastFill)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 999, style: .continuous)
-                    .stroke(isDarkMode ? Color.white.opacity(0.08) : Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(theme.toastStroke, lineWidth: 1)
             }
             .shadow(color: .black.opacity(isDarkMode ? 0.18 : 0.08), radius: 12, y: 4)
     }
@@ -1755,10 +1920,12 @@ private struct RenameTextField: NSViewRepresentable {
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = .systemFont(ofSize: 13, weight: .regular)
+        // Blend with the row: transparent field, JetBrains Mono 13 to match the
+        // `.sess` title it replaces.
+        field.font = NSFont(name: "JetBrains Mono", size: 13) ?? .systemFont(ofSize: 13, weight: .regular)
         field.textColor = isDarkMode
-            ? NSColor.white.withAlphaComponent(0.88)
-            : NSColor.black.withAlphaComponent(0.76)
+            ? NSColor.white.withAlphaComponent(0.90)
+            : NSColor(red: 52/255, green: 51/255, blue: 45/255, alpha: 1)  // #34332D ink
         field.cell?.usesSingleLineMode = true
         field.cell?.wraps = false
         field.cell?.isScrollable = true
@@ -1782,8 +1949,8 @@ private struct RenameTextField: NSViewRepresentable {
             nsView.stringValue = text
         }
         nsView.textColor = isDarkMode
-            ? NSColor.white.withAlphaComponent(0.88)
-            : NSColor.black.withAlphaComponent(0.76)
+            ? NSColor.white.withAlphaComponent(0.90)
+            : NSColor(red: 52/255, green: 51/255, blue: 45/255, alpha: 1)  // #34332D ink
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1864,12 +2031,13 @@ enum WindowAction {
 private struct TopChromeControls: View {
     @Binding var isLeftSidebarExpanded: Bool
     let iconColor: Color
+    let ringColor: Color
 
     var body: some View {
         HStack(spacing: 8) {
-            WindowControlButton(color: Color(red: 1.0, green: 0.38, blue: 0.35), action: .close)
-            WindowControlButton(color: Color(red: 1.0, green: 0.78, blue: 0.24), action: .miniaturize)
-            WindowControlButton(color: Color(red: 0.30, green: 0.85, blue: 0.39), action: .zoom)
+            WindowControlButton(color: Color(red: 1.0, green: 95/255, blue: 87/255), action: .close, ringColor: ringColor)
+            WindowControlButton(color: Color(red: 254/255, green: 188/255, blue: 46/255), action: .miniaturize, ringColor: ringColor)
+            WindowControlButton(color: Color(red: 40/255, green: 200/255, blue: 64/255), action: .zoom, ringColor: ringColor)
 
             Button(action: { isLeftSidebarExpanded.toggle() }) {
                 SidebarToggleIcon(side: .left, color: iconColor.opacity(0.82))
@@ -1911,16 +2079,35 @@ private struct SidebarToggleIcon: View {
 struct WindowControlButton: View {
     let color: Color
     let action: WindowAction
+    // When set, render the editorial titlebar size while keeping the macOS
+    // traffic-light color language. When nil (e.g. the sign-in screen), keep
+    // the slightly larger classic look.
+    var ringColor: Color? = nil
     @State private var isHovered = false
+
+    private var isEditorial: Bool { ringColor != nil }
+    private var diameter: CGFloat { isEditorial ? 12 : 14 }
+
+    private var fillColor: Color {
+        if isEditorial {
+            return isHovered ? color : color.opacity(0.92)
+        }
+        return isHovered ? color : color.opacity(0.9)
+    }
+
+    private var borderColor: Color {
+        isEditorial ? .black.opacity(0.14) : .black.opacity(0.10)
+    }
 
     var body: some View {
         Circle()
-            .fill(isHovered ? color : color.opacity(0.9))
-            .frame(width: 14, height: 14)
+            .fill(fillColor)
+            .frame(width: diameter, height: diameter)
             .overlay {
+                Circle().strokeBorder(borderColor, lineWidth: 0.5)
                 if isHovered {
                     Image(systemName: iconName)
-                        .font(.system(size: 8, weight: .bold))
+                        .font(ConductorType.trafficGlyph)
                         .foregroundStyle(.black.opacity(0.55))
                 }
             }
@@ -1949,13 +2136,49 @@ struct WindowControlButton: View {
     }
 }
 
+/// Footer `.toggles a`: an 11pt mono text link, dim normally, stronger for
+/// emphasized actions, and primary ink on hover.
+private struct FooterTextToggle: View {
+    let label: String
+    let theme: ConductorThemePalette
+    let action: () -> Void
+    var help: String = ""
+    var isEmphasized = false
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(isEmphasized ? ConductorType.captionStrong : ConductorType.caption)
+                .foregroundStyle(textColor)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+
+    private var textColor: Color {
+        if isHovered { return theme.ink }
+        return isEmphasized ? theme.ink2 : theme.footerIcon
+    }
+}
+
+/// Footer `.toggles .sep`: the ink-faint `·` between text toggles.
+private struct FooterSeparator: View {
+    let theme: ConductorThemePalette
+
+    var body: some View {
+        Text("·")
+            .font(ConductorType.caption)
+            .foregroundStyle(theme.inkFaint)
+    }
+}
+
 private struct SidebarFooter: View {
     @Binding var isDarkMode: Bool
     let sidecarState: SidecarManager.State
-    let managedAccount: SidecarManager.ManagedAccountSnapshot?
-    let managedSession: ManagedAppSession?
     let theme: ConductorThemePalette
-    let onSignOut: () -> Void
     let onOpenSettings: () -> Void
 
     var body: some View {
@@ -1964,58 +2187,21 @@ private struct SidebarFooter: View {
                 .fill(theme.footerDivider)
                 .frame(height: 1)
 
-            HStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(sidecarStatusColor)
-                            .frame(width: 7, height: 7)
-                        Text(sidecarStatusText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(theme.footerIcon)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    Menu {
-                        Button("Sign out", action: onSignOut)
-                    } label: {
-                        Text(managedSessionText)
-                            .font(.system(size: 10))
-                            .foregroundStyle(theme.footerIcon.opacity(0.84))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                }
-                .padding(.leading, 16)
+            HStack(spacing: 8) {
+                Spacer(minLength: 8)
 
-                Spacer()
-
-                Button(action: { isDarkMode.toggle() }) {
-                    Image(systemName: isDarkMode ? "sun.max" : "moon.fill")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(theme.footerIcon)
-                }
-                .buttonStyle(.plain)
-
-                Button(action: {}) {
-                    Image(systemName: "questionmark.circle")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(theme.footerIcon)
-                }
-                .buttonStyle(.plain)
-
-                Button(action: onOpenSettings) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(theme.footerIcon)
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
+                // Text toggles replace the moon/gear/help icon buttons; label
+                // shows the mode you'd switch TO (`dark` in light, `light` in dark).
+                FooterTextToggle(label: isDarkMode ? "light" : "dark", theme: theme, action: { isDarkMode.toggle() })
+                FooterSeparator(theme: theme)
+                FooterTextToggle(label: "settings", theme: theme, action: onOpenSettings, help: "Settings", isEmphasized: true)
+                FooterSeparator(theme: theme)
+                Circle()
+                    .fill(sidecarStatusColor)
+                    .frame(width: 7, height: 7)
+                    .help(sidecarStatusText)
             }
-            .padding(.trailing, 16)
+            .padding(.horizontal, 24)
             .padding(.vertical, 10)
         }
     }
@@ -2024,7 +2210,7 @@ private struct SidebarFooter: View {
         switch sidecarState {
         case .idle: return .gray
         case .starting: return .yellow
-        case .running: return .green
+        case .running: return theme.green
         case .failed: return .red
         }
     }
@@ -2037,44 +2223,6 @@ private struct SidebarFooter: View {
         case .failed: return "Connection error"
         }
     }
-
-    private var managedSessionText: String {
-        if let managedAccount {
-            switch managedAccount.account.state {
-            case "authenticated":
-                if let email = managedAccount.account.user?.email, !email.isEmpty {
-                    return email
-                }
-                if let displayName = managedAccount.account.user?.displayName, !displayName.isEmpty {
-                    return displayName
-                }
-                if let userId = managedAccount.account.user?.id, !userId.isEmpty {
-                    return userId
-                }
-                return "Signed in"
-            case "expired":
-                return "Managed session expired"
-            case "invalid_session":
-                return "Sign-in expired"
-            case "backend_unavailable":
-                if let managedSession, !managedSession.isExpired {
-                    return managedSession.identityLabel
-                }
-                return "Managed backend unavailable"
-            case "signed_out":
-                break
-            default:
-                break
-            }
-        }
-
-        guard let managedSession else { return "Signed out" }
-        if managedSession.isExpired {
-            return "Managed session expired"
-        }
-        return managedSession.identityLabel
-    }
-
 }
 
 

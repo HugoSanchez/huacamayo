@@ -1,0 +1,107 @@
+/* App-wide toast system (Toaster.tsx) */
+.toaster {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+  max-width: 380px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 10px;
+  background: var(--paper-2);
+  color: var(--ink);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--toast-shadow);
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toast-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.toast-description {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+/* Text affordance rather than a filled pill: ink-dim resting, ink on hover. */
+.toast-action {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-dim);
+  border: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.12s ease;
+}
+
+.toast-action:hover {
+  color: var(--ink);
+}
+
+.toast-close {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toast-close:hover {
+  color: var(--ink);
+  background: var(--icon-hover-soft);
+}
+
+.toast-success::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-ok);
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.toast-error::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-error);
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}

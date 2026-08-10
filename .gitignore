@@ -39,3 +39,10 @@ desktop/runtime-bundles/
 # Sparkle EdDSA private key — should NEVER be committed
 *sparkle*private*key*
 verso-edkey.txt
+
+# Workspace-local dev Hermes profile (see scripts/conductor-run-verso.sh)
+.hermes-dev-home/
+
+# Downloaded local embedding-model cache. It is rebuilt/downloaded by the
+# runtime and must not be committed with application source.
+models/

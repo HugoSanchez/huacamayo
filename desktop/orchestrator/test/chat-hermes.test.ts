@@ -167,7 +167,7 @@ describe('Hermes Chat Streaming', () => {
     process.env.VERSO_MEMORY_DB_PATH = `/tmp/verso-memory-test-${process.pid}.sqlite`;
     process.env.VERSO_MEMORY_CHAT_CAPTURE = '1';
 
-    const result = await startServer({ port: 0 });
+    const result = await startServer({ port: 0, allowUnauthenticated: true });
     server = result.server;
     port = result.port;
   });
@@ -243,6 +243,120 @@ describe('Hermes Chat Streaming', () => {
     expect(requestLog[0].conversation).toBe(sessionId);
     expect(requestLog[0].instructions).toBeUndefined();
     expect(requestLog[0].conversation_history).toBeUndefined();
+  });
+
+  it('uses the stored session model when a message does not repeat it', async () => {
+    requestLog = [];
+    breakConversationChain = false;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Opus thread', model: 'claude-opus-4-8' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const response = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'Use the session choice' }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    expect(requestLog).toHaveLength(1);
+    expect(requestLog[0].model).toBe('claude-opus-4-8');
+  });
+
+  it('forwards image attachments as multimodal input and stores marker text', async () => {
+    requestLog = [];
+    breakConversationChain = false;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+    responseCounter = 0;
+    sessionCounter = 0;
+    messageCounter = 0;
+
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Screenshot' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const pngBase64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString('base64');
+    const res = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'What is in this screenshot?',
+        attachments: [{ name: 'shot.png', mimeType: 'image/png', dataBase64: pngBase64 }],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(requestLog).toHaveLength(1);
+    const input = requestLog[0].input as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(Array.isArray(input)).toBe(true);
+    expect(input).toHaveLength(1);
+    expect(input[0].role).toBe('user');
+    expect(input[0].content[0]).toEqual({
+      type: 'input_text',
+      text: 'What is in this screenshot?\n\n[attached image: shot.png]',
+    });
+    expect(input[0].content[1]).toEqual({
+      type: 'input_image',
+      image_url: `data:image/png;base64,${pngBase64}`,
+    });
+
+    const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
+    expect(messages.body.messages[0].role).toBe('user');
+    expect(messages.body.messages[0].content)
+      .toBe('What is in this screenshot?\n\n[attached image: shot.png]');
+  });
+
+  it('accepts an image-only message with no text content', async () => {
+    requestLog = [];
+    breakConversationChain = false;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+    responseCounter = 0;
+    sessionCounter = 0;
+    messageCounter = 0;
+
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Image only' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const pngBase64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 2]).toString('base64');
+    const res = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: '',
+        attachments: [{ name: 'only.png', mimeType: 'image/png', dataBase64: pngBase64 }],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const input = requestLog[0].input as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(input[0].content[0]).toEqual({ type: 'input_text', text: '[attached image: only.png]' });
+    expect(input[0].content[1]).toMatchObject({ type: 'input_image' });
+
+    const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
+    expect(messages.body.messages[0].content).toBe('[attached image: only.png]');
   });
 
   it('recovers by replaying Hermes-backed chat history when conversation chaining breaks', async () => {

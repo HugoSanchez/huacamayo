@@ -33,7 +33,7 @@ describe('Managed account routes', () => {
     delete process.env.VERSO_MANAGED_USER_ID;
 
     backendServer = await startFakeBackend(backendPort);
-    const result = await startServer({ port: 0 });
+    const result = await startServer({ port: 0, allowUnauthenticated: true });
     server = result.server;
     port = result.port;
     currentPort = port;

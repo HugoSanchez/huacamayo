@@ -16,6 +16,7 @@
 		A10000010000000000000005 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000006 /* SidecarManager.swift */; };
 		A1000001000000000000000B /* ChatWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000C /* ChatWebView.swift */; };
 		A1000001000000000000000C /* chat-ui in Resources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000D /* chat-ui */; };
+		A10000010000000000000021 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000021 /* Fonts */; };
 		A1000001000000000000000D /* ManagedSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000E /* ManagedSessionStore.swift */; };
 		A1000001000000000000000F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000010 /* SignInView.swift */; };
 		A10000010000000000000011 /* UpdateToastUserDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000011 /* UpdateToastUserDriver.swift */; };
@@ -31,6 +32,7 @@
 		A10000020000000000000006 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		A1000002000000000000000C /* ChatWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebView.swift; sourceTree = "<group>"; };
 		A1000002000000000000000D /* chat-ui */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "chat-ui"; sourceTree = "<group>"; };
+		A10000020000000000000021 /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fonts; sourceTree = "<group>"; };
 		A1000002000000000000000E /* ManagedSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedSessionStore.swift; sourceTree = "<group>"; };
 		A1000002000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000020000000000000010 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
@@ -81,6 +83,7 @@
 				A10000020000000000000020 /* Telemetry.swift */,
 				A1000002000000000000000F /* Info.plist */,
 				A1000002000000000000000D /* chat-ui */,
+				A10000020000000000000021 /* Fonts */,
 				A10000020000000000000003 /* Assets.xcassets */,
 				A10000020000000000000005 /* verso.entitlements */,
 				A10000050000000000000004 /* Preview Content */,
@@ -172,6 +175,7 @@
 				A10000010000000000000004 /* Preview Assets.xcassets in Resources */,
 				A10000010000000000000003 /* Assets.xcassets in Resources */,
 				A1000001000000000000000C /* chat-ui in Resources */,
+				A10000010000000000000021 /* Fonts in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -368,7 +372,7 @@
 				CODE_SIGN_ENTITLEMENTS = desktop/macos/verso.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEVELOPMENT_ASSET_PATHS = "\"desktop/macos/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -378,7 +382,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.16;
+				MARKETING_VERSION = 1.0.17;
 				PRODUCT_BUNDLE_IDENTIFIER = xyz.itsverso.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -396,7 +400,7 @@
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEVELOPMENT_ASSET_PATHS = "\"desktop/macos/Preview Content\"";
 				DEVELOPMENT_TEAM = 2T2JL5F698;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -408,7 +412,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0.16;
+				MARKETING_VERSION = 1.0.17;
 				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_BUNDLE_IDENTIFIER = xyz.itsverso.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";

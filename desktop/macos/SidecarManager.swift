@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Security
 
 /// Manages the local Node.js sidecar process lifecycle.
 @MainActor
@@ -14,6 +15,7 @@ final class SidecarManager: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var managedSession: ManagedAppSession?
     @Published private(set) var managedAccount: ManagedAccountSnapshot?
+    @Published private(set) var authToken: String?
 
     private var process: Process?
     private var logFileHandle: FileHandle?
@@ -146,6 +148,8 @@ final class SidecarManager: ObservableObject {
 
         Task {
             do {
+                let launchAuthToken = try Self.generateAuthToken()
+                self.authToken = launchAuthToken
                 let detectedPort = try await launchProcess()
                 guard generation == launchGeneration, !stopRequested else { return }
                 state = .running(port: detectedPort)
@@ -154,6 +158,7 @@ final class SidecarManager: ObservableObject {
                 await refreshManagedAccount()
             } catch {
                 guard generation == launchGeneration, !stopRequested else { return }
+                authToken = nil
                 state = .failed(error.localizedDescription)
                 logger.error("Sidecar failed: \(error.localizedDescription)")
                 Telemetry.reportError(error, context: "sidecar-launch")
@@ -178,6 +183,7 @@ final class SidecarManager: ObservableObject {
         logFileHandle = nil
         endActivityIfNeeded()
         managedAccount = nil
+        authToken = nil
         state = .idle
     }
 
@@ -197,8 +203,10 @@ final class SidecarManager: ObservableObject {
         }
 
         let endpoint = baseURL.appendingPathComponent("managed/account")
+        var request = URLRequest(url: endpoint)
+        applyAuthHeader(&request)
         do {
-            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw URLError(.badServerResponse)
             }
@@ -224,6 +232,7 @@ final class SidecarManager: ObservableObject {
         guard let baseURL else { return }
         let endpoint = baseURL.appendingPathComponent("managed/session")
         var request = URLRequest(url: endpoint)
+        applyAuthHeader(&request)
 
         if let session {
             request.httpMethod = "POST"
@@ -341,16 +350,14 @@ final class SidecarManager: ObservableObject {
         let currentPath = env["PATH"] ?? ""
         env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
 
-        // Release builds (Archive) point the orchestrator at the deployed
-        // managed backend. Debug builds (Xcode → Run) keep the orchestrator
-        // default of http://127.0.0.1:8788 so local dev iterates against the
-        // local backend. A pre-set VERSO_BACKEND_URL in the parent env always
-        // wins (useful for testing prod from a debug build).
-        #if !DEBUG
+        // The native app normally needs the deployed managed backend: it owns
+        // the Privy exchange and account/session APIs. This applies to Debug
+        // too, because Cmd+R and Conductor Run are product testing paths, not
+        // an implicit request to boot a separate frontend/backend stack. A
+        // scheme VERSO_BACKEND_URL remains an explicit local-dev override.
         if env["VERSO_BACKEND_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
             env["VERSO_BACKEND_URL"] = "https://verso-backend-2lg3.onrender.com"
         }
-        #endif
         // Release builds also point the orchestrator at the bundled Python /
         // Hermes / wheels so it can build the user's venv from offline files
         // on first launch — no `brew install python` and no PyPI access
@@ -362,6 +369,10 @@ final class SidecarManager: ObservableObject {
             env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = managedSession.expiresAt
             env["VERSO_MANAGED_USER_ID"] = managedSession.userId
         }
+        guard let authToken else {
+            throw SidecarError.authTokenUnavailable
+        }
+        env["VERSO_SIDECAR_AUTH_SECRET"] = authToken
         // The orchestrator polls this pid every few seconds; if it goes away
         // (we crashed, were force-quit, were stopped from Xcode without a
         // graceful shutdown), the orchestrator self-exits. Without this, the
@@ -505,6 +516,21 @@ final class SidecarManager: ObservableObject {
         return port
     }
 
+    private func applyAuthHeader(_ request: inout URLRequest) {
+        if let authToken {
+            request.setValue(authToken, forHTTPHeaderField: "X-Verso-Sidecar-Token")
+        }
+    }
+
+    nonisolated private static func generateAuthToken() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        guard status == errSecSuccess else {
+            throw SidecarError.authTokenUnavailable
+        }
+        return Data(bytes).base64EncodedString()
+    }
+
     nonisolated private static func describeTermination(_ process: Process) -> String {
         switch process.terminationReason {
         case .exit:
@@ -635,7 +661,12 @@ final class SidecarManager: ObservableObject {
         env["VERSO_BUNDLED_PYTHON_DIR"] = pythonDir
         env["VERSO_BUNDLED_SITE_PACKAGES_DIR"] = sitePackagesDir
         env["VERSO_BUNDLED_DEFAULTS"] = defaultsDir
-        env["VERSO_HERMES_HOME"] = hermesHome
+        // Respect an explicit launch-environment override for isolated test
+        // profiles. Normal app and Conductor launches pass the durable
+        // App Support profile so credentials, connections, and Hermes state
+        // survive a rebuild.
+        env["VERSO_HERMES_HOME"] =
+            ProcessInfo.processInfo.environment["VERSO_HERMES_HOME"] ?? hermesHome
         env["VERSO_PYTHON_CACHE_DIR"] = pythonCacheDir
 
         // CRITICAL: prevent Python from writing __pycache__/*.pyc files into
@@ -808,6 +839,7 @@ private final class StdoutAccumulator: @unchecked Sendable {
 enum SidecarError: LocalizedError {
     case executableNotFound(String)
     case directoryNotFound(String)
+    case authTokenUnavailable
     case startupFailed(SidecarStartupFailure)
     case unexpectedExit
 
@@ -817,6 +849,8 @@ enum SidecarError: LocalizedError {
             return "\(name) not found in PATH"
         case .directoryNotFound(let path):
             return "sidecar package not found at \(path)"
+        case .authTokenUnavailable:
+            return "failed to create sidecar authentication token"
         case .startupFailed(let startup):
             if startup.code == "unknown" {
                 return "Sidecar failed to start: \(startup.message)"

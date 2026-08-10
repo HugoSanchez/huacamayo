@@ -1,0 +1,628 @@
+.catalog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  background: var(--paper);
+  border-right: 1px solid var(--line);
+  box-shadow: var(--catalog-shadow);
+  animation: catalog-slide-in 0.18s ease-out;
+}
+@keyframes catalog-slide-in {
+  from { transform: translateX(-100%); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+
+.catalog-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 18px 12px;
+  flex-shrink: 0;
+}
+
+.catalog-overlay-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.catalog-overlay-close {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 6px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.catalog-overlay-close:hover {
+  background: var(--close-hover-bg);
+}
+
+/* Flattened segmented control: text tabs separated by a hairline, the active
+   tab marked by an ink underline rather than a filled pill. */
+.catalog-overlay-tabs {
+  margin: 0 18px 12px;
+  padding: 0;
+  border-bottom: 1px solid var(--line-soft);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex-shrink: 0;
+}
+
+.catalog-overlay-tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 1.5px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  padding: 7px 8px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.catalog-overlay-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+.catalog-overlay-tab:hover {
+  color: var(--ink);
+}
+
+.catalog-overlay-search {
+  padding: 0 18px 12px;
+  flex-shrink: 0;
+}
+
+.catalog-overlay-search-input {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--paper-2);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.catalog-overlay-search-input:hover {
+  border-color: var(--line);
+}
+
+.catalog-overlay-search-input:focus {
+  border-color: var(--ink);
+}
+
+.catalog-overlay-search-input::placeholder {
+  color: var(--ink-dim);
+}
+
+.catalog-overlay-error {
+  margin: 0 18px 10px;
+  font-size: 11px;
+  color: var(--warn-text);
+  word-break: break-word;
+}
+
+.catalog-overlay-loading-more {
+  font-size: 11px;
+  color: var(--ink-dim);
+  padding: 12px 18px 4px;
+  text-align: center;
+}
+
+.catalog-overlay-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.catalog-overlay-empty {
+  font-size: 12px;
+  color: var(--ink-dim);
+  padding: 8px 18px;
+}
+
+.catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+/* Editorial hover: no fill — the row title lifts from ink-2 to ink instead. */
+.catalog-row:hover .catalog-row-name {
+  color: var(--ink);
+}
+
+.catalog-row-logo,
+.catalog-row-logo-fallback {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.catalog-row-logo-fallback {
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--ink-dim);
+  background: var(--row-logo-fallback-bg);
+}
+
+/* Keep the section subtitle tucked right under the title (the section's own
+   12px gap would otherwise leave it floating midway down toward the rows). */
+.ingestion-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ingestion-header h2 { margin: 0; }
+.ingestion-header .settings-footnote { margin: 0; }
+
+/* Ingestion source rows: app logo + name (+ status line) on the left. */
+.ingestion-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ingestion-source-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.ingestion-source-status {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.catalog-row-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.1s ease;
+}
+
+.catalog-row-pill {
+  appearance: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: var(--catalog-pill-color);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s ease;
+}
+
+.catalog-row-pill:hover:not(:disabled) {
+  background: var(--pill-hover-bg);
+}
+
+.catalog-row-pill:disabled {
+  cursor: default;
+  color: var(--status-connected);
+}
+
+/* Inline confirmation card rendered in the chat when the agent's
+   `cronjob` tool returns success. Click "View" → cron detail page. */
+.cron-tool-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.cron-tool-card-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--cron-card-icon-bg);
+  color: var(--ink-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.cron-tool-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cron-tool-card-title {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.cron-tool-card-title strong {
+  font-weight: 600;
+}
+
+.cron-tool-card-subtitle {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.cron-tool-card-view {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--soft-btn-bg);
+  color: var(--ink);
+  border: 1px solid var(--soft-btn-border);
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+
+.cron-tool-card-view:hover {
+  background: var(--soft-btn-bg-hover);
+  border-color: var(--soft-btn-border-hover);
+}
+
+/* ============================================================== */
+/* Message draft overlay (floating review & send widget)          */
+/* ============================================================== */
+
+/* Pinned bottom-right of the viewport, above the input bar. Multiple
+   drafts (uncommon but possible) stack vertically. `pointer-events: none`
+   on the container leaves clicks pass-through on empty space; children
+   opt back in. */
+.message-draft-overlay {
+  position: fixed;
+  bottom: 110px;
+  right: 24px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  width: min(680px, calc(100vw - 48px));
+  pointer-events: none;
+}
+
+.message-draft-overlay > * {
+  pointer-events: auto;
+}
+
+.message-draft-card {
+  width: min(380px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  box-shadow: var(--draft-card-shadow);
+  animation: message-draft-rise 160ms ease-out;
+}
+
+.message-draft-card.is-medium {
+  width: min(520px, calc(100vw - 48px));
+}
+
+.message-draft-card.is-large {
+  width: min(680px, calc(100vw - 48px));
+  gap: 14px;
+  padding: 16px 18px 14px;
+}
+
+@keyframes message-draft-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.message-draft-card.is-terminal {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  width: auto;
+  max-width: 100%;
+}
+
+.message-draft-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.message-draft-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.message-draft-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+  line-height: 1.2;
+}
+
+.message-draft-card-subtitle {
+  font-size: 11px;
+  color: var(--ink-dim);
+  line-height: 1.2;
+}
+
+.message-draft-card-icon-button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.message-draft-card-icon-button:hover {
+  background: var(--draft-icon-hover-bg);
+  color: var(--ink);
+}
+
+.message-draft-card-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.message-draft-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 0;
+}
+
+.message-draft-card-label {
+  font-size: 10px;
+  color: var(--ink-dim);
+  width: 56px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+
+/* Scope the toolkit logo down inside the draft surfaces so the channel chip
+   feels like a subtle marker, not a hero image. The same <ToolkitLogo>
+   component renders at 34px inside the connection card. */
+.message-draft-card .connection-card-logo,
+.message-draft-card .connection-card-logo-fallback,
+.message-draft-card-minimized .connection-card-logo,
+.message-draft-card-minimized .connection-card-logo-fallback {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+.message-draft-card .connection-card-logo-fallback,
+.message-draft-card-minimized .connection-card-logo-fallback {
+  font-size: 10px;
+}
+
+.message-draft-card-input {
+  flex: 1;
+  appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.message-draft-card-input::placeholder {
+  color: var(--ink-dim);
+  opacity: 0.6;
+}
+
+/* Small circular avatar for Slack DM recipients. Sits between the label
+   column and the input so the friendly name lines up cleanly. Hidden when
+   the agent didn't supply a URL or when the channel is Gmail. */
+.message-draft-card-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: var(--avatar-bg);
+}
+
+/* Tiny "Cc" affordance that lives on the right side of the To row — same
+   trick Gmail uses. Disappears once the Cc field is open. */
+.message-draft-card-row-toggle {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+  transition: color 0.1s ease, background 0.1s ease;
+}
+
+.message-draft-card-row-toggle:hover {
+  color: var(--ink);
+  background: var(--draft-hover-bg);
+}
+
+.message-draft-card-input:disabled {
+  opacity: 0.6;
+}
+
+.message-draft-card-body {
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  resize: none;
+  min-height: 72px;
+  max-height: 200px;
+  padding: 6px 0 0;
+}
+
+.message-draft-card.is-medium .message-draft-card-body {
+  min-height: 128px;
+  max-height: 300px;
+}
+
+.message-draft-card.is-large .message-draft-card-body {
+  min-height: 216px;
+  max-height: min(440px, 48vh);
+}
+
+.message-draft-card-body:disabled {
+  opacity: 0.6;
+}
+
+.message-draft-card-error {
+  font-size: 12px;
+  color: var(--draft-error-text);
+  padding: 2px 0;
+}
+
+.message-draft-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.message-draft-card-button {
+  appearance: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, opacity 0.1s ease;
+}
+
+.message-draft-card-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.message-draft-card-button.is-secondary {
+  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid transparent;
+}
+
+.message-draft-card-button.is-secondary:not(:disabled):hover {
+  color: var(--ink);
+  background: var(--draft-hover-bg);
+}
+
+.message-draft-card-button.is-primary {
+  background: var(--ink);
+  color: var(--paper);
+  border: 1px solid var(--ink);
+}
+
+.message-draft-card-button.is-primary:not(:disabled):hover {
+  opacity: 0.88;
+}
+
+.message-draft-card-minimized {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--paper-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: var(--minimized-shadow);
+  transition: border-color 0.1s ease, transform 0.1s ease, box-shadow 0.1s ease;
+  animation: message-draft-rise 160ms ease-out;
+}
+
+/* Hover keeps the solid --bg-input fill so the pill never goes translucent
+   over the chat thread. The lift comes from a tighter border + a slightly
+   stronger shadow. */
+.message-draft-card-minimized:hover {
+  border-color: var(--minimized-border-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--minimized-shadow-hover);
+}
+
+.message-draft-card-minimized-text {
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}

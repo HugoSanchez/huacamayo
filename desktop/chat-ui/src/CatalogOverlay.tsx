@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getToolkits } from './chat';
+import { displayToolkitName } from './display-names';
 import type { ToolkitView } from './types';
 
 interface Props {
@@ -188,6 +189,8 @@ function CatalogRow({
   toolkit: ToolkitView;
   onConnect: (toolkit: ToolkitView) => void;
 }) {
+  const displayName = displayToolkitName(toolkit.name);
+
   return (
     <div className="catalog-row">
       {toolkit.logoUrl ? (
@@ -199,10 +202,10 @@ function CatalogRow({
         />
       ) : (
         <div className="catalog-row-logo-fallback" aria-hidden="true">
-          {toolkit.name.charAt(0).toUpperCase()}
+          {displayName.charAt(0).toUpperCase()}
         </div>
       )}
-      <div className="catalog-row-name">{toolkit.name}</div>
+      <div className="catalog-row-name">{displayName}</div>
       <button
         type="button"
         className={`catalog-row-pill is-${toolkit.connected ? 'connected' : 'pending'}`}
