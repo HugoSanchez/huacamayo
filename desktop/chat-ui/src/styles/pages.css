@@ -16,7 +16,6 @@
   max-width: max-content;
   transition: opacity 0.12s ease, color 0.12s ease;
 }
-
 .catalog-overlay-back:hover {
   opacity: 0.7;
   color: var(--ink);
@@ -1057,4 +1056,3 @@
     opacity: 0.85;
   }
 }
-

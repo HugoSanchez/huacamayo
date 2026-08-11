@@ -55,6 +55,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 # 3) Notarize + staple.
 ./scripts/notarize-app.sh
+
+# 4) Package and notarize the DMG. This refuses to package an app whose
+#    embedded Hermes runtime did not pass the matching smoke test.
+./scripts/make-dmg.sh
+
+# 5) Generate the signed Sparkle appcast, then upload the DMG to GitHub and
+#    deploy frontend/public/appcast.xml as described by the script.
+./scripts/publish-release.sh
 ```
 
 The Release build automatically:

@@ -5,7 +5,6 @@
   padding: 0 44px 20px;
   background: var(--paper);
 }
-
 /* Editorial composer (mockup `.composer`): no filled/bordered box — the field
    is transparent with a single `--line` rule ABOVE it (the mockup `.rule-line`,
    realised as the field's border-top), capped to the same column as the doc.

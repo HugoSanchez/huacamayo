@@ -84,9 +84,9 @@ export class CodexAuthService {
   private fetchStatus(): Promise<CodexStatus> {
     if (this.statusInFlight) return this.statusInFlight;
     this.statusInFlight = (async () => {
-      const invocation = this.resolveInvocation(['auth', 'list', PROVIDER]);
       let status: CodexStatus;
       try {
+        const invocation = this.resolveInvocation(['auth', 'list', PROVIDER]);
         const { stdout } = await execFile(invocation.command, invocation.args, {
           env: invocation.env,
           cwd: invocation.cwd ?? undefined,
