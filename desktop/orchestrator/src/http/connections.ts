@@ -4,8 +4,10 @@ import { ConnectionsService, HttpError } from '../integrations/composio.ts';
 
 export function buildConnectionsRoutes(connections: ConnectionsService): Route[] {
   return [
-    route('GET', '/connections', async (_req, res) => {
-      const items = await connections.listConnections();
+    route('GET', '/connections', async (_req, res, params) => {
+      const rawWait = typeof params.wait === 'string' ? Number.parseInt(params.wait, 10) : Number.NaN;
+      const maxWaitMs = Number.isFinite(rawWait) && rawWait > 0 ? Math.min(rawWait, 5_000) : undefined;
+      const items = await connections.listConnections(maxWaitMs === undefined ? {} : { maxWaitMs });
       json(res, 200, {
         available: connections.configured,
         configured: connections.configured,
