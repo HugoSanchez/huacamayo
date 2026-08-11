@@ -158,19 +158,17 @@ private enum ConductorThemes {
     )
 }
 
-/// Shared font ramp for the native shell. Phase 2 swaps the UI typeface to the
-/// bundled JetBrains Mono here rather than at ~20 call sites. Sizes are unchanged;
-/// emphasized roles reference bundled face weights directly (guaranteed real
-/// weights, not synthesized ones). One-off fonts stay inline.
+/// Shared font ramp for the native shell. Sizes are unchanged; emphasized roles
+/// reference bundled face weights directly, not synthesized ones.
 private enum ConductorType {
-    static let sectionLabel = Font.custom("JetBrains Mono SemiBold", size: 11)
-    static let disclosure = Font.custom("JetBrains Mono SemiBold", size: 8)
-    static let rowTitle = Font.custom("JetBrains Mono", size: 13)
-    static let rowTitleStrong = Font.custom("JetBrains Mono Bold", size: 13) // selected session title
-    static let meta = Font.custom("JetBrains Mono", size: 12)      // ago / status / row meta (ink-faint)
-    static let caption = Font.custom("JetBrains Mono", size: 11)
-    static let captionStrong = Font.custom("JetBrains Mono Bold", size: 11)
-    static let placeholder = Font.custom("JetBrains Mono", size: 12)
+    static let sectionLabel = Font.custom("IBM Plex Sans SemiBold", size: 11)
+    static let disclosure = Font.custom("IBM Plex Sans SemiBold", size: 8)
+    static let rowTitle = Font.custom("IBM Plex Sans", size: 13)
+    static let rowTitleStrong = Font.custom("IBM Plex Sans Bold", size: 13) // selected session title
+    static let meta = Font.custom("IBM Plex Sans", size: 12)      // ago / status / row meta (ink-faint)
+    static let caption = Font.custom("IBM Plex Sans", size: 11)
+    static let captionStrong = Font.custom("IBM Plex Sans Bold", size: 11)
+    static let placeholder = Font.custom("IBM Plex Sans", size: 12)
     // SF Symbol glyph sizes (kept on Font.system since they size symbols, not
     // the mono UI text). Centralized here so call sites carry no font literals.
     static let rowActionIcon = Font.system(size: 11, weight: .medium)      // session hover pencil/archive
@@ -209,6 +207,7 @@ struct ContentView: View {
     @State private var sessionError: String?
     @State private var sidebarToast: SidebarToast?
     @State private var connections: [SidebarConnection] = []
+    @State private var customConnectors: [SidebarCustomConnector] = []
     @State private var skills: [SidebarSkill] = []
     @State private var crons: [SidebarCron] = []
     @State private var pendingCronOpen: CronOpenRequest?
@@ -267,6 +266,7 @@ struct ContentView: View {
                         sessionError: sessionError,
                         sidecarReady: sidecarPort != nil,
                         connections: connections,
+                        customConnectors: customConnectors,
                         skills: skills,
                         crons: crons,
                         isCatalogOpen: isConnectionsCatalogExpanded,
@@ -289,9 +289,15 @@ struct ContentView: View {
                         },
                         onToggleCatalog: {
                             isConnectionsCatalogExpanded.toggle()
+                            if isConnectionsCatalogExpanded {
+                                isSkillsCatalogExpanded = false
+                            }
                         },
                         onToggleSkillsCatalog: {
                             isSkillsCatalogExpanded.toggle()
+                            if isSkillsCatalogExpanded {
+                                isConnectionsCatalogExpanded = false
+                            }
                         },
                         onOpenCron: { cronId in
                             pendingCronOpen = CronOpenRequest(id: cronId, token: UUID())
@@ -301,6 +307,12 @@ struct ContentView: View {
                         },
                         onDisconnectConnection: { connectedAccountId in
                             Task { await disconnectConnection(connectedAccountId) }
+                        },
+                        onRetryCustomConnector: { connectorId in
+                            Task { await retryCustomConnector(connectorId) }
+                        },
+                        onRemoveCustomConnector: { connectorId in
+                            Task { await removeCustomConnector(connectorId) }
                         }
                     )
                 }
@@ -508,13 +520,10 @@ struct ContentView: View {
             let nextSessions = sortSessions(decoded.sessions)
             sessions = nextSessions
 
-            let resolved = resolveSelectedSessionId(in: nextSessions, preferredSelection: preferredSelection)
-            if resolved != nil {
+            if let resolved = resolveSelectedSessionId(in: nextSessions, preferredSelection: preferredSelection) {
                 setSelectedSession(resolved)
-            } else if !hasCompletedInitialSelection {
-                let fallback = nextSessions.first(where: { $0.archivedAt == nil })?.id
-                    ?? nextSessions.first?.id
-                setSelectedSession(fallback)
+            } else if preferredSelection != nil || selectedSessionId != nil || !hasCompletedInitialSelection {
+                setSelectedSession(nil)
             }
             hasCompletedInitialSelection = true
             sessionError = nil
@@ -555,6 +564,20 @@ struct ContentView: View {
         } catch {
             // Keep the last known list when refresh fails.
         }
+
+        do {
+            let url = baseURL.appendingPathComponent("connectors/custom")
+            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                return
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarCustomConnectorsResponse.self, from: data)
+            customConnectors = decoded.connectors
+        } catch {
+            // Keep the last known list when refresh fails.
+        }
     }
 
     @MainActor
@@ -577,6 +600,49 @@ struct ContentView: View {
             }
         } catch {
             connections = original
+        }
+        await refreshConnections()
+    }
+
+    @MainActor
+    private func retryCustomConnector(_ connectorId: String) async {
+        guard let baseURL = sidecar.baseURL else { return }
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("connectors/custom/\(connectorId)/retry"))
+            request.httpMethod = "POST"
+            applySidecarAuthHeader(&request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+
+            let decoded = try JSONDecoder().decode(SidebarCustomConnectorResponse.self, from: data)
+            if decoded.connector.status.state == "pending_auth" {
+                NSWorkspace.shared.open(baseURL.appendingPathComponent("connectors/custom/\(connectorId)/open"))
+            }
+        } catch {
+            // The next refresh will restore the canonical state if retry failed.
+        }
+        await refreshConnections()
+    }
+
+    @MainActor
+    private func removeCustomConnector(_ connectorId: String) async {
+        guard let baseURL = sidecar.baseURL else { return }
+        let original = customConnectors
+        customConnectors.removeAll { $0.id == connectorId }
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("connectors/custom/\(connectorId)"))
+            request.httpMethod = "DELETE"
+            applySidecarAuthHeader(&request)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                throw SidebarRequestError.invalidResponse
+            }
+        } catch {
+            customConnectors = original
         }
         await refreshConnections()
     }
@@ -850,6 +916,7 @@ struct ContentView: View {
         isLoadingSessions = false
         sessionError = nil
         connections = []
+        customConnectors = []
         skills = []
         crons = []
         pendingCronOpen = nil
@@ -865,7 +932,6 @@ struct ContentView: View {
         let candidates = [
             preferredSelection,
             selectedSessionId,
-            persistedSelectedSessionId.isEmpty ? nil : persistedSelectedSessionId,
         ]
 
         for candidate in candidates {
@@ -903,6 +969,7 @@ private struct SessionSidebar: View {
     let sessionError: String?
     let sidecarReady: Bool
     let connections: [SidebarConnection]
+    let customConnectors: [SidebarCustomConnector]
     let skills: [SidebarSkill]
     let crons: [SidebarCron]
     let isCatalogOpen: Bool
@@ -920,6 +987,8 @@ private struct SessionSidebar: View {
     let onOpenCron: (String) -> Void
     let onDeleteCron: (String) -> Void
     let onDisconnectConnection: (String) -> Void
+    let onRetryCustomConnector: (String) -> Void
+    let onRemoveCustomConnector: (String) -> Void
 
     @State private var renamingSessionId: String?
     @State private var draftTitle = ""
@@ -932,13 +1001,133 @@ private struct SessionSidebar: View {
         sessions.filter { $0.archivedAt == nil }
     }
 
+    private func cronTitle(_ cron: SidebarCron) -> String {
+        let name = cron.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty { return "Scheduled routine" }
+        if looksLikeScheduleExpression(name) {
+            return humanizedSidebarSchedule(name) ?? "Scheduled routine"
+        }
+        return name
+    }
+
     private func cronSubtitle(_ cron: SidebarCron) -> String? {
         if cron.state == "paused" { return "Disabled" }
         if let next = cron.nextRunAt, let date = parseISODate(next) {
-            if date.timeIntervalSinceNow < 0 { return cron.scheduleDisplay }
+            if date.timeIntervalSinceNow < 0 { return humanizedSidebarSchedule(cron.scheduleDisplay) }
             return "next " + relativeTime(date)
         }
-        return cron.scheduleDisplay
+        return humanizedSidebarSchedule(cron.scheduleDisplay)
+    }
+
+    private func humanizedSidebarSchedule(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty { return nil }
+
+        if let duration = humanizedDurationSchedule(value) {
+            return duration
+        }
+
+        let lowered = value.lowercased()
+        if lowered.hasPrefix("every ") {
+            return value
+        }
+
+        guard looksLikeScheduleExpression(value) else {
+            return value
+        }
+
+        return humanizedCronExpression(value)
+    }
+
+    private func humanizedDurationSchedule(_ value: String) -> String? {
+        let pattern = #"^(?:every\s+)?(\d+)\s*([mhd])$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard let match = regex.firstMatch(in: value, range: range), match.numberOfRanges == 3,
+              let amountRange = Range(match.range(at: 1), in: value),
+              let unitRange = Range(match.range(at: 2), in: value),
+              let amount = Int(value[amountRange]) else {
+            return nil
+        }
+        let unit = String(value[unitRange]).lowercased()
+        let label: String
+        switch unit {
+        case "m": label = amount == 1 ? "minute" : "minutes"
+        case "h": label = amount == 1 ? "hour" : "hours"
+        case "d": label = amount == 1 ? "day" : "days"
+        default: return nil
+        }
+        return "Every \(amount) \(label)"
+    }
+
+    private func looksLikeScheduleExpression(_ value: String) -> Bool {
+        let parts = value.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        guard parts.count == 5 || parts.count == 6 else { return false }
+        let allowed = CharacterSet(charactersIn: "0123456789*,-/LW?#ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+        return parts.allSatisfy { part in
+            !part.isEmpty && part.unicodeScalars.allSatisfy { allowed.contains($0) }
+        }
+    }
+
+    private func humanizedCronExpression(_ value: String) -> String? {
+        let parts = value.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        let fields = parts.count == 6 ? Array(parts.dropFirst()) : parts
+        guard fields.count == 5 else { return nil }
+        let minute = fields[0]
+        let hour = fields[1]
+        let dayOfMonth = fields[2]
+        let month = fields[3]
+        let dayOfWeek = fields[4]
+
+        if let amount = stepAmount(minute), hour == "*", dayOfMonth == "*", month == "*", dayOfWeek == "*" {
+            return "Every \(amount) \(amount == 1 ? "minute" : "minutes")"
+        }
+
+        if minute == "0", let amount = stepAmount(hour), dayOfMonth == "*", month == "*", dayOfWeek == "*" {
+            return "Every \(amount) \(amount == 1 ? "hour" : "hours")"
+        }
+
+        if minute == "0", dayOfMonth == "*", month == "*", isWeekdayCron(dayOfWeek) {
+            if hour.contains("-") || hour == "*" || hour.contains("/") {
+                return "Hourly weekdays"
+            }
+            if let hour = Int(hour) {
+                return "Weekdays at \(formattedHour(hour))"
+            }
+        }
+
+        if minute == "0", hour == "*", dayOfMonth == "*", month == "*" {
+            return isWeekdayCron(dayOfWeek) ? "Hourly weekdays" : "Hourly"
+        }
+
+        if minute == "0", dayOfMonth == "*", month == "*", dayOfWeek == "*" || dayOfWeek == "?" {
+            if let hour = Int(hour) {
+                return "Daily at \(formattedHour(hour))"
+            }
+        }
+
+        return nil
+    }
+
+    private func isWeekdayCron(_ value: String) -> Bool {
+        let normalized = value.uppercased()
+        return normalized == "1-5" || normalized == "MON-FRI"
+    }
+
+    private func stepAmount(_ value: String) -> Int? {
+        guard value.hasPrefix("*/") else { return nil }
+        return Int(value.dropFirst(2))
+    }
+
+    private func formattedHour(_ hour: Int) -> String {
+        let normalized = ((hour % 24) + 24) % 24
+        if normalized == 0 { return "12 AM" }
+        if normalized < 12 { return "\(normalized) AM" }
+        if normalized == 12 { return "12 PM" }
+        return "\(normalized - 12) PM"
     }
 
     private func parseISODate(_ raw: String) -> Date? {
@@ -1020,7 +1209,7 @@ private struct SessionSidebar: View {
 
                         if isConnectionsExpanded {
                             VStack(alignment: .leading, spacing: 0) {
-                                if connections.isEmpty {
+                                if connections.isEmpty && customConnectors.isEmpty {
                                     Text("No connected tools")
                                         .font(ConductorType.placeholder)
                                         .foregroundStyle(secondaryText)
@@ -1030,6 +1219,14 @@ private struct SessionSidebar: View {
                                             connection: connection,
                                             theme: theme,
                                             onDisconnect: { onDisconnectConnection(connection.connectedAccountId) }
+                                        )
+                                    }
+                                    ForEach(customConnectors) { connector in
+                                        SidebarCustomConnectorRow(
+                                            connector: connector,
+                                            theme: theme,
+                                            onRetry: { onRetryCustomConnector(connector.id) },
+                                            onRemove: { onRemoveCustomConnector(connector.id) }
                                         )
                                     }
                                 }
@@ -1085,6 +1282,7 @@ private struct SessionSidebar: View {
                                     ForEach(crons) { cron in
                                         SidebarCronRow(
                                             cron: cron,
+                                            title: cronTitle(cron),
                                             subtitle: cronSubtitle(cron),
                                             theme: theme,
                                             onOpen: { onOpenCron(cron.id) },
@@ -1475,6 +1673,7 @@ struct ChatFocusRequest: Equatable {
 
 private struct SidebarCronRow: View {
     let cron: SidebarCron
+    let title: String
     let subtitle: String?
     let theme: ConductorThemePalette
     let onOpen: () -> Void
@@ -1498,7 +1697,7 @@ private struct SidebarCronRow: View {
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: 12) {
-                Text(cron.name)
+                Text(title)
                     .font(ConductorType.rowTitle)
                     .foregroundStyle(nameColor)
                     .lineLimit(1)
@@ -1688,6 +1887,103 @@ private struct SidebarConnectionRow: View {
     }
 }
 
+private struct SidebarCustomConnector: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let slug: String
+    let url: String
+    let transport: String
+    let auth: String
+    let logoUrl: String?
+    let status: SidebarCustomConnectorStatus
+
+    var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? slug : trimmed
+    }
+
+    var statusText: String {
+        switch status.state {
+        case "connected":
+            let count = status.toolCount ?? 0
+            return "\(count) tool\(count == 1 ? "" : "s")"
+        case "pending_auth":
+            return "Waiting for sign-in"
+        default:
+            return status.reason ?? "No tools registered"
+        }
+    }
+}
+
+private struct SidebarCustomConnectorStatus: Decodable {
+    let state: String
+    let toolCount: Int?
+    let reason: String?
+}
+
+private struct SidebarCustomConnectorRow: View {
+    let connector: SidebarCustomConnector
+    let theme: ConductorThemePalette
+    let onRetry: () -> Void
+    let onRemove: () -> Void
+
+    @State private var isHovered = false
+
+    private var isHealthy: Bool {
+        connector.status.state == "connected"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ConnectionLogo(
+                logoUrl: connector.logoUrl,
+                toolkitName: connector.displayName,
+                theme: theme
+            )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(connector.displayName)
+                    .font(ConductorType.rowTitle)
+                    .foregroundStyle(isHovered ? theme.ink : theme.ink2)
+                    .lineLimit(1)
+                Text(connector.statusText)
+                    .font(ConductorType.meta)
+                    .foregroundStyle(isHealthy ? theme.inkFaint : theme.orange)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            if isHovered {
+                HStack(spacing: 8) {
+                    Button(action: onRetry) {
+                        Text("Retry")
+                            .font(ConductorType.caption)
+                            .foregroundStyle(theme.inkFaint)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Retry sign-in or tool registration")
+
+                    Button(action: onRemove) {
+                        Text("Remove")
+                            .font(ConductorType.caption)
+                            .foregroundStyle(theme.dangerSoft)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this custom connector")
+                }
+            }
+        }
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
 private struct ConnectionLogo: View {
     let logoUrl: String?
     let toolkitName: String
@@ -1788,6 +2084,14 @@ private final class ConnectionLogoCache {
 
 private struct SidebarConnectionsResponse: Decodable {
     let connections: [SidebarConnection]
+}
+
+private struct SidebarCustomConnectorsResponse: Decodable {
+    let connectors: [SidebarCustomConnector]
+}
+
+private struct SidebarCustomConnectorResponse: Decodable {
+    let connector: SidebarCustomConnector
 }
 
 // Internal (not `private`) so the shell-protocol types in ChatWebView.swift
@@ -1920,9 +2224,9 @@ private struct RenameTextField: NSViewRepresentable {
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
-        // Blend with the row: transparent field, JetBrains Mono 13 to match the
+        // Blend with the row: transparent field, IBM Plex Sans 13 to match the
         // `.sess` title it replaces.
-        field.font = NSFont(name: "JetBrains Mono", size: 13) ?? .systemFont(ofSize: 13, weight: .regular)
+        field.font = NSFont(name: "IBM Plex Sans", size: 13) ?? .systemFont(ofSize: 13, weight: .regular)
         field.textColor = isDarkMode
             ? NSColor.white.withAlphaComponent(0.90)
             : NSColor(red: 52/255, green: 51/255, blue: 45/255, alpha: 1)  // #34332D ink
@@ -2136,8 +2440,7 @@ struct WindowControlButton: View {
     }
 }
 
-/// Footer `.toggles a`: an 11pt mono text link, dim normally, stronger for
-/// emphasized actions, and primary ink on hover.
+/// Footer `.toggles a`: an 11pt text link, dim normally, primary ink on hover.
 private struct FooterTextToggle: View {
     let label: String
     let theme: ConductorThemePalette
@@ -2187,22 +2490,26 @@ private struct SidebarFooter: View {
                 .fill(theme.footerDivider)
                 .frame(height: 1)
 
-            HStack(spacing: 8) {
-                Spacer(minLength: 8)
-
-                // Text toggles replace the moon/gear/help icon buttons; label
-                // shows the mode you'd switch TO (`dark` in light, `light` in dark).
-                FooterTextToggle(label: isDarkMode ? "light" : "dark", theme: theme, action: { isDarkMode.toggle() })
-                FooterSeparator(theme: theme)
-                FooterTextToggle(label: "settings", theme: theme, action: onOpenSettings, help: "Settings", isEmphasized: true)
-                FooterSeparator(theme: theme)
+            ZStack(alignment: .topLeading) {
                 Circle()
                     .fill(sidecarStatusColor)
                     .frame(width: 7, height: 7)
+                    .padding(.leading, 24)
+                    .padding(.top, 12)
                     .help(sidecarStatusText)
+
+                HStack(spacing: 8) {
+                    Spacer(minLength: 8)
+
+                    // Text toggles replace the moon/gear/help icon buttons; label
+                    // shows the mode you'd switch TO (`dark` in light, `light` in dark).
+                    FooterTextToggle(label: isDarkMode ? "light" : "dark", theme: theme, action: { isDarkMode.toggle() })
+                    FooterSeparator(theme: theme)
+                    FooterTextToggle(label: "settings", theme: theme, action: onOpenSettings, help: "Settings")
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 10)
         }
     }
 

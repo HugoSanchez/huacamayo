@@ -18,6 +18,9 @@ import { applyMemorySoulSection } from './memory-soul.ts';
 import { computePinnedToolNames, findInertCorePins } from './hermes-pinned-tools.ts';
 import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS } from './model-catalog.ts';
 import { readAnthropicKeyFromEnvFile } from './model-auth.ts';
+import { CustomConnectorsStore } from './custom-connectors-store.ts';
+import { CustomConnectorKeychain } from './keychain.ts';
+import { fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-toolsets.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -90,9 +93,7 @@ function getHermesApiServerKey(): string | null {
   return isManagedDisabled() ? null : MANAGED_API_SERVER_KEY;
 }
 
-export function hermesGatewayAuthHeaders(config: HermesGatewayConfig): Record<string, string> {
-  return config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};
-}
+export { hermesGatewayAuthHeaders };
 
 function getHermesLaunchConfig(): HermesLaunchConfig {
   const startupTimeoutMs = getHermesGatewayConfig().startupTimeoutMs;
@@ -188,6 +189,8 @@ export interface HermesSupervisorOptions {
   launch?: HermesLaunchConfig;
   runtimeMode?: RuntimeMode;
   memoryToolsMode?: 'full' | 'none';
+  customConnectorsStore?: CustomConnectorsStore;
+  customConnectorKeychain?: CustomConnectorKeychain;
 }
 
 // Skills the user must never be able to enable. They overlap with — and
@@ -227,6 +230,8 @@ export class HermesSupervisor {
   private readonly seedHermesHome: string;
   private readonly runtimeMode: RuntimeMode;
   private readonly memoryToolsMode: 'full' | 'none';
+  private readonly customConnectorsStore: CustomConnectorsStore;
+  private readonly customConnectorKeychain: CustomConnectorKeychain;
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
@@ -249,6 +254,8 @@ export class HermesSupervisor {
     this.launch = options.launch ?? getHermesLaunchConfig();
     this.runtimeMode = options.runtimeMode ?? 'managed';
     this.memoryToolsMode = options.memoryToolsMode ?? 'full';
+    this.customConnectorsStore = options.customConnectorsStore ?? new CustomConnectorsStore();
+    this.customConnectorKeychain = options.customConnectorKeychain ?? new CustomConnectorKeychain();
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
@@ -267,6 +274,10 @@ export class HermesSupervisor {
 
   get composioToolsManifestPath(): string {
     return join(this.hermesHome, 'verso-composio-tools.json');
+  }
+
+  get gatewayConfig(): HermesGatewayConfig {
+    return this.config;
   }
 
   // Resolved path/command of the Hermes binary the supervisor will spawn.
@@ -415,6 +426,10 @@ export class HermesSupervisor {
     await this.ensureReady();
   }
 
+  async waitUntilReady(timeoutMs: number): Promise<void> {
+    await this.ensureReady(AbortSignal.timeout(timeoutMs));
+  }
+
   private async ensureResolvedBaseUrl(): Promise<void> {
     if (this.baseUrlResolved) return;
     if (this.resolveBaseUrlPromise) {
@@ -493,7 +508,7 @@ export class HermesSupervisor {
       // boots; retry a few times before concluding anything.
       for (let attempt = 0; attempt < 3; attempt += 1) {
         if (attempt > 0) await delay(5_000);
-        const registered = await this.fetchRegisteredToolNames();
+        const registered = await fetchRegisteredToolNames(this.config);
         if (registered === null) return; // endpoint unavailable — inconclusive, stay null
         const memoryToolsActive = isMemoryEnabled() && this.memoryToolsMode !== 'none';
         const inert = findInertCorePins(registered, { includeMemoryTools: memoryToolsActive });
@@ -515,23 +530,6 @@ export class HermesSupervisor {
       this.pinLivenessPromise = null;
     });
     return this.pinLivenessPromise;
-  }
-
-  private async fetchRegisteredToolNames(): Promise<string[] | null> {
-    try {
-      const res = await fetch(`${this.config.baseUrl}/v1/toolsets`, {
-        method: 'GET',
-        headers: hermesGatewayAuthHeaders(this.config),
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (!res.ok) return null;
-      const body = await res.json() as { toolsets?: Array<{ tools?: string[] }> } | Array<{ tools?: string[] }>;
-      const toolsets = Array.isArray(body) ? body : body?.toolsets;
-      if (!Array.isArray(toolsets)) return null;
-      return toolsets.flatMap((set) => (Array.isArray(set?.tools) ? set.tools : []));
-    } catch {
-      return null;
-    }
   }
 
   private isChildRunning(): boolean {
@@ -582,7 +580,7 @@ export class HermesSupervisor {
     this.lastError = null;
     this.logTail = [];
 
-    const child = this.spawnManagedProcess();
+    const child = await this.spawnManagedProcess();
     this.child = child;
     child.once('exit', (code, signal) => {
       this.lastError = this.formatExitMessage(code, signal);
@@ -615,7 +613,7 @@ export class HermesSupervisor {
     throw new Error(this.lastError);
   }
 
-  private spawnManagedProcess(): ChildProcess {
+  private async spawnManagedProcess(): Promise<ChildProcess> {
     this.ensureManagedHermesHome();
     const gatewayUrl = new URL(this.config.baseUrl);
     const port = gatewayUrl.port || (gatewayUrl.protocol === 'https:' ? '443' : '80');
@@ -630,10 +628,18 @@ export class HermesSupervisor {
       ? { PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':') }
       : {};
     const pythonBytecodeEnv = bundled ? getBundledPythonBytecodeEnv() : {};
+    const customConnectorEnv: Record<string, string> = {};
+    for (const connector of this.customConnectorsStore.list()) {
+      if (connector.auth !== 'bearer') continue;
+      const token = await this.customConnectorKeychain.getSecret(connector.id);
+      if (token) customConnectorEnv[`VERSO_CC_${connector.id}_TOKEN`] = token;
+    }
+
     const env = {
       ...process.env,
       ...pythonBytecodeEnv,
       ...pythonPathExtras,
+      ...customConnectorEnv,
       PORT: port,
       HOST: host,
       HERMES_PORT: port,
@@ -964,6 +970,9 @@ export class HermesSupervisor {
 
     const mcpServers = asRecord(config.mcp_servers) ?? {};
     delete mcpServers.vervo;
+    for (const key of Object.keys(mcpServers)) {
+      if (key.startsWith('custom_')) delete mcpServers[key];
+    }
 
     const memoryToolsActive = isMemoryEnabled() && this.memoryToolsMode !== 'none';
 
@@ -1011,6 +1020,22 @@ export class HermesSupervisor {
     // Do not register Composio's hosted MCP server directly with Hermes; raw
     // provider tool schemas are too unstable for the primary product path.
     delete mcpServers.composio;
+
+    for (const connector of this.customConnectorsStore.list()) {
+      const entry: Record<string, unknown> = {
+        url: connector.url,
+        timeout: 120,
+        connect_timeout: 30,
+      };
+      if (connector.transport === 'sse') entry.transport = 'sse';
+      if (connector.auth === 'oauth') entry.auth = 'oauth';
+      if (connector.auth === 'bearer') {
+        entry.headers = {
+          Authorization: `Bearer \${VERSO_CC_${connector.id}_TOKEN}`,
+        };
+      }
+      mcpServers[`custom_${connector.slug}`] = entry;
+    }
 
     const tools = asRecord(config.tools) ?? {};
     const toolSearch = asRecord(tools.tool_search) ?? {};

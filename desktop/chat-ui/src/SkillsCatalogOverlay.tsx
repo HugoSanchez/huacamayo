@@ -99,105 +99,122 @@ export function SkillsCatalogOverlay({ isOpen, onClose, onSelectSkill, onSelectH
     }
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <aside className="catalog-overlay" role="dialog" aria-label="Skills catalog">
-      <header className="catalog-overlay-head">
-        <div className="catalog-overlay-title">Skills</div>
-        <button
-          className="catalog-overlay-close"
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <path d="M1 1 L9 9 M9 1 L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        </button>
-      </header>
+    <div
+      className="catalog-overlay-backdrop"
+      data-no-window-drag
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <aside className="catalog-overlay" role="dialog" aria-label="Skills catalog">
+        <header className="catalog-overlay-head">
+          <div className="catalog-overlay-title">Skills</div>
+          <button
+            className="catalog-overlay-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 1 L9 9 M9 1 L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </header>
 
-      <div className="catalog-overlay-tabs" role="tablist" aria-label="Skills sections">
-        <button
-          type="button"
-          className={`catalog-overlay-tab${activeTab === 'installed' ? ' is-active' : ''}`}
-          onClick={() => setActiveTab('installed')}
-          role="tab"
-          aria-selected={activeTab === 'installed'}
-        >
-          Installed
-        </button>
-        <button
-          type="button"
-          className={`catalog-overlay-tab${activeTab === 'hub' ? ' is-active' : ''}`}
-          onClick={() => setActiveTab('hub')}
-          role="tab"
-          aria-selected={activeTab === 'hub'}
-        >
-          Hub
-        </button>
-      </div>
+        <div className="catalog-overlay-tabs" role="tablist" aria-label="Skills sections">
+          <button
+            type="button"
+            className={`catalog-overlay-tab${activeTab === 'installed' ? ' is-active' : ''}`}
+            onClick={() => setActiveTab('installed')}
+            role="tab"
+            aria-selected={activeTab === 'installed'}
+          >
+            Installed
+          </button>
+          <button
+            type="button"
+            className={`catalog-overlay-tab${activeTab === 'hub' ? ' is-active' : ''}`}
+            onClick={() => setActiveTab('hub')}
+            role="tab"
+            aria-selected={activeTab === 'hub'}
+          >
+            Hub
+          </button>
+        </div>
 
-      <div className="catalog-overlay-search">
-        <input
-          type="text"
-          className="catalog-overlay-search-input"
-          placeholder={activeTab === 'hub' ? 'Search Skills Hub' : 'Search installed skills'}
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          spellCheck={false}
-          autoCorrect="off"
-          autoCapitalize="off"
-        />
-      </div>
+        <div className="catalog-overlay-search">
+          <input
+            type="text"
+            className="catalog-overlay-search-input"
+            placeholder={activeTab === 'hub' ? 'Search Skills Hub' : 'Search installed skills'}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+          />
+        </div>
 
-      {activeTab === 'installed' && error && <div className="catalog-overlay-error">{error}</div>}
-      {activeTab === 'hub' && hubError && <div className="catalog-overlay-error">{hubError}</div>}
+        {activeTab === 'installed' && error && <div className="catalog-overlay-error">{error}</div>}
+        {activeTab === 'hub' && hubError && <div className="catalog-overlay-error">{hubError}</div>}
 
-      <div className="catalog-overlay-list">
-        {activeTab === 'installed' ? (
-          <>
-            {isLoading && filteredSkills.length === 0 && (
-              <div className="catalog-overlay-empty">Loading...</div>
-            )}
-            {!isLoading && !error && filteredSkills.length === 0 && (
-              <div className="catalog-overlay-empty">
-                {searchQuery ? `No skills matching "${searchQuery}".` : 'No skills installed.'}
-              </div>
-            )}
-            {filteredSkills.map((skill) => (
-              <SkillRow
-                key={skill.slug}
-                skill={skill}
-                isToggling={pendingToggle === skill.slug}
-                onSelect={() => onSelectSkill(skill.slug)}
-                onToggle={(enabled) => handleToggle(skill.slug, enabled)}
-              />
-            ))}
-          </>
-        ) : (
-          <>
-            {isHubLoading && hubSkills.length === 0 && (
-              <div className="catalog-overlay-empty">Loading...</div>
-            )}
-            {!isHubLoading && !hubError && hubSkills.length === 0 && (
-              <div className="catalog-overlay-empty">
-                {searchQuery ? `No hub skills matching "${searchQuery}".` : 'No hub skills found.'}
-              </div>
-            )}
-            {hubSkills.map((skill) => (
-              <HubSkillRow
-                key={skill.identifier || skill.slug}
-                skill={skill}
-                onSelect={() => {
-                  if (skill.identifier) onSelectHubSkill(skill.identifier);
-                }}
-              />
-            ))}
-          </>
-        )}
-      </div>
-    </aside>
+        <div className="catalog-overlay-list">
+          {activeTab === 'installed' ? (
+            <>
+              {isLoading && filteredSkills.length === 0 && (
+                <div className="catalog-overlay-empty">Loading...</div>
+              )}
+              {!isLoading && !error && filteredSkills.length === 0 && (
+                <div className="catalog-overlay-empty">
+                  {searchQuery ? `No skills matching "${searchQuery}".` : 'No skills installed.'}
+                </div>
+              )}
+              {filteredSkills.map((skill) => (
+                <SkillRow
+                  key={skill.slug}
+                  skill={skill}
+                  isToggling={pendingToggle === skill.slug}
+                  onSelect={() => onSelectSkill(skill.slug)}
+                  onToggle={(enabled) => handleToggle(skill.slug, enabled)}
+                />
+              ))}
+            </>
+          ) : (
+            <>
+              {isHubLoading && hubSkills.length === 0 && (
+                <div className="catalog-overlay-empty">Loading...</div>
+              )}
+              {!isHubLoading && !hubError && hubSkills.length === 0 && (
+                <div className="catalog-overlay-empty">
+                  {searchQuery ? `No hub skills matching "${searchQuery}".` : 'No hub skills found.'}
+                </div>
+              )}
+              {hubSkills.map((skill) => (
+                <HubSkillRow
+                  key={skill.identifier || skill.slug}
+                  skill={skill}
+                  onSelect={() => {
+                    if (skill.identifier) onSelectHubSkill(skill.identifier);
+                  }}
+                />
+              ))}
+            </>
+          )}
+        </div>
+      </aside>
+    </div>
   );
 }
 

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import { startServer } from '../src/http/server.ts';
+import { makeMinimalPdf } from './fixtures/documents.ts';
 
 describe('Hermes Chat Streaming', () => {
   let server: http.Server | null = null;
@@ -214,7 +215,7 @@ describe('Hermes Chat Streaming', () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Inflation' }),
+      body: JSON.stringify({ title: 'Inflation', model: 'gpt-5.4' }),
     });
     const sessionId = created.body.session.id as string;
 
@@ -284,7 +285,7 @@ describe('Hermes Chat Streaming', () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Screenshot' }),
+      body: JSON.stringify({ title: 'Screenshot', model: 'gpt-5.4' }),
     });
     const sessionId = created.body.session.id as string;
 
@@ -334,7 +335,7 @@ describe('Hermes Chat Streaming', () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Image only' }),
+      body: JSON.stringify({ title: 'Image only', model: 'gpt-5.4' }),
     });
     const sessionId = created.body.session.id as string;
 
@@ -359,6 +360,103 @@ describe('Hermes Chat Streaming', () => {
     expect(messages.body.messages[0].content).toBe('[attached image: only.png]');
   });
 
+  it('injects converted document Markdown into the prompt and stores only a marker', async () => {
+    requestLog = [];
+    breakConversationChain = false;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+    responseCounter = 0;
+    sessionCounter = 0;
+    messageCounter = 0;
+
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Report', model: 'gpt-5.4' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const pdfBase64 = makeMinimalPdf('Quarterly Verso Report').toString('base64');
+    const res = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'read this doc',
+        attachments: [{ name: 'report.pdf', mimeType: 'application/pdf', dataBase64: pdfBase64 }],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(requestLog).toHaveLength(1);
+    // Document-only message: `input` stays a plain string (no input_image).
+    const input = requestLog[0].input;
+    expect(typeof input).toBe('string');
+    expect(input as string).toContain('<attached-document name="report.pdf">');
+    expect(input as string).toContain('Quarterly Verso Report');
+    expect(input as string).toContain('[attached document: report.pdf]');
+
+    // Stored transcript keeps only the marker — never the converted body.
+    const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
+    expect(messages.body.messages[0].content).toBe('read this doc\n\n[attached document: report.pdf]');
+    expect(messages.body.messages[0].content).not.toContain('<attached-document');
+  });
+
+  it('sends image parts but no image part for documents in a mixed message', async () => {
+    requestLog = [];
+    breakConversationChain = false;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+    responseCounter = 0;
+    sessionCounter = 0;
+    messageCounter = 0;
+
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Mixed', model: 'gpt-5.4' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const pngBase64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]).toString('base64');
+    const pdfBase64 = makeMinimalPdf('Quarterly Verso Report').toString('base64');
+    const res = await fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'look',
+        attachments: [
+          { name: 'shot.png', mimeType: 'image/png', dataBase64: pngBase64 },
+          { name: 'report.pdf', mimeType: 'application/pdf', dataBase64: pdfBase64 },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const input = requestLog[0].input as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(Array.isArray(input)).toBe(true);
+    const parts = input[0].content;
+    const imageParts = parts.filter((part) => part.type === 'input_image');
+    // Exactly one image part — the document did not produce one.
+    expect(imageParts).toHaveLength(1);
+    expect(imageParts[0]).toMatchObject({ type: 'input_image' });
+
+    const textPart = parts.find((part) => part.type === 'input_text');
+    expect(textPart?.text as string).toContain('<attached-document name="report.pdf">');
+    expect(textPart?.text as string).toContain('Quarterly Verso Report');
+    expect(textPart?.text as string).toContain('[attached image: shot.png]');
+    expect(textPart?.text as string).toContain('[attached document: report.pdf]');
+
+    const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
+    expect(messages.body.messages[0].content)
+      .toBe('look\n\n[attached image: shot.png]\n[attached document: report.pdf]');
+  });
+
   it('recovers by replaying Hermes-backed chat history when conversation chaining breaks', async () => {
     requestLog = [];
     breakConversationChain = false;
@@ -372,7 +470,7 @@ describe('Hermes Chat Streaming', () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Recovery' }),
+      body: JSON.stringify({ title: 'Recovery', model: 'gpt-5.4' }),
     });
     const sessionId = created.body.session.id as string;
 
@@ -420,7 +518,7 @@ describe('Hermes Chat Streaming', () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Memory' }),
+      body: JSON.stringify({ title: 'Memory', model: 'gpt-5.4' }),
     });
     const sessionId = created.body.session.id as string;
 

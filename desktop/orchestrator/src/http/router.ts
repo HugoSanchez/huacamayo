@@ -15,7 +15,12 @@ export interface Route {
   handler: RouteHandler;
 }
 
-const MAX_BODY = 10 * 1024 * 1024; // 10MB
+// Sized to carry the largest legal attachment payload plus text and JSON
+// overhead. Attachments cap at 20MB of raw bytes (MAX_TOTAL_ATTACHMENT_BYTES),
+// which base64-inflates by ~4/3 to ~27MB on the wire; 32MB leaves headroom for
+// the surrounding JSON and message content. Enforced coarsely here; the
+// attachment limits in attachments.ts are the precise, per-kind gate.
+const MAX_BODY = 32 * 1024 * 1024; // 32MB
 const AUTH_HEADER = 'x-verso-sidecar-token';
 // WKWebView serializes the chat page's origin as "file://" because the shell
 // enables allowFileAccessFromFileURLs (see ChatWebView.swift). Deliberately
@@ -182,6 +187,8 @@ function isPublicRoute(method: string, pathname: string): boolean {
   if (method === 'GET' && pathname === '/health') return true;
   if (method === 'GET' && /^\/connections\/requests\/[^/]+\/open$/.test(pathname)) return true;
   if (method === 'GET' && pathname === '/connections/callback') return true;
+  if (method === 'GET' && /^\/connectors\/custom\/[^/]+\/icon$/.test(pathname)) return true;
+  if (method === 'GET' && /^\/connectors\/custom\/[^/]+\/open$/.test(pathname)) return true;
   return false;
 }
 

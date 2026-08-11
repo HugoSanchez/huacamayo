@@ -208,9 +208,16 @@ export class ComposioBridgeService {
 
       const tools = await this.listTools(activeToolkits);
       const schemasBySlug = new Map<string, RemoteBridgeToolSchemaView>();
-      for (const chunk of chunks(tools.map((tool) => tool.slug), 25)) {
-        const schemas = await this.getToolSchemas(chunk);
-        schemas.forEach((schema) => schemasBySlug.set(normalizeToolSlugKey(schema.slug), schema));
+      // A multi-app account materializes ~600 tools (~25 schema chunks).
+      // Fetching them strictly one at a time put whole-manifest refreshes at
+      // ~25 sequential round-trips; a small concurrent window cuts that to a
+      // few while keeping backend load bounded.
+      const slugChunks = chunks(tools.map((tool) => tool.slug), 25);
+      for (const window of chunks(slugChunks, 4)) {
+        const results = await Promise.all(window.map((chunk) => this.getToolSchemas(chunk)));
+        for (const schemas of results) {
+          schemas.forEach((schema) => schemasBySlug.set(normalizeToolSlugKey(schema.slug), schema));
+        }
       }
 
       this.materializedManifestTools.clear();

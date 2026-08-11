@@ -79,8 +79,38 @@ export class ConnectionsService {
     return this.store.path;
   }
 
-  async listConnections(): Promise<ConnectionView[]> {
+  private remoteSyncInFlight: Promise<ConnectionView[]> | null = null;
+
+  /**
+   * With `maxWaitMs`, races the remote sync against the deadline and falls
+   * back to the local cache when the remote is slower — the sync keeps
+   * running in the background and lands in the store for the next fetch.
+   * Only the app's boot fetch uses this; every mutation flow (connect,
+   * disconnect, request polling) calls without it and keeps full-fresh
+   * semantics. An empty cache (first ever run) always waits for the remote.
+   */
+  async listConnections(opts: { maxWaitMs?: number } = {}): Promise<ConnectionView[]> {
+    const sync = this.syncFromRemote();
+    const cached = this.store.listConnections().map(toConnectionView);
+    if (typeof opts.maxWaitMs === 'number' && cached.length > 0) {
+      const fresh = await Promise.race([
+        sync.catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), opts.maxWaitMs)),
+      ]);
+      return fresh ?? cached;
+    }
     try {
+      return await sync;
+    } catch {
+      return this.store.listConnections().map(toConnectionView);
+    }
+  }
+
+  // Shared in-flight sync: a bounded boot fetch and its follow-up full fetch
+  // ride the same remote round-trip instead of issuing two.
+  private syncFromRemote(): Promise<ConnectionView[]> {
+    if (this.remoteSyncInFlight) return this.remoteSyncInFlight;
+    const run = (async () => {
       const remote = await this.bridgeClient.listConnections();
       // Composio's delete is soft + eventually consistent: an account we
       // just disconnected can still come back in the list for a few
@@ -91,9 +121,11 @@ export class ConnectionsService {
       syncRemoteConnectionsIntoStore(this.store, filtered);
       this.notifyConnectionsChanged();
       return mergeConnectionViews(filtered, this.store.listConnections().map(toConnectionView));
-    } catch {
-      return this.store.listConnections().map(toConnectionView);
-    }
+    })();
+    this.remoteSyncInFlight = run.finally(() => {
+      this.remoteSyncInFlight = null;
+    });
+    return this.remoteSyncInFlight;
   }
 
   async listToolkits(opts: { query?: string; cursor?: string; limit?: number } = {}): Promise<{

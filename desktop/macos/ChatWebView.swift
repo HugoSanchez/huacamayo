@@ -271,6 +271,7 @@ struct ChatWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onCatalogStateChange = onCatalogStateChange
+        context.coordinator.onSkillsCatalogStateChange = onSkillsCatalogStateChange
 
         // When sidecar port becomes available, inject it into JS
         if let port = sidecarPort,

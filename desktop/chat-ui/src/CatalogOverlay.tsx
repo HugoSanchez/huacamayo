@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getToolkits } from './chat';
+import { addCustomConnector, getToolkits, openCustomConnectorAuth, resolveSidecarUrl } from './chat';
 import { displayToolkitName } from './display-names';
-import type { ToolkitView } from './types';
+import type { CustomConnectorView, ToolkitView } from './types';
 
 interface Props {
   isOpen: boolean;
   refreshToken: number;
   onClose: () => void;
   onConnect: (toolkit: ToolkitView) => void;
+  onCustomConnectorAdded?: (connector: CustomConnectorView) => void;
 }
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -16,7 +17,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 const SCROLL_THRESHOLD_PX = 240;
 const MIN_SEARCH_CHARS = 3;
 
-export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Props) {
+export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect, onCustomConnectorAdded }: Props) {
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [toolkits, setToolkits] = useState<ToolkitView[]>([]);
@@ -24,6 +25,12 @@ export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Pro
   const [isLoading, setIsLoading] = useState(false);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [customName, setCustomName] = useState('');
+  const [customUrl, setCustomUrl] = useState('');
+  const [customToken, setCustomToken] = useState('');
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customError, setCustomError] = useState<string | null>(null);
 
   const fetchTokenRef = useRef(0);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -108,65 +115,148 @@ export function CatalogOverlay({ isOpen, refreshToken, onClose, onConnect }: Pro
     [fetchMore],
   );
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
+  const submitCustomConnector = () => {
+    if (customBusy) return;
+    setCustomBusy(true);
+    setCustomError(null);
+    void addCustomConnector({
+      name: customName.trim(),
+      url: customUrl.trim(),
+      ...(customToken ? { token: customToken } : {}),
+    })
+      .then((connector) => {
+        onCustomConnectorAdded?.(connector);
+        if (connector.status.state === 'pending_auth') {
+          openCustomConnectorAuth(connector.id);
+        }
+        setCustomName('');
+        setCustomUrl('');
+        setCustomToken('');
+        setShowCustomForm(false);
+      })
+      .catch((err: unknown) => setCustomError(friendlyError(err)))
+      .finally(() => setCustomBusy(false));
+  };
+
   return (
-    <aside className="catalog-overlay" role="dialog" aria-label="Available connections">
-      <header className="catalog-overlay-head">
-        <div className="catalog-overlay-title">Available</div>
-        <button
-          className="catalog-overlay-close"
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
+    <div
+      className="catalog-overlay-backdrop"
+      data-no-window-drag
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <aside className="catalog-overlay" role="dialog" aria-label="Available connections">
+        <header className="catalog-overlay-head">
+          <div className="catalog-overlay-title">Available</div>
+          <button
+            className="catalog-overlay-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path
+                d="M1 1 L9 9 M9 1 L1 9"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </header>
+
+        <div className="catalog-overlay-search">
+          <input
+            type="text"
+            className="catalog-overlay-search-input"
+            placeholder="Search toolkits"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
+          />
+        </div>
+
+        {error && <div className="catalog-overlay-error">{error}</div>}
+
+        <div
+          className="catalog-overlay-list"
+          ref={listRef}
+          onScroll={handleScroll}
         >
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <path
-              d="M1 1 L9 9 M9 1 L1 9"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
-        </button>
-      </header>
-
-      <div className="catalog-overlay-search">
-        <input
-          type="text"
-          className="catalog-overlay-search-input"
-          placeholder="Search toolkits"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          spellCheck={false}
-          autoCorrect="off"
-          autoCapitalize="off"
-        />
-      </div>
-
-      {error && <div className="catalog-overlay-error">{error}</div>}
-
-      <div
-        className="catalog-overlay-list"
-        ref={listRef}
-        onScroll={handleScroll}
-      >
-        {isLoading && toolkits.length === 0 && (
-          <div className="catalog-overlay-empty">Loading…</div>
-        )}
-        {!isLoading && !error && toolkits.length === 0 && (
-          <div className="catalog-overlay-empty">
-            {searchQuery ? `No toolkits matching “${searchQuery}”.` : 'No toolkits available.'}
-          </div>
-        )}
-        {toolkits.map((toolkit) => (
-          <CatalogRow key={toolkit.slug} toolkit={toolkit} onConnect={onConnect} />
-        ))}
-        {canFetchMore && isFetchingMore && (
-          <div className="catalog-overlay-loading-more">Loading more…</div>
-        )}
-      </div>
-    </aside>
+          {isLoading && toolkits.length === 0 && (
+            <div className="catalog-overlay-empty">Loading…</div>
+          )}
+          {!isLoading && !error && toolkits.length === 0 && (
+            <div className="catalog-overlay-empty">
+              {searchQuery ? `No toolkits matching “${searchQuery}”.` : 'No toolkits available.'}
+              <button type="button" className="catalog-overlay-link" onClick={() => setShowCustomForm(true)}>
+                Add a custom connector
+              </button>
+            </div>
+          )}
+          {toolkits.map((toolkit) => (
+            <CatalogRow key={toolkit.slug} toolkit={toolkit} onConnect={onConnect} />
+          ))}
+          {canFetchMore && isFetchingMore && (
+            <div className="catalog-overlay-loading-more">Loading more…</div>
+          )}
+        </div>
+        <footer className="catalog-custom">
+          {!showCustomForm ? (
+            <button type="button" className="catalog-custom-trigger" onClick={() => setShowCustomForm(true)}>
+              Add a custom connector
+            </button>
+          ) : (
+            <div className="catalog-custom-form">
+              <input
+                className="catalog-overlay-search-input"
+                value={customName}
+                onChange={(event) => setCustomName(event.target.value)}
+                placeholder="Name"
+              />
+              <input
+                className="catalog-overlay-search-input"
+                value={customUrl}
+                onChange={(event) => setCustomUrl(event.target.value)}
+                placeholder="https://example.com/mcp"
+                spellCheck={false}
+                autoCapitalize="off"
+              />
+              <input
+                className="catalog-overlay-search-input"
+                value={customToken}
+                onChange={(event) => setCustomToken(event.target.value)}
+                placeholder="API token — leave empty for OAuth or public servers"
+                type="password"
+              />
+              {customError && <div className="catalog-overlay-error">{customError}</div>}
+              <div className="catalog-custom-actions">
+                <button type="button" className="catalog-row-pill is-connected" disabled={customBusy || !customName.trim() || !customUrl.trim()} onClick={submitCustomConnector}>
+                  {customBusy ? 'Connecting…' : 'Connect'}
+                </button>
+                <button type="button" className="catalog-row-pill is-pending" disabled={customBusy} onClick={() => setShowCustomForm(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </footer>
+      </aside>
+    </div>
   );
 }
 
@@ -196,7 +286,7 @@ function CatalogRow({
       {toolkit.logoUrl ? (
         <img
           className="catalog-row-logo"
-          src={toolkit.logoUrl}
+          src={resolveSidecarUrl(toolkit.logoUrl) ?? toolkit.logoUrl}
           alt=""
           aria-hidden="true"
         />

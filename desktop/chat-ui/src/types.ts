@@ -20,13 +20,16 @@ export interface ChatMessage {
   pendingAttachments?: OutgoingAttachment[];
 }
 
-// An image the user attached in the composer, ready to POST. `dataBase64` is
-// the raw base64 payload (no data-URL prefix); the orchestrator re-validates
-// by magic bytes and forwards it to the model on the live request only.
+// A file the user attached in the composer, ready to POST. `dataBase64` is the
+// raw base64 payload (no data-URL prefix); the orchestrator re-validates by
+// magic bytes. Images ride the live request to the model; documents are
+// converted to Markdown server-side. `kind` is a client-side hint for the chip
+// UI only — the server re-derives it from the bytes and ignores this field.
 export interface OutgoingAttachment {
   name: string;
   mimeType: string;
   dataBase64: string;
+  kind: 'image' | 'document';
 }
 
 export interface ChatSessionSummary {
@@ -70,6 +73,22 @@ export interface ConnectionView {
   toolkitName: string;
   logoUrl: string | null;
   status: 'active' | 'inactive';
+}
+
+export interface CustomConnectorView {
+  id: string;
+  name: string;
+  slug: string;
+  url: string;
+  transport: 'http' | 'sse';
+  auth: 'none' | 'bearer' | 'oauth';
+  logoUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  status:
+    | { state: 'connected'; toolCount: number }
+    | { state: 'pending_auth'; toolCount: 0 }
+    | { state: 'failed'; toolCount: 0; reason: string };
 }
 
 export interface ToolkitView {

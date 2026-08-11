@@ -138,8 +138,9 @@
 }
 
 .session-list-item-title {
+  font-family: var(--font-sans);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -166,4 +167,104 @@
   margin-top: 8px;
   color: var(--ink-dim);
   font-size: 11px;
+}
+
+.custom-connector-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.custom-connector-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--session-item-bg);
+}
+
+.custom-connector-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.custom-connector-logo.is-fallback {
+  display: grid;
+  place-items: center;
+  background: var(--button-bg);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.custom-connector-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.custom-connector-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.custom-connector-name > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-connector-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--status-failed);
+  flex-shrink: 0;
+}
+
+.custom-connector-dot.is-connected {
+  background: var(--status-connected);
+}
+
+.custom-connector-dot.is-pending_auth {
+  background: var(--warn-text);
+}
+
+.custom-connector-tag,
+.custom-connector-status {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+.custom-connector-tag {
+  flex-shrink: 0;
+}
+
+.custom-connector-status {
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-connector-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.custom-connector-actions button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: right;
 }

@@ -148,6 +148,37 @@ describe('Draft resolutions', () => {
     });
   });
 
+  it('sends Slack native drafts with markdown_text', async () => {
+    const store = tempStore();
+    const session = store.createSession('Slack draft');
+    const calls: Array<{ slug: string; args: Record<string, unknown> }> = [];
+    const port = await startDraftServer(store, {
+      executeTool: async (slug: string, args: Record<string, unknown>) => {
+        calls.push({ slug, args });
+        return { data: { ok: true }, error: null, logId: null };
+      },
+    });
+
+    const input = { channel: 'slack', to: '#general', body: 'Hello **team**', threadId: '123.456' };
+    const draftId = draftIdForArgs(input);
+    const res = await fetch(`http://127.0.0.1:${port}/drafts/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...input, draftId, sessionId: session.id, wasEdited: false }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([{
+      slug: 'SLACK_SEND_MESSAGE',
+      args: {
+        channel: 'general',
+        markdown_text: 'Hello **team**',
+        thread_ts: '123.456',
+      },
+    }]);
+    expect(calls[0].args).not.toHaveProperty('text');
+  });
+
   it('records native discarded drafts through the drafts API', async () => {
     const store = tempStore();
     const session = store.createSession('Drafts');

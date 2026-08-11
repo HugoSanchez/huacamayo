@@ -1,12 +1,20 @@
-.catalog-overlay {
+.catalog-overlay-backdrop {
   position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+}
+
+.catalog-overlay {
+  position: absolute;
   top: 0;
   left: 0;
   bottom: 0;
   width: 320px;
   display: flex;
   flex-direction: column;
-  z-index: 50;
   background: var(--paper);
   border-right: 1px solid var(--line);
   box-shadow: var(--catalog-shadow);
@@ -144,6 +152,45 @@
   font-size: 12px;
   color: var(--ink-dim);
   padding: 8px 18px;
+}
+
+.catalog-overlay-link,
+.catalog-custom-trigger {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+}
+
+.catalog-overlay-link {
+  display: block;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.catalog-custom {
+  border-top: 1px solid var(--line);
+  padding: 12px 16px 16px;
+}
+
+.catalog-custom-trigger {
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  font-size: 13px;
+}
+
+.catalog-custom-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.catalog-custom-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .catalog-row {
@@ -627,4 +674,3 @@
   text-overflow: ellipsis;
   max-width: 240px;
 }
-

@@ -19,10 +19,15 @@ import {
   getCodexStatus,
   getConnectionRequest,
   getConnections,
+  getCustomConnectors,
   getSidecarPort,
   getToolkits,
   openConnectionRequest,
+  openCustomConnectorAuth,
   openExternalUrl,
+  removeCustomConnector,
+  retryCustomConnector,
+  resolveSidecarUrl,
   setSidecarAuthToken,
   setSidecarPort,
   streamChatMessage,
@@ -38,11 +43,12 @@ import type {
   OutgoingAttachment,
   ConnectionRequestView,
   ConnectionView,
+  CustomConnectorView,
   ReasoningEffort,
   StoredChatMessage,
   ToolkitView,
 } from './types';
-import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS } from './types';
+import { ANTHROPIC_CHAT_MODELS, CHAT_MODEL_LABELS, CODEX_CHAT_MODELS } from './types';
 import type { ShellAction, ShellState } from './shell-protocol';
 import { useBrowserShellHost } from './browser-shell-host';
 
@@ -100,6 +106,7 @@ export function App() {
   const [codexConnected, setCodexConnected] = useState<boolean | null>(null);
   const [anthropicConnected, setAnthropicConnected] = useState<boolean | null>(null);
   const [connections, setConnections] = useState<ConnectionView[]>([]);
+  const [customConnectors, setCustomConnectors] = useState<CustomConnectorView[]>([]);
   // Full toolkit catalog — used by the chat UI to render logos in tool-call
   // rows for toolkits the user may not have connected (or whose connection
   // record lacks a logoUrl). Best-effort: failures here just fall back to the
@@ -129,22 +136,22 @@ export function App() {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('medium');
   // Mirrors the active session's persisted model. A choice made before a
   // session exists is carried into that session when it is created.
-  const [model, setModel] = useState<ChatModel | null>('gpt-5.4');
-  // Models the cycler offers: only those whose provider is connected. While
-  // the Codex status is still unknown (null) we keep the Codex models
-  // visible so the selector renders immediately; Claude models appear only
-  // once the Anthropic key is confirmed.
+  const [model, setModel] = useState<ChatModel | null>(null);
+  // The picker is only for choosing a model for a *new* route, so list models
+  // whose provider has been positively confirmed as connected. A persisted
+  // session model is rendered from `model` separately and is never removed
+  // merely because its provider is currently unavailable.
   const availableModels = useMemo<readonly ChatModel[]>(() => {
     const models: ChatModel[] = [];
-    if (codexConnected !== false) models.push(...CODEX_CHAT_MODELS);
+    if (codexConnected === true) models.push(...CODEX_CHAT_MODELS);
     if (anthropicConnected === true) models.push(...ANTHROPIC_CHAT_MODELS);
-    return models.length > 0 ? models : CODEX_CHAT_MODELS;
+    return models;
   }, [anthropicConnected, codexConnected]);
-  // If the selected model's provider disconnects, snap to the first
-  // available model so we never send an unroutable model string.
-  useEffect(() => {
-    if (model && !availableModels.includes(model)) setModel(availableModels[0]);
-  }, [availableModels, model]);
+  const defaultModel = useMemo<ChatModel | null>(() => {
+    if (codexConnected === true) return CODEX_CHAT_MODELS[0];
+    if (anthropicConnected === true) return ANTHROPIC_CHAT_MODELS[0];
+    return null;
+  }, [anthropicConnected, codexConnected]);
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const sessionIdRef = useRef<string | null>(null);
   // Per-session streams: one stream per session, multiple sessions can stream
@@ -218,6 +225,28 @@ export function App() {
     return true;
   }, []);
 
+  const postCatalogState = useCallback((type: 'catalogStateChanged' | 'skillsCatalogStateChanged', open: boolean) => {
+    if (!isNativeShell) return;
+    window.webkit?.messageHandlers?.chatBridge?.postMessage({ type, open });
+  }, [isNativeShell]);
+
+  const handleCloseCatalog = useCallback(() => {
+    setIsCatalogOpen(false);
+    postCatalogState('catalogStateChanged', false);
+  }, [postCatalogState]);
+
+  const handleCloseSkillsCatalog = useCallback(() => {
+    setIsSkillsCatalogOpen(false);
+    postCatalogState('skillsCatalogStateChanged', false);
+  }, [postCatalogState]);
+
+  const handleCloseCatalogs = useCallback(() => {
+    setIsCatalogOpen(false);
+    setIsSkillsCatalogOpen(false);
+    postCatalogState('catalogStateChanged', false);
+    postCatalogState('skillsCatalogStateChanged', false);
+  }, [postCatalogState]);
+
   const markSessionNotStreaming = useCallback((sessionId: string) => {
     streamingControllersRef.current.delete(sessionId);
     setStreamingSessions((prev) => {
@@ -281,6 +310,14 @@ export function App() {
     if (!selectedSkillSlug && !selectedHubSkillIdentifier) setActiveSkillName(null);
   }, [selectedSkillSlug, selectedHubSkillIdentifier]);
   useEffect(() => { if (!selectedCronId) setActiveCronName(null); }, [selectedCronId]);
+  useEffect(() => {
+    if (selectedSessionId !== null || !defaultModel) return;
+    setModel((current) => {
+      if (!current) return defaultModel;
+      if (defaultModel === CODEX_CHAT_MODELS[0] && current.startsWith('claude-')) return defaultModel;
+      return current;
+    });
+  }, [defaultModel, selectedSessionId]);
 
   // System sleep: tear down anything that would otherwise keep waking the
   // CPU. Connection pollers are cheap to restart by the user (they just
@@ -298,11 +335,12 @@ export function App() {
     };
   }, []);
 
-  const refreshConnections = useCallback(async () => {
+  const refreshConnections = useCallback(async (opts: { fast?: boolean } = {}) => {
     if (!getSidecarPort()) return;
     try {
-      const result = await getConnections();
+      const result = await getConnections(opts);
       setConnections(result.connections);
+      setCustomConnectors(await getCustomConnectors());
     } catch {
       // Ignore best-effort refresh failures.
     }
@@ -489,7 +527,10 @@ export function App() {
       // Session bootstrap is now driven by the shell host (Swift in native,
       // `useBrowserShellHost` in browser) — both fetch and dispatch a
       // `verso:shell-state` snapshot, which the mirror effects pick up.
-      void refreshConnections();
+      // Fast fetch paints from the sidecar's local cache when the remote
+      // sync is slow; the follow-up full fetch rides the same in-flight
+      // sync server-side and converges the UI to fresh data.
+      void refreshConnections({ fast: true }).then(() => refreshConnections());
       void refreshToolkitCatalog();
       void refreshCodexStatus();
       // Re-broadcast so descendants (InputBar etc.) that mount before
@@ -595,15 +636,17 @@ export function App() {
       setSelectedHubSkillIdentifier(null);
       setSelectedCronId(null);
       setIsSettingsOpen(false);
+      handleCloseCatalogs();
     }
     void hydrateSession(next);
-  }, [shellState, hydrateSession]);
+  }, [shellState, hydrateSession, handleCloseCatalogs]);
 
   useEffect(() => {
     const handleCatalogToggle = (event: Event) => {
       const detail = (event as CustomEvent<{ open?: unknown }>).detail;
       const open = typeof detail?.open === 'boolean' ? detail.open : !isCatalogOpen;
       setIsCatalogOpen(open);
+      if (open) setIsSkillsCatalogOpen(false);
     };
 
     window.addEventListener('verso:toggle-catalog', handleCatalogToggle as EventListener);
@@ -617,6 +660,7 @@ export function App() {
       const detail = (event as CustomEvent<{ open?: unknown }>).detail;
       const open = typeof detail?.open === 'boolean' ? detail.open : !isSkillsCatalogOpen;
       setIsSkillsCatalogOpen(open);
+      if (open) setIsCatalogOpen(false);
     };
 
     window.addEventListener('verso:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
@@ -633,14 +677,13 @@ export function App() {
       setSelectedCronId(id);
       setSelectedSkillSlug(null);
       setSelectedHubSkillIdentifier(null);
-      setIsCatalogOpen(false);
-      setIsSkillsCatalogOpen(false);
+      handleCloseCatalogs();
     };
     window.addEventListener('verso:open-cron-detail', handleOpenCron as EventListener);
     return () => {
       window.removeEventListener('verso:open-cron-detail', handleOpenCron as EventListener);
     };
-  }, []);
+  }, [handleCloseCatalogs]);
 
   useEffect(() => {
     const handleOpenSettings = () => {
@@ -648,14 +691,13 @@ export function App() {
       setSelectedCronId(null);
       setSelectedSkillSlug(null);
       setSelectedHubSkillIdentifier(null);
-      setIsCatalogOpen(false);
-      setIsSkillsCatalogOpen(false);
+      handleCloseCatalogs();
     };
     window.addEventListener('verso:open-settings', handleOpenSettings as EventListener);
     return () => {
       window.removeEventListener('verso:open-settings', handleOpenSettings as EventListener);
     };
-  }, []);
+  }, [handleCloseCatalogs]);
 
   // Re-tapping the already-selected session in the native leftbar fires this.
   // Selection doesn't change, so the shell-state mirror effect never runs —
@@ -666,12 +708,13 @@ export function App() {
       setSelectedHubSkillIdentifier(null);
       setSelectedCronId(null);
       setIsSettingsOpen(false);
+      handleCloseCatalogs();
     };
     window.addEventListener('verso:focus-chat', handleFocusChat as EventListener);
     return () => {
       window.removeEventListener('verso:focus-chat', handleFocusChat as EventListener);
     };
-  }, []);
+  }, [handleCloseCatalogs]);
 
   useEffect(() => {
     const handleAttachCron = (event: Event) => {
@@ -692,49 +735,17 @@ export function App() {
     };
   }, [selectedSessionId]);
 
-  const handleCloseCatalog = useCallback(() => {
-    setIsCatalogOpen(false);
-    if (isNativeShell) {
-      window.webkit?.messageHandlers?.chatBridge?.postMessage({
-        type: 'catalogStateChanged',
-        open: false,
-      });
-    }
-  }, [isNativeShell]);
-
-  const handleCloseSkillsCatalog = useCallback(() => {
-    setIsSkillsCatalogOpen(false);
-    if (isNativeShell) {
-      window.webkit?.messageHandlers?.chatBridge?.postMessage({
-        type: 'skillsCatalogStateChanged',
-        open: false,
-      });
-    }
-  }, [isNativeShell]);
-
   const handleSelectSkill = useCallback((slug: string) => {
     setSelectedSkillSlug(slug);
     setSelectedHubSkillIdentifier(null);
-    setIsSkillsCatalogOpen(false);
-    if (isNativeShell) {
-      window.webkit?.messageHandlers?.chatBridge?.postMessage({
-        type: 'skillsCatalogStateChanged',
-        open: false,
-      });
-    }
-  }, [isNativeShell]);
+    handleCloseSkillsCatalog();
+  }, [handleCloseSkillsCatalog]);
 
   const handleSelectHubSkill = useCallback((identifier: string) => {
     setSelectedHubSkillIdentifier(identifier);
     setSelectedSkillSlug(null);
-    setIsSkillsCatalogOpen(false);
-    if (isNativeShell) {
-      window.webkit?.messageHandlers?.chatBridge?.postMessage({
-        type: 'skillsCatalogStateChanged',
-        open: false,
-      });
-    }
-  }, [isNativeShell]);
+    handleCloseSkillsCatalog();
+  }, [handleCloseSkillsCatalog]);
 
   const bumpCatalogRefresh = useCallback(() => {
     setCatalogRefreshToken((value) => value + 1);
@@ -803,9 +814,9 @@ export function App() {
     // default — that's the whole "name this chat after the first response"
     // feature. The leftbar will briefly show 'New chat' during streaming and
     // then refresh to the AI-generated title once the stream completes.
-    const session = normalizeSession(await createChatSession(undefined, model ?? undefined));
+    const session = normalizeSession(await createChatSession(undefined, model ?? defaultModel ?? undefined));
     return adoptSession(session, true);
-  }, [adoptSession, model]);
+  }, [adoptSession, defaultModel, model]);
 
   const handleNewChat = useCallback(() => {
     // Per-session streams: a new chat creates a fresh session, so it can't
@@ -816,13 +827,15 @@ export function App() {
 
     void (async () => {
       try {
-        const session = normalizeSession(await createChatSession(undefined, model ?? undefined));
+        // A new chat does not inherit the active chat's model. In particular,
+        // an old session may display a provider that is no longer connected.
+        const session = normalizeSession(await createChatSession(undefined, defaultModel ?? undefined));
         adoptSession(session, false);
       } catch (error: unknown) {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, connected, isHydratingSession, model]);
+  }, [adoptSession, connected, defaultModel, isHydratingSession]);
 
   const handleModelChange = useCallback((nextModel: ChatModel) => {
     setModel(nextModel);
@@ -894,6 +907,24 @@ export function App() {
           message.id === assistantId ? { ...message, sessionId } : message,
         ));
 
+        let pendingEvents: ChatSSEEvent[] = [];
+        let flushScheduled = false;
+        const flushEvents = () => {
+          flushScheduled = false;
+          if (pendingEvents.length === 0) return;
+          const events = pendingEvents;
+          pendingEvents = [];
+          updateSessionMessages(sessionId, (prev) => prev.map((message) => {
+            if (message.id !== assistantId) return message;
+            return events.reduce((next, event) => applySSEEvent(next, event), message);
+          }));
+        };
+        const scheduleFlush = () => {
+          if (flushScheduled) return;
+          flushScheduled = true;
+          window.requestAnimationFrame(flushEvents);
+        };
+
         const abort = streamChatMessage(
           sessionId,
           text,
@@ -902,6 +933,7 @@ export function App() {
             // assistant placeholder for a Codex connect widget instead of
             // letting applySSEEvent surface the raw CLI-flavoured error.
             if (event.type === 'error' && typeof event.message === 'string' && isCodexAuthError(event.message)) {
+              flushEvents();
               updateSessionMessages(sessionId, (prev) => prev.map((message) =>
                 message.id === assistantId
                   ? {
@@ -921,12 +953,11 @@ export function App() {
               return;
             }
 
-            updateSessionMessages(sessionId, (prev) => prev.map((message) => {
-              if (message.id !== assistantId) return message;
-              return applySSEEvent(message, event);
-            }));
+            pendingEvents.push(event);
+            scheduleFlush();
           },
           () => {
+            flushEvents();
             updateSessionMessages(sessionId, (prev) => prev.map((message) =>
               message.id === assistantId ? { ...message, isStreaming: false, endedAt: Date.now() } : message,
             ));
@@ -973,7 +1004,7 @@ export function App() {
             postShellAction({ kind: 'session-mutated', id: sessionId });
             notifyNativeResponseReady(isNativeShell);
           },
-          { attached, attachments, reasoningEffort, model },
+          { attached, attachments, reasoningEffort, model: model ?? defaultModel },
         );
 
         // Register the stream now that we have both the sessionId and the
@@ -1011,13 +1042,24 @@ export function App() {
         }
       }
     })();
-  }, [ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, model, reasoningEffort, updateSessionMessages]);
+  }, [defaultModel, ensureSession, isNativeShell, markSessionNotStreaming, markSessionStreaming, model, reasoningEffort, updateSessionMessages]);
 
   const handleSend = useCallback((text: string, attached: AttachedContext | null = null, attachments: OutgoingAttachment[] = []) => {
     const hasContent = text.trim().length > 0 || attached?.kind === 'cron' || attachments.length > 0;
     if (!hasContent || !connected) return;
-    if (!model) {
+    const selectedModel = model ?? defaultModel;
+    if (!selectedModel) {
       setSessionError('Choose a model for this conversation before sending.');
+      return;
+    }
+    if (!model) {
+      setModel(selectedModel);
+    }
+    const providerUnavailable = selectedModel.startsWith('claude-')
+      ? anthropicConnected === false
+      : codexConnected === false;
+    if (providerUnavailable) {
+      setSessionError(`${CHAT_MODEL_LABELS[selectedModel]} is not currently connected. Choose an available model before sending.`);
       return;
     }
 
@@ -1033,7 +1075,9 @@ export function App() {
     // Mirror the orchestrator's stored form (`appendAttachmentMarkers`) so the
     // optimistic message matches what a reload hydrates from the store.
     if (attachments.length > 0) {
-      const markers = attachments.map((a) => `[attached image: ${a.name}]`).join('\n');
+      const markers = attachments
+        .map((a) => (a.kind === 'document' ? `[attached document: ${a.name}]` : `[attached image: ${a.name}]`))
+        .join('\n');
       displayText = displayText ? `${displayText}\n\n${markers}` : markers;
     }
 
@@ -1070,7 +1114,7 @@ export function App() {
 
     updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, assistantMsg]);
     streamInto(assistantMsg.id, text, attached, attachments);
-  }, [anthropicConnected, codexConnected, connected, model, streamInto, streamingSessions, updateSessionMessages]);
+  }, [anthropicConnected, codexConnected, connected, defaultModel, model, streamInto, streamingSessions, updateSessionMessages]);
 
   const handleCodexConnected = useCallback((widgetId: string) => {
     setCodexConnected(true);
@@ -1120,16 +1164,24 @@ export function App() {
     });
     persistSelectedSessionId(null);
     handleCloseSkillsCatalog();
+    const selectedAvailableModel = model && availableModels.includes(model) ? model : defaultModel;
     void (async () => {
       try {
-        const session = normalizeSession(await createChatSession(slug.replace(/-/g, ' '), model ?? undefined));
+        const session = normalizeSession(await createChatSession(
+          slug.replace(/-/g, ' '),
+          selectedAvailableModel ?? undefined,
+        ));
         adoptSession(session, false);
-        handleSend(`/${slug}`);
+        if (selectedAvailableModel) {
+          handleSend(`/${slug}`);
+        } else {
+          setSessionError('Choose an available model before starting this skill conversation.');
+        }
       } catch (error: unknown) {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, connected, handleCloseSkillsCatalog, handleSend, isHydratingSession, model, persistSelectedSessionId]);
+  }, [adoptSession, availableModels, connected, defaultModel, handleCloseSkillsCatalog, handleSend, isHydratingSession, model, persistSelectedSessionId]);
 
   const handleStop = useCallback(() => {
     // Per-session streams: the Stop button is in the InputBar of the
@@ -1286,6 +1338,10 @@ export function App() {
       refreshToken={catalogRefreshToken}
       onClose={handleCloseCatalog}
       onConnect={handleConnectToolkit}
+      onCustomConnectorAdded={() => {
+        void refreshConnections();
+        bumpCatalogRefresh();
+      }}
     />
   );
 
@@ -1351,6 +1407,19 @@ export function App() {
             emptyText="No archived sessions."
           />
         )}
+
+        <CustomConnectorSection
+          connectors={customConnectors}
+          onRetry={(id) => {
+            void retryCustomConnector(id).then((connector) => {
+              if (connector.status.state === 'pending_auth') openCustomConnectorAuth(connector.id);
+              return refreshConnections();
+            });
+          }}
+          onRemove={(id) => {
+            void removeCustomConnector(id).then(() => refreshConnections());
+          }}
+        />
       </aside>
 
       {mainPanel}
@@ -1421,6 +1490,58 @@ function SessionSection({
       )}
     </section>
   );
+}
+
+function CustomConnectorSection({
+  connectors,
+  onRetry,
+  onRemove,
+}: {
+  connectors: CustomConnectorView[];
+  onRetry: (id: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  if (connectors.length === 0) return null;
+  return (
+    <section className="session-section">
+      <div className="session-section-title">Custom</div>
+      <div className="custom-connector-list">
+        {connectors.map((connector) => (
+          <div className="custom-connector-row" key={connector.id}>
+            {connector.logoUrl ? (
+              <img className="custom-connector-logo" src={resolveSidecarUrl(connector.logoUrl) ?? connector.logoUrl} alt="" aria-hidden="true" />
+            ) : (
+              <span className="custom-connector-logo is-fallback" aria-hidden="true">
+                {connector.name.charAt(0).toUpperCase()}
+              </span>
+            )}
+            <div className="custom-connector-main">
+              <div className="custom-connector-name">
+                <span className={`custom-connector-dot is-${connector.status.state}`} />
+                <span>{connector.name}</span>
+                <span className="custom-connector-tag">custom</span>
+              </div>
+              <div className="custom-connector-status">{customConnectorStatusText(connector)}</div>
+            </div>
+            <div className="custom-connector-actions">
+              <button type="button" onClick={() => onRetry(connector.id)} aria-label={`Re-authenticate ${connector.name}`}>
+                Retry
+              </button>
+              <button type="button" onClick={() => onRemove(connector.id)} aria-label={`Remove ${connector.name}`}>
+                Remove
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function customConnectorStatusText(connector: CustomConnectorView): string {
+  if (connector.status.state === 'connected') return `${connector.status.toolCount} tools`;
+  if (connector.status.state === 'pending_auth') return 'Waiting for sign-in';
+  return connector.status.reason;
 }
 
 function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
