@@ -19,7 +19,12 @@ interface CodexStatus {
   count: number;
 }
 
+const CODEX_STATUS_FRESH_MS = 15_000;
+
 export class CodexAuthService {
+  private statusCache: { status: CodexStatus; at: number } | null = null;
+  private statusInFlight: Promise<CodexStatus> | null = null;
+
   constructor(private readonly hermes: HermesSupervisor) {}
 
   private resolveInvocation(args: readonly string[]): {
@@ -57,20 +62,40 @@ export class CodexAuthService {
   }
 
   async getStatus(): Promise<CodexStatus> {
-    const invocation = this.resolveInvocation(['auth', 'list', PROVIDER]);
-    try {
-      const { stdout } = await execFile(invocation.command, invocation.args, {
-        env: invocation.env,
-        cwd: invocation.cwd ?? undefined,
-        timeout: 10_000,
-      });
-      const stripped = stdout.replace(ANSI_PATTERN, '');
-      const match = stripped.match(/\((\d+)\s+credentials?\)/);
-      const count = match ? parseInt(match[1], 10) : 0;
-      return { connected: count > 0, count };
-    } catch {
-      return { connected: false, count: 0 };
+    const cached = this.statusCache;
+    if (cached) {
+      if (Date.now() - cached.at > CODEX_STATUS_FRESH_MS) {
+        void this.fetchStatus().catch(() => undefined);
+      }
+      return cached.status;
     }
+    return this.fetchStatus();
+  }
+
+  private fetchStatus(): Promise<CodexStatus> {
+    if (this.statusInFlight) return this.statusInFlight;
+    this.statusInFlight = (async () => {
+      let status: CodexStatus;
+      try {
+        const invocation = this.resolveInvocation(['auth', 'list', PROVIDER]);
+        const { stdout } = await execFile(invocation.command, invocation.args, {
+          env: invocation.env,
+          cwd: invocation.cwd ?? undefined,
+          timeout: 10_000,
+        });
+        const stripped = stdout.replace(ANSI_PATTERN, '');
+        const match = stripped.match(/\((\d+)\s+credentials?\)/);
+        const count = match ? parseInt(match[1], 10) : 0;
+        status = { connected: count > 0, count };
+      } catch {
+        status = { connected: false, count: 0 };
+      }
+      this.statusCache = { status, at: Date.now() };
+      return status;
+    })().finally(() => {
+      this.statusInFlight = null;
+    });
+    return this.statusInFlight;
   }
 
   // Repeatedly remove credential #1 until the pool is empty. Cheaper than
@@ -79,7 +104,7 @@ export class CodexAuthService {
   async disconnect(): Promise<{ removed: number }> {
     let removed = 0;
     for (let i = 0; i < 20; i++) {
-      const status = await this.getStatus();
+      const status = await this.fetchStatus();
       if (status.count === 0) break;
       const invocation = this.resolveInvocation(['auth', 'remove', PROVIDER, '1']);
       try {
@@ -93,6 +118,7 @@ export class CodexAuthService {
         break;
       }
     }
+    this.statusCache = null;
     return { removed };
   }
 
@@ -194,6 +220,7 @@ export class CodexAuthService {
         await applyCodexModelConfig(this.hermes).catch((err) => {
           console.error('[codex-auth] post-auth config update failed:', err instanceof Error ? err.message : err);
         });
+        this.statusCache = null;
         sendEvent(res, { type: 'connected' });
       } else {
         const message = errorMessage

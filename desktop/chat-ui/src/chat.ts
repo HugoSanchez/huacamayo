@@ -217,12 +217,13 @@ export async function getChatStatus(): Promise<{
   return res.json();
 }
 
-export async function getConnections(): Promise<{
+export async function getConnections(opts: { fast?: boolean } = {}): Promise<{
   available: boolean;
   configured: boolean;
   connections: ConnectionView[];
 }> {
-  const res = await sidecarFetch(`${baseURL()}/connections`);
+  const url = opts.fast ? `${baseURL()}/connections?wait=1200` : `${baseURL()}/connections`;
+  const res = await sidecarFetch(url);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load connections'));
   }

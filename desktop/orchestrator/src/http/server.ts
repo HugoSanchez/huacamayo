@@ -249,6 +249,9 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
       const baseUrl = `http://127.0.0.1:${addr.port}`;
       hermes.setOrchestratorBaseUrl(baseUrl);
       hermes.prepare();
+      // Prime the auth-status cache without making the ready signal wait for
+      // the bundled Hermes CLI's cold start.
+      void codexAuth.getStatus().catch(() => undefined);
       // Open the memory store first so its instance token is available: if the
       // store was recreated since the last run, rebuild the ingested corpus
       // (re-seed cursors + clear the dedup ledger) before ingestion ticks, so a

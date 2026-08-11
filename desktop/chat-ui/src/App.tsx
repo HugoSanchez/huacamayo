@@ -298,10 +298,10 @@ export function App() {
     };
   }, []);
 
-  const refreshConnections = useCallback(async () => {
+  const refreshConnections = useCallback(async (opts: { fast?: boolean } = {}) => {
     if (!getSidecarPort()) return;
     try {
-      const result = await getConnections();
+      const result = await getConnections(opts);
       setConnections(result.connections);
     } catch {
       // Ignore best-effort refresh failures.
@@ -489,7 +489,7 @@ export function App() {
       // Session bootstrap is now driven by the shell host (Swift in native,
       // `useBrowserShellHost` in browser) — both fetch and dispatch a
       // `verso:shell-state` snapshot, which the mirror effects pick up.
-      void refreshConnections();
+      void refreshConnections({ fast: true }).then(() => refreshConnections());
       void refreshToolkitCatalog();
       void refreshCodexStatus();
       // Re-broadcast so descendants (InputBar etc.) that mount before

@@ -79,8 +79,33 @@ export class ConnectionsService {
     return this.store.path;
   }
 
-  async listConnections(): Promise<ConnectionView[]> {
+  private remoteSyncInFlight: Promise<ConnectionView[]> | null = null;
+
+  /**
+   * With `maxWaitMs`, races the remote sync against the deadline and falls
+   * back to the local cache when the remote is slower. The sync continues in
+   * the background and updates the store for the next fetch.
+   */
+  async listConnections(opts: { maxWaitMs?: number } = {}): Promise<ConnectionView[]> {
+    const sync = this.syncFromRemote();
+    const cached = this.store.listConnections().map(toConnectionView);
+    if (typeof opts.maxWaitMs === 'number' && cached.length > 0) {
+      const fresh = await Promise.race([
+        sync.catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), opts.maxWaitMs)),
+      ]);
+      return fresh ?? cached;
+    }
     try {
+      return await sync;
+    } catch {
+      return this.store.listConnections().map(toConnectionView);
+    }
+  }
+
+  private syncFromRemote(): Promise<ConnectionView[]> {
+    if (this.remoteSyncInFlight) return this.remoteSyncInFlight;
+    const run = (async () => {
       const remote = await this.bridgeClient.listConnections();
       // Composio's delete is soft + eventually consistent: an account we
       // just disconnected can still come back in the list for a few
@@ -91,9 +116,11 @@ export class ConnectionsService {
       syncRemoteConnectionsIntoStore(this.store, filtered);
       this.notifyConnectionsChanged();
       return mergeConnectionViews(filtered, this.store.listConnections().map(toConnectionView));
-    } catch {
-      return this.store.listConnections().map(toConnectionView);
-    }
+    })();
+    this.remoteSyncInFlight = run.finally(() => {
+      this.remoteSyncInFlight = null;
+    });
+    return this.remoteSyncInFlight;
   }
 
   async listToolkits(opts: { query?: string; cursor?: string; limit?: number } = {}): Promise<{
