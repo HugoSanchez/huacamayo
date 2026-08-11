@@ -30,7 +30,7 @@
   font-size: 14px;
   line-height: 1.5;
   resize: none;
-  /* Match the assistant message body (IBM Plex Sans) rather than the mono. */
+  /* Match the assistant message body. */
   font-family: var(--font-sans);
   max-height: 160px;
   min-height: 48px;
@@ -71,12 +71,7 @@
   opacity: 0.3;
 }
 
-/* Footer model / reasoning-effort cycle buttons (was footerCycleStyle in
-   InputBar.tsx). Disabled state driven by the button's own :disabled. */
-/* Footer model / effort cyclers — text-style affordances (mockup `.picker`):
-   no pill background or border. Model reads in green (mockup `.model-trigger`);
-   effort reads ink-dim and lifts to ink on hover. Glyphs inherit currentColor
-   so the spark/effort bars pick up the same tint. */
+/* Footer model / effort cyclers — text-style affordances. */
 .footer-cycle-button {
   display: flex;
   align-items: center;
@@ -93,35 +88,31 @@
   transition: color 120ms ease;
 }
 
+.footer-cycle-button:hover:not(:disabled) {
+  color: var(--ink);
+}
+
 .footer-cycle-button:disabled {
   cursor: not-allowed;
   opacity: 0.4;
 }
 
-.footer-model-button {
-  color: var(--green);
+.model-provider-logo {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex: 0 0 auto;
 }
 
-.footer-effort-button:hover:not(:disabled) {
-  color: var(--ink);
+.model-provider-logo-claude {
+  width: 15px;
+  height: 15px;
 }
 
-/* "↵ return to send" hint sitting beside the send control (mockup `.send`). */
 .composer-send-group {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.composer-send-hint {
-  font-size: 13px;
-  color: var(--ink-dim);
-  white-space: nowrap;
-}
-
-.composer-send-hint b {
-  color: var(--ink-2);
-  font-weight: 500;
 }
 
 .input-send-button.is-active {
@@ -281,9 +272,19 @@
   font-family: var(--font-ui);
   font-size: 12px;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 14px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.model-menu-logo-slot {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  color: currentColor;
 }
 
 .model-menu-row:hover:not(:disabled) {

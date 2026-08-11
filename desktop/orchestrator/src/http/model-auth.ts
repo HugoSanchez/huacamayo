@@ -19,9 +19,16 @@ interface CodexStatus {
   count: number;
 }
 
+// How long a cached Codex status is served without kicking a background
+// re-check. Status changes only through this service's own login/disconnect
+// flows (which invalidate the cache), so staleness only matters for out-of-
+// band `hermes auth` edits — those converge after one stale serve.
 const CODEX_STATUS_FRESH_MS = 15_000;
 
 export class CodexAuthService {
+  // The uncached path spawns the bundled-Python Hermes CLI (~1-3s cold
+  // start). Without a cache that spawn sat on every app load and on every
+  // new chat's default-model lookup.
   private statusCache: { status: CodexStatus; at: number } | null = null;
   private statusInFlight: Promise<CodexStatus> | null = null;
 
@@ -64,6 +71,8 @@ export class CodexAuthService {
   async getStatus(): Promise<CodexStatus> {
     const cached = this.statusCache;
     if (cached) {
+      // Stale-while-revalidate: serve instantly, re-check in the background
+      // once the fresh window lapses. Login/disconnect invalidate directly.
       if (Date.now() - cached.at > CODEX_STATUS_FRESH_MS) {
         void this.fetchStatus().catch(() => undefined);
       }
@@ -104,6 +113,7 @@ export class CodexAuthService {
   async disconnect(): Promise<{ removed: number }> {
     let removed = 0;
     for (let i = 0; i < 20; i++) {
+      // Mutation loop needs live reads — bypass the status cache.
       const status = await this.fetchStatus();
       if (status.count === 0) break;
       const invocation = this.resolveInvocation(['auth', 'remove', PROVIDER, '1']);
@@ -118,7 +128,6 @@ export class CodexAuthService {
         break;
       }
     }
-    this.statusCache = null;
     return { removed };
   }
 
@@ -220,6 +229,8 @@ export class CodexAuthService {
         await applyCodexModelConfig(this.hermes).catch((err) => {
           console.error('[codex-auth] post-auth config update failed:', err instanceof Error ? err.message : err);
         });
+        // Credentials just changed on disk — drop the cached status so the
+        // UI's follow-up status fetch reflects the new connection.
         this.statusCache = null;
         sendEvent(res, { type: 'connected' });
       } else {

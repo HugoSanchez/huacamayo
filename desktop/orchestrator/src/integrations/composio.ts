@@ -83,8 +83,11 @@ export class ConnectionsService {
 
   /**
    * With `maxWaitMs`, races the remote sync against the deadline and falls
-   * back to the local cache when the remote is slower. The sync continues in
-   * the background and updates the store for the next fetch.
+   * back to the local cache when the remote is slower — the sync keeps
+   * running in the background and lands in the store for the next fetch.
+   * Only the app's boot fetch uses this; every mutation flow (connect,
+   * disconnect, request polling) calls without it and keeps full-fresh
+   * semantics. An empty cache (first ever run) always waits for the remote.
    */
   async listConnections(opts: { maxWaitMs?: number } = {}): Promise<ConnectionView[]> {
     const sync = this.syncFromRemote();
@@ -103,6 +106,8 @@ export class ConnectionsService {
     }
   }
 
+  // Shared in-flight sync: a bounded boot fetch and its follow-up full fetch
+  // ride the same remote round-trip instead of issuing two.
   private syncFromRemote(): Promise<ConnectionView[]> {
     if (this.remoteSyncInFlight) return this.remoteSyncInFlight;
     const run = (async () => {

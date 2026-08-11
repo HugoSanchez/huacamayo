@@ -20,6 +20,10 @@ const MEMORY_SOUL_SECTION = [
   '- When the user asks you to remember something, or you learn a durable fact, preference, decision, or commitment worth keeping, save it with write_memory_page. Search first and update the existing page rather than creating a near-duplicate. Confirm briefly when the user explicitly asked ("Saved.").',
   '- Read full entries with get_memory_page (works on page slugs and doc:<id> results).',
   '- When memory informs an answer, weave it in naturally and cite the source where useful. If a search returns nothing relevant, proceed normally without mentioning it.',
+  '',
+  '## Connected apps',
+  '',
+  'The user can connect hosted custom MCP servers in addition to built-in connected apps. Custom tools are discovered through tool_search and have names beginning with mcp__custom_ or mcp_custom_. Before using any custom connector tool that sends, posts, emails, messages, comments, publishes, invites, deletes, or otherwise mutates external state, first call propose_message_draft so the user can review the exact action.',
 ].join('\n');
 
 /**

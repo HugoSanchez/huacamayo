@@ -139,6 +139,16 @@ describe('computePinnedToolNames', () => {
     expect(pinned).not.toContain('mcp_verso_gmail_delete_draft');
   });
 
+  it('seeds Google Docs with document creation instead of read-only search', () => {
+    writeManifest([
+      { nativeName: 'googledocs_search_documents', toolSlug: 'GOOGLEDOCS_SEARCH_DOCUMENTS', toolkitSlug: 'googledocs', origin: 'toolkit' },
+      { nativeName: 'googledocs_create_document_markdown', toolSlug: 'GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN', toolkitSlug: 'googledocs', origin: 'toolkit' },
+    ]);
+    const pinned = computePinnedToolNames(manifestPath, { includeMemoryTools: false });
+    expect(pinned).toContain('mcp_verso_googledocs_create_document_markdown');
+    expect(pinned).not.toContain('mcp_verso_googledocs_search_documents');
+  });
+
   it('does not seed a toolkit already covered by a usage pin', () => {
     writeManifest([
       { nativeName: 'slack_search_all', toolSlug: 'SLACK_SEARCH_ALL', toolkitSlug: 'slack', origin: 'usage' },

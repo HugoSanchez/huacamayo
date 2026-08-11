@@ -5,6 +5,9 @@ import { ConnectionsService, HttpError } from '../integrations/composio.ts';
 export function buildConnectionsRoutes(connections: ConnectionsService): Route[] {
   return [
     route('GET', '/connections', async (_req, res, params) => {
+      // `wait` (ms, capped) bounds how long we hold the response for the
+      // remote sync before serving the local cache; the boot fetch uses it
+      // so first paint never waits on a slow Composio round-trip.
       const rawWait = typeof params.wait === 'string' ? Number.parseInt(params.wait, 10) : Number.NaN;
       const maxWaitMs = Number.isFinite(rawWait) && rawWait > 0 ? Math.min(rawWait, 5_000) : undefined;
       const items = await connections.listConnections(maxWaitMs === undefined ? {} : { maxWaitMs });

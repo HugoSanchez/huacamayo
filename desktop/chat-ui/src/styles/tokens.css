@@ -1,10 +1,8 @@
 :root {
-  /* ---- Fonts (bundled in Phase 2 via fonts.css) ----
-     Two canonical families: --font-ui (JetBrains Mono) drives the whole UI and
-     all code; --font-sans (IBM Plex Sans) is assistant reply prose only. Phase 6
-     collapsed the retired per-rule mono aliases (--font-mono-code / -ui-label /
-     -mono-step / -mono-codex) onto --font-ui — they all held the same stack. */
-  --font-ui: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* ---- Fonts (bundled via fonts.css) ----
+     IBM Plex Sans drives the whole UI. JetBrains Mono remains bundled but unused
+     so the previous look can be restored without re-adding assets. */
+  --font-ui: 'IBM Plex Sans', ui-sans-serif, -apple-system, sans-serif;
   --font-sans: 'IBM Plex Sans', ui-sans-serif, -apple-system, sans-serif;
 
   /* ---- Semantic core (dark defaults; light overrides in the light block) ---- */

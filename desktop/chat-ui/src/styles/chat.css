@@ -158,7 +158,7 @@
 
 .tool-step-preview {
   color: var(--ink-2);
-  font-family: var(--font-mono-step);
+  font-family: var(--font-ui);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -183,7 +183,7 @@
 
 .tool-step-payload {
   position: relative;
-  font-family: var(--font-mono-step);
+  font-family: var(--font-ui);
   font-size: 12px;
   background: var(--payload-bg);
   border: 1px solid var(--line-soft);
@@ -202,7 +202,7 @@
   position: absolute;
   top: 6px;
   left: 10px;
-  font-family: var(--font-ui-label);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -347,7 +347,7 @@
 }
 
 .message-content code {
-  font-family: var(--font-mono-code);
+  font-family: var(--font-ui);
   font-size: 0.9em;
   background: var(--code-inline-bg);
   padding: 0.15em 0.35em;
@@ -459,11 +459,10 @@
 /* ============================================================================
    Assistant reply prose — the signature editorial move. Assistant markdown
    (final answer + interim text steps, both `.message-content.assistant-message-content`)
-   switches from mono to IBM Plex Sans at 15px/1.55. Scoped to the compound
-   class so it never touches reasoning (`.reasoning-markdown`), which stays
-   mono. Follows the mockup `.reply` rules.
-   Inline code and code blocks INSIDE replies keep JetBrains Mono via the base
-   `.message-content code` rule (mono) and the pre-code override below.
+   uses IBM Plex Sans at 15px/1.55. Scoped to the compound class so it never
+   touches reasoning (`.reasoning-markdown`). Follows the mockup `.reply` rules.
+   Inline code and code blocks INSIDE replies use the same IBM Plex Sans token
+   as the rest of Verso.
    ========================================================================== */
 .message-content.assistant-message-content {
   font-family: var(--font-sans);
@@ -549,8 +548,7 @@
 }
 
 /* Code blocks inside replies take the mockup `.block` look: paper-2 fill, a
-   soft hairline, radius 10, generous padding — while the JetBrains Mono glyphs
-   and hljs syntax colors are untouched. */
+   soft hairline, radius 10, generous padding, with hljs syntax colors intact. */
 .message-content.assistant-message-content pre {
   margin: 6px 0 20px;
   background: var(--paper-2);

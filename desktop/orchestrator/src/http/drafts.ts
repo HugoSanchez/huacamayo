@@ -42,7 +42,7 @@ const NATIVE_DISPATCH: Record<string, { slug: string; buildArgs: (p: DraftPayloa
     buildArgs: (p) => {
       const args: Record<string, unknown> = {
         channel: p.to.replace(/^#/, ''),
-        text: p.body,
+        markdown_text: p.body,
       };
       if (p.threadId) args.thread_ts = p.threadId;
       return args;

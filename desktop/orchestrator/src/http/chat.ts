@@ -14,7 +14,7 @@ import {
   readHermesChatMessages,
   readHermesSessionModelFromHomes,
 } from './hermes-history.ts';
-import { DEFAULT_CHAT_MODEL, VALID_CHAT_MODELS, type ChatModel } from './model-catalog.ts';
+import { VALID_CHAT_MODELS, type ChatModel } from './model-catalog.ts';
 import {
   buildSkillInvocationPrompt,
   extractSlashSkillRequest,
@@ -27,6 +27,10 @@ import {
   parseChatAttachments,
   type ChatAttachment,
 } from './attachments.ts';
+import {
+  buildDocumentContextBlock,
+  convertDocumentToMarkdown,
+} from './document-conversion.ts';
 import { type MemoryExtractionScheduler } from './memory-extraction.ts';
 import { ManagedBackendClient } from '../integrations/managed-backend-client.ts';
 
@@ -65,6 +69,7 @@ export function buildChatRoutes(
   hermes: HermesSupervisor,
   managedBackend: ManagedBackendClient,
   memoryExtraction?: MemoryExtractionScheduler,
+  defaultModelForNewSession?: () => Promise<ChatModel | null>,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
@@ -99,7 +104,10 @@ export function buildChatRoutes(
       if (hasModelField(body) && !requestedModel) {
         return json(res, 400, { error: 'bad_request', message: 'Invalid "model"' });
       }
-      const session = store.createSession(title, requestedModel ?? DEFAULT_CHAT_MODEL);
+      const defaultModel = requestedModel
+        ? null
+        : await defaultModelForNewSession?.().catch(() => null);
+      const session = store.createSession(title, requestedModel ?? defaultModel ?? undefined);
       managedBackend.recordAnalyticsEvent({ eventType: 'session_created', sessionId: session.id });
       json(res, 201, { session });
     }),
@@ -230,6 +238,19 @@ export function buildChatRoutes(
         });
       }
 
+      // Convert any document attachments to Markdown locally before we open the
+      // SSE stream, so a conversion failure surfaces as a clean 400 instead of
+      // a mid-stream error. Images need no conversion — they ride the wire.
+      let documentContext: string;
+      try {
+        documentContext = await buildDocumentContext(attachments);
+      } catch (error: unknown) {
+        const message = error instanceof AttachmentValidationError
+          ? error.message
+          : 'Could not read an attached document';
+        return json(res, 400, { error: 'bad_request', message });
+      }
+
       const priorMessageCount = store.getMessages(params.id)?.length ?? 0;
       const isFirstUserMessage = priorMessageCount === 0;
 
@@ -252,8 +273,14 @@ export function buildChatRoutes(
       }
       // Markers ride inside the prompt text (and thus Hermes' own transcript
       // and any history rebuild); the actual image bytes only travel on the
-      // live request as `input_image` parts.
+      // live request as `input_image` parts. Converted document Markdown is
+      // injected here too, as a delimited block per document — never stored.
       promptForHermes = appendAttachmentMarkers(promptForHermes, attachments);
+      if (documentContext) {
+        promptForHermes = promptForHermes
+          ? `${promptForHermes}\n\n${documentContext}`
+          : documentContext;
+      }
 
       const session = hydrateSessionSummary(record, store);
 
@@ -328,6 +355,19 @@ export function buildChatDiagnostics(
     storePath: store.path,
     ...(memoryExtraction ? { memoryExtraction: memoryExtraction.diagnostics() } : {}),
   };
+}
+
+// Convert every document attachment to Markdown and wrap each in a delimited,
+// named block. Throws AttachmentValidationError (→ 400) if any document can't
+// be read. Images are skipped — they reach the model as `input_image` parts.
+async function buildDocumentContext(attachments: ChatAttachment[]): Promise<string> {
+  const blocks: string[] = [];
+  for (const attachment of attachments) {
+    if (attachment.kind !== 'document') continue;
+    const markdown = await convertDocumentToMarkdown(attachment.dataBase64);
+    blocks.push(buildDocumentContextBlock(attachment.name, markdown));
+  }
+  return blocks.join('\n\n');
 }
 
 type AttachedContext = { kind: 'cron'; id: string };
@@ -845,15 +885,18 @@ function buildHermesRequestBody(
   model: ChatModel | null = null,
   attachments: ChatAttachment[] = [],
 ): Record<string, unknown> {
-  // With image attachments, `input` switches from a plain string to the
-  // Responses message-array shape the gateway also accepts. Images travel as
-  // base64 data URLs; the gateway validates and forwards them to the model.
-  const input = attachments.length > 0
+  // Only images become multimodal parts. Documents were already converted to
+  // Markdown and injected into `userPrompt`, so a document-only message keeps a
+  // plain string `input`. With images, `input` switches to the Responses
+  // message-array shape the gateway also accepts: images travel as base64 data
+  // URLs; the gateway validates and forwards them to the model.
+  const imageAttachments = attachments.filter((attachment) => attachment.kind === 'image');
+  const input = imageAttachments.length > 0
     ? [{
         role: 'user',
         content: [
           ...(userPrompt ? [{ type: 'input_text', text: userPrompt }] : []),
-          ...attachments.map((attachment) => ({
+          ...imageAttachments.map((attachment) => ({
             type: 'input_image',
             image_url: `data:${attachment.mimeType};base64,${attachment.dataBase64}`,
           })),

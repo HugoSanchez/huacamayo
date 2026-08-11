@@ -13,8 +13,3 @@ export const ANTHROPIC_CHAT_MODELS = ['claude-opus-4-8', 'claude-fable-5', 'clau
 export const VALID_CHAT_MODELS = [...CODEX_CHAT_MODELS, ...ANTHROPIC_CHAT_MODELS] as const;
 
 export type ChatModel = (typeof VALID_CHAT_MODELS)[number];
-
-// New conversations created outside the React composer (for example from the
-// native sidebar) still need an explicit persisted route. Legacy sessions are
-// intentionally left null and must be chosen by the user before sending.
-export const DEFAULT_CHAT_MODEL: ChatModel = 'gpt-5.4';

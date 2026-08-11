@@ -12,6 +12,7 @@ import {
   NATIVE_DRAFT_CHANNELS,
   openExternalUrl,
   rejectDraft,
+  resolveSidecarUrl,
   sendDraft,
 } from './chat';
 import { displayToolkitName } from './display-names';
@@ -73,6 +74,7 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
   const toolkits = buildToolkitMap(connections, toolkitCatalog);
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const hasStreamingAssistant = messages.some((message) => message.role === 'assistant' && message.isStreaming);
   // Tracks whether the user is currently pinned to the bottom. Streaming
   // tokens only auto-scroll while this is true; the moment the user scrolls
   // up it flips to false and stays false until they scroll back down.
@@ -96,10 +98,10 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
       // Session cleared — reset pinning so the next load starts at bottom.
       stickToBottomRef.current = true;
     } else if (stickToBottomRef.current) {
-      endRef.current?.scrollIntoView({ behavior: 'smooth' });
+      endRef.current?.scrollIntoView({ behavior: hasStreamingAssistant ? 'auto' : 'smooth' });
     }
     previousLengthRef.current = messages.length;
-  }, [messages]);
+  }, [hasStreamingAssistant, messages]);
 
   if (messages.length === 0) {
     return (
@@ -789,20 +791,47 @@ function parseDraftInput(input: unknown): DraftFields {
     ? input as Record<string, unknown>
     : {}) ;
   const channel = typeof obj.channel === 'string' ? obj.channel.trim().toLowerCase() : '';
-  const to = typeof obj.to === 'string' ? obj.to : '';
-  const toDisplay = typeof obj.to_display === 'string' ? obj.to_display.trim() : '';
+  const to = firstStringField(obj, [
+    'to',
+    'recipient',
+    'recipient_id',
+    'user',
+    'user_id',
+    'channel_id',
+    'channel_name',
+    'conversation_id',
+  ]);
+  const toDisplay = firstStringField(obj, [
+    'to_display',
+    'to_label',
+    'recipient_display',
+    'recipient_label',
+    'recipient_name',
+    'user_name',
+    'channel_display',
+    'channel_label',
+  ]);
+  const body = firstStringField(obj, ['body', 'message', 'markdown_text', 'fallback_text', 'text']);
   return {
     channel,
     channelLabel: typeof obj.channel_label === 'string' ? obj.channel_label.trim() : '',
     channelLogoUrl: typeof obj.channel_logo_url === 'string' ? obj.channel_logo_url.trim() : '',
     to,
     toLabel: toDisplay.length > 0 ? toDisplay : to,
-    toAvatarUrl: typeof obj.to_avatar_url === 'string' ? obj.to_avatar_url : '',
+    toAvatarUrl: firstStringField(obj, ['to_avatar_url', 'recipient_avatar_url', 'user_avatar_url']),
     cc: typeof obj.cc === 'string' ? obj.cc : '',
     subject: typeof obj.subject === 'string' ? obj.subject : '',
-    body: typeof obj.body === 'string' ? obj.body : '',
-    threadId: typeof obj.threadId === 'string' ? obj.threadId : '',
+    body,
+    threadId: firstStringField(obj, ['threadId', 'thread_id', 'thread_ts']),
   };
+}
+
+function firstStringField(obj: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return '';
 }
 
 // True once a held (generic-channel) draft has resolved through some path we
@@ -1362,7 +1391,7 @@ function ToolkitMark({ name, logoUrl }: { name: string; logoUrl: string | null }
   if (logoUrl) {
     return (
       <img
-        src={logoUrl}
+        src={resolveSidecarUrl(logoUrl) ?? logoUrl}
         alt=""
         aria-hidden="true"
         className="tool-step-toolkit-logo"
@@ -1524,7 +1553,7 @@ function ConnectionCard({
 
 function ToolkitLogo({ logoUrl, name }: { logoUrl: string | null; name: string }) {
   if (logoUrl) {
-    return <img className="connection-card-logo" src={logoUrl} alt="" aria-hidden="true" />;
+    return <img className="connection-card-logo" src={resolveSidecarUrl(logoUrl) ?? logoUrl} alt="" aria-hidden="true" />;
   }
 
   const initial = name.trim().charAt(0).toUpperCase() || '?';
@@ -1585,32 +1614,55 @@ const SLASH_SKILL_MATCH = /^\/([a-z0-9][a-z0-9_-]*)\b\s*/i;
 // attachments.ts `attachmentMarker`). The blobs themselves are never
 // persisted; these lines are the durable record that a message carried
 // attachments, and we render them as chips instead of raw text.
-const ATTACHMENT_MARKER = /^\[attached image: (.+)\]$/;
+const ATTACHMENT_MARKER = /^\[attached (image|document): (.+)\]$/;
 
-function splitAttachmentMarkers(content: string): { text: string; attachmentNames: string[] } {
-  if (!content.includes('[attached image:')) return { text: content, attachmentNames: [] };
-  const attachmentNames: string[] = [];
+interface AttachmentChipInfo {
+  kind: 'image' | 'document';
+  name: string;
+}
+
+function splitAttachmentMarkers(content: string): { text: string; attachments: AttachmentChipInfo[] } {
+  if (!content.includes('[attached image:') && !content.includes('[attached document:')) {
+    return { text: content, attachments: [] };
+  }
+  const attachments: AttachmentChipInfo[] = [];
   const kept: string[] = [];
   for (const line of content.split('\n')) {
     const match = line.match(ATTACHMENT_MARKER);
-    if (match) attachmentNames.push(match[1]);
+    if (match) attachments.push({ kind: match[1] as 'image' | 'document', name: match[2] });
     else kept.push(line);
   }
-  return { text: kept.join('\n').trim(), attachmentNames };
+  return { text: kept.join('\n').trim(), attachments };
+}
+
+function AttachmentChipIcon({ kind }: { kind: 'image' | 'document' }) {
+  if (kind === 'document') {
+    return (
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M2.5 1 H6 L7.5 2.5 V9 H2.5 Z" />
+        <path d="M6 1 V2.5 H7.5" />
+        <line x1="3.7" y1="5" x2="6.3" y2="5" />
+        <line x1="3.7" y1="6.8" x2="6.3" y2="6.8" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="1" y="1" width="8" height="8" rx="1.5" />
+      <circle cx="3.6" cy="3.6" r="0.9" fill="currentColor" stroke="none" />
+      <path d="M1.5 7.5 L4 5 L6 7 L7.4 5.6 L9 7.2" />
+    </svg>
+  );
 }
 
 function UserMessageBody({ content }: { content: string }) {
-  const { text, attachmentNames } = splitAttachmentMarkers(content);
-  const attachmentChips = attachmentNames.length > 0 && (
+  const { text, attachments } = splitAttachmentMarkers(content);
+  const attachmentChips = attachments.length > 0 && (
     <span className="message-attachments-row">
-      {attachmentNames.map((name, index) => (
-        <span key={`${name}-${index}`} className="attachment-chip">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="1" y="1" width="8" height="8" rx="1.5" />
-            <circle cx="3.6" cy="3.6" r="0.9" fill="currentColor" stroke="none" />
-            <path d="M1.5 7.5 L4 5 L6 7 L7.4 5.6 L9 7.2" />
-          </svg>
-          <span className="attachment-chip-name">{name}</span>
+      {attachments.map((attachment, index) => (
+        <span key={`${attachment.name}-${index}`} className="attachment-chip">
+          <AttachmentChipIcon kind={attachment.kind} />
+          <span className="attachment-chip-name">{attachment.name}</span>
         </span>
       ))}
     </span>

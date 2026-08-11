@@ -4,6 +4,7 @@ import type {
   ChatSSEEvent,
   ConnectionRequestView,
   ConnectionView,
+  CustomConnectorView,
   HubSkillDetailView,
   HubSkillInstallView,
   HubSkillSummaryView,
@@ -29,6 +30,10 @@ function notifyHost(type: 'cronsChanged' | 'skillsChanged'): void {
   window.webkit?.messageHandlers?.chatBridge?.postMessage({ type });
 }
 
+function notifyConnectionsChanged(): void {
+  window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'connectionsChanged' });
+}
+
 export function setSidecarPort(port: number) {
   sidecarPort = port;
 }
@@ -41,9 +46,16 @@ export function getSidecarPort(): number | null {
   return sidecarPort;
 }
 
-function baseURL(): string {
+export function baseURL(): string {
   if (!sidecarPort) throw new Error('Sidecar port not set');
   return `http://127.0.0.1:${sidecarPort}`;
+}
+
+export function resolveSidecarUrl(value: string | null): string | null {
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('/')) return `${baseURL()}${value}`;
+  return value;
 }
 
 export function sidecarFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
@@ -222,12 +234,55 @@ export async function getConnections(opts: { fast?: boolean } = {}): Promise<{
   configured: boolean;
   connections: ConnectionView[];
 }> {
+  // fast: bound the sidecar's remote sync so boot paints from the local
+  // cache when Composio is slow; callers follow up with a full fetch.
   const url = opts.fast ? `${baseURL()}/connections?wait=1200` : `${baseURL()}/connections`;
   const res = await sidecarFetch(url);
   if (!res.ok) {
     throw new Error(await readError(res, 'Failed to load connections'));
   }
   return res.json();
+}
+
+export async function getCustomConnectors(): Promise<CustomConnectorView[]> {
+  const res = await sidecarFetch(`${baseURL()}/connectors/custom`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load custom connectors'));
+  }
+  const body = await res.json() as { connectors?: CustomConnectorView[] };
+  return Array.isArray(body.connectors) ? body.connectors : [];
+}
+
+export async function addCustomConnector(input: { name: string; url: string; token?: string }): Promise<CustomConnectorView> {
+  const res = await sidecarFetch(`${baseURL()}/connectors/custom`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to add custom connector'));
+  }
+  const body = await res.json() as { connector: CustomConnectorView };
+  notifyConnectionsChanged();
+  return body.connector;
+}
+
+export async function removeCustomConnector(id: string): Promise<void> {
+  const res = await sidecarFetch(`${baseURL()}/connectors/custom/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to remove custom connector'));
+  }
+  notifyConnectionsChanged();
+}
+
+export async function retryCustomConnector(id: string): Promise<CustomConnectorView> {
+  const res = await sidecarFetch(`${baseURL()}/connectors/custom/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to retry custom connector'));
+  }
+  const body = await res.json() as { connector: CustomConnectorView };
+  notifyConnectionsChanged();
+  return body.connector;
 }
 
 export async function getToolkits(opts: {
@@ -503,6 +558,10 @@ export async function createConnectionRequest(toolkit: string): Promise<Connecti
 
 export function openConnectionRequest(requestId: string): void {
   openExternalUrl(`${baseURL()}/connections/requests/${encodeURIComponent(requestId)}/open`);
+}
+
+export function openCustomConnectorAuth(connectorId: string): void {
+  openExternalUrl(`${baseURL()}/connectors/custom/${encodeURIComponent(connectorId)}/open`);
 }
 
 export function openExternalUrl(url: string): void {

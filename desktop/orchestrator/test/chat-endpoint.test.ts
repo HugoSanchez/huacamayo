@@ -68,6 +68,7 @@ describe('Chat HTTP Endpoints', () => {
     expect(created.status).toBe(201);
     expect(created.body.session.title).toBe('Inflation thread');
     expect(created.body.session.archivedAt).toBeNull();
+    expect(created.body.session.model).toBeNull();
 
     const sessionId = created.body.session.id as string;
 
@@ -194,7 +195,7 @@ describe('Chat HTTP Endpoints', () => {
     expect(res.body.error).toBe('bad_request');
   });
 
-  it('rejects messages with invalid attachments', async () => {
+  it('rejects an attachment whose bytes match no supported type', async () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -202,13 +203,41 @@ describe('Chat HTTP Endpoints', () => {
     });
     const sessionId = created.body.session.id as string;
 
-    // Declared as PNG but the payload is not an image — magic-byte sniffing
-    // must reject it before anything reaches Hermes.
+    // No image or document magic — rejected by the sniff before anything else.
     const res = await fetchJson(`/chat/sessions/${sessionId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         content: 'look at this',
+        attachments: [{
+          name: 'mystery.bin',
+          mimeType: 'application/octet-stream',
+          dataBase64: Buffer.from([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]).toString('base64'),
+        }],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('bad_request');
+    expect(res.body.message).toMatch(/images.*documents|documents.*images/i);
+  });
+
+  it('routes a PDF to document conversion (declared MIME is advisory)', async () => {
+    // Same payload the old suite rejected as a non-image: a `%PDF-` header now
+    // routes to document conversion, not the image sniff. This body is garbage,
+    // so conversion fails — but with a *document* error, proving the new route.
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-5.4' }),
+    });
+    const sessionId = created.body.session.id as string;
+
+    const res = await fetchJson(`/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'read this',
         attachments: [{
           name: 'not-an-image.png',
           mimeType: 'image/png',
@@ -219,6 +248,8 @@ describe('Chat HTTP Endpoints', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('bad_request');
-    expect(res.body.message).toContain('PNG, JPEG, WebP, and GIF');
+    // Not the old image-only rejection copy.
+    expect(res.body.message).not.toContain('PNG, JPEG, WebP, and GIF');
+    expect(res.body.message).toMatch(/document/i);
   });
 });

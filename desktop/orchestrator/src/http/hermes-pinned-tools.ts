@@ -53,7 +53,7 @@ const COLD_START_SEEDS: Record<string, string> = {
   slack: 'SLACK_SEARCH_MESSAGES',
   gmail: 'GMAIL_FETCH_EMAILS',
   googledrive: 'GOOGLEDRIVE_FIND_FILE',
-  googledocs: 'GOOGLEDOCS_SEARCH_DOCUMENTS',
+  googledocs: 'GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN',
   googlecalendar: 'GOOGLECALENDAR_EVENTS_LIST',
   notion: 'NOTION_SEARCH_NOTION_PAGE',
   todoist: 'TODOIST_GET_ALL_TASKS',
