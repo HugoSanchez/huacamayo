@@ -33,6 +33,9 @@ const STATIC_PINNED_TOOLS = [
   'list_connections',
   'get_connection_status',
   'propose_message_draft',
+  'request_browser_connection',
+  'browser_session_start',
+  'browser_session_stop',
 ];
 
 const MEMORY_PINNED_TOOLS = [

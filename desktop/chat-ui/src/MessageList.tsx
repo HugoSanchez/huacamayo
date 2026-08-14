@@ -18,6 +18,7 @@ import {
 import { displayToolkitName } from './display-names';
 import { useIsSystemAsleep } from './useSystemSleep';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
+import { BrowserConnectCard } from './BrowserConnect';
 
 interface DraftOverlayItem {
   step: Extract<ActivityStep, { type: 'tool' }>;
@@ -564,6 +565,11 @@ function StepView({
     if (card) return <CronToolCard {...card} />;
   }
 
+  if (step.type === 'tool' && isBrowserConnectionRequestStep(step)) {
+    const card = parseBrowserConnectionStep(step);
+    if (card) return <BrowserConnectCard connectionId={card.connectionId} siteName={card.siteName} />;
+  }
+
   return <ToolStep step={step} toolkits={toolkits} />;
 }
 
@@ -652,6 +658,45 @@ interface CronToolCardProps {
   jobId: string | null;
   name: string | null;
   scheduleDisplay: string | null;
+}
+
+// The verso MCP bridge tool that starts the website-connection setup flow.
+// Hermes has shipped both single- and double-underscore MCP tool prefixes,
+// so match the suffix rather than one exact wire name.
+function isBrowserConnectionRequestStep(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
+  return typeof step.name === 'string' && step.name.endsWith('request_browser_connection');
+}
+
+function parseBrowserConnectionStep(
+  step: Extract<ActivityStep, { type: 'tool' }>,
+): { connectionId: string; siteName: string | null } | null {
+  if (typeof step.result !== 'string' || step.result.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(step.result);
+  } catch {
+    return null;
+  }
+  // MCP results sometimes arrive as a content-block array; unwrap the first
+  // text block when they do.
+  if (Array.isArray(parsed)) {
+    const textBlock = parsed.find((b) => b && typeof b === 'object' && typeof (b as { text?: unknown }).text === 'string');
+    if (!textBlock) return null;
+    try {
+      parsed = JSON.parse((textBlock as { text: string }).text);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.kind !== 'browser_connection_request' || obj.ok !== true) return null;
+  const connection = (obj.connection && typeof obj.connection === 'object')
+    ? obj.connection as Record<string, unknown>
+    : null;
+  if (!connection || typeof connection.id !== 'string') return null;
+  const name = typeof connection.name === 'string' && connection.name !== 'Website' ? connection.name : null;
+  return { connectionId: connection.id, siteName: name };
 }
 
 function parseCronToolStep(step: Extract<ActivityStep, { type: 'tool' }>): CronToolCardProps | null {

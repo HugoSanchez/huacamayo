@@ -748,3 +748,73 @@ async function readError(res: Response, fallback: string): Promise<string> {
     return fallback;
   }
 }
+
+// ——— Browser automation (website connections for routines) ———
+
+export interface BrowserConnectionView {
+  id: string;
+  name: string;
+  domain: string | null;
+  startUrl: string | null;
+  title: string | null;
+  status: 'pending' | 'connected' | 'needs_login' | 'error';
+  lastLease: {
+    leaseId: string;
+    mode: string;
+    startedAt: number;
+    endedAt: number | null;
+    outcome: string | null;
+    summary: string | null;
+  } | null;
+}
+
+export type BrowserSetupPhase =
+  | { kind: 'idle' }
+  | { kind: 'installing' }
+  | { kind: 'launching' }
+  | { kind: 'waiting_login' }
+  | { kind: 'error'; message: string };
+
+export interface BrowserSetupState {
+  phase: BrowserSetupPhase;
+  currentUrl: string | null;
+  currentTitle: string | null;
+  connection: BrowserConnectionView;
+}
+
+export async function getBrowserConnection(id: string): Promise<BrowserConnectionView> {
+  const res = await sidecarFetch(`${baseURL()}/browser/connections/${encodeURIComponent(id)}`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to load website connection'));
+  }
+  const body = await res.json() as { connection: BrowserConnectionView };
+  return body.connection;
+}
+
+export async function startBrowserSetup(id: string): Promise<void> {
+  const res = await sidecarFetch(`${baseURL()}/browser/setup/${encodeURIComponent(id)}/start`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to open the setup browser'));
+  }
+}
+
+export async function getBrowserSetupState(id: string): Promise<BrowserSetupState> {
+  const res = await sidecarFetch(`${baseURL()}/browser/setup/${encodeURIComponent(id)}/state`);
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Failed to read setup progress'));
+  }
+  return await res.json() as BrowserSetupState;
+}
+
+export async function completeBrowserSetup(id: string): Promise<BrowserConnectionView> {
+  const res = await sidecarFetch(`${baseURL()}/browser/setup/${encodeURIComponent(id)}/complete`, { method: 'POST' });
+  if (!res.ok) {
+    throw new Error(await readError(res, 'Could not read the open page — is the site still open in the setup window?'));
+  }
+  const body = await res.json() as { connection: BrowserConnectionView };
+  return body.connection;
+}
+
+export async function cancelBrowserSetup(id: string): Promise<void> {
+  await sidecarFetch(`${baseURL()}/browser/setup/${encodeURIComponent(id)}/cancel`, { method: 'POST' }).catch(() => undefined);
+}

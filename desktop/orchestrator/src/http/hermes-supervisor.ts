@@ -21,6 +21,7 @@ import { readAnthropicKeyFromEnvFile } from './model-auth.ts';
 import { CustomConnectorsStore } from './custom-connectors-store.ts';
 import { CustomConnectorKeychain } from './keychain.ts';
 import { fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-toolsets.ts';
+import { browserRuntime } from './browser-runtime.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -651,6 +652,15 @@ export class HermesSupervisor {
       HERMES_HOME: this.managedHermesHome,
       VERSO_HERMES_GATEWAY_URL: this.config.baseUrl,
       ...(this.orchestratorBaseUrl ? { VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
+      // Hermes' browser tools resolve `agent-browser` via PATH; point it at
+      // the Verso-managed pinned CLI (harmless when not installed yet). The
+      // CLI keeps Chrome for Testing under ~/.agent-browser — a layout the
+      // bundled Hermes' Playwright-cache probe doesn't know — so also export
+      // the resolved executable, which Hermes accepts as an explicit browser.
+      PATH: [browserRuntime.binDir, process.env.PATH].filter(Boolean).join(':'),
+      ...(browserRuntime.resolveChromium()
+        ? { AGENT_BROWSER_EXECUTABLE_PATH: browserRuntime.resolveChromium() as string }
+        : {}),
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {
@@ -753,6 +763,42 @@ export class HermesSupervisor {
    * filter that hides these skills entirely so the user never sees
    * a (broken) toggle for them.
    */
+  /**
+   * Live-toggle `browser.cdp_url` in the managed config while a Verso
+   * browser-session lease is active. Hermes re-reads the config per browser
+   * call (mtime-cached), so setting it makes the browser tools attach to the
+   * Verso-launched Chromium, and clearing it restores normal local-headless
+   * behavior for interactive chat.
+   */
+  setBrowserCdpUrl(cdpUrl: string | null): void {
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    // Never create the config from here: an early write would make the
+    // seeding step think a user config already exists. Clearing a value from
+    // a missing config is also a no-op.
+    if (!existsSync(configPath) && !cdpUrl) return;
+    let config: Record<string, unknown> = {};
+    if (existsSync(configPath)) {
+      try {
+        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          config = parsed as Record<string, unknown>;
+        }
+      } catch {
+        config = {};
+      }
+    }
+    const browser = asRecord(config.browser) ?? {};
+    if ((browser.cdp_url ?? null) === (cdpUrl ?? null)) return;
+    if (cdpUrl) {
+      browser.cdp_url = cdpUrl;
+    } else {
+      delete browser.cdp_url;
+    }
+    config.browser = browser;
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
+  }
+
   private enforceAlwaysDisabledSkills(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     let config: Record<string, unknown> = {};

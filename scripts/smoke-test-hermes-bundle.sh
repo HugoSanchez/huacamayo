@@ -124,6 +124,43 @@ terminal="$(grep -Eo "^event: response\.(completed|failed)" "${response_file}" |
 echo "[smoke] PASS: HTTP 200, SSE stream terminated with ${terminal#event: }"
 echo "[smoke] (response.failed is expected without model credentials — the handler is healthy either way)"
 
+# ── MCP OAuth routes (verso-gateway-mcp-oauth.patch) ─────────────────────
+# The patch adds three routes to the gateway. A mis-anchored or missing patch
+# means aiohttp's default 404 on all of them; a healthy patch is
+# distinguishable on each route without running a real OAuth flow:
+#   - flows/<id> unauthenticated  → 401 (route exists, auth enforced;
+#                                   missing route would 404)
+#   - callback/<name>             → 404 BUT with the handler's own
+#                                   "OAuth flow expired" body, not aiohttp's
+#                                   default "404: Not Found"
+#   - servers/<name>/auth (auth'd)→ handler JSON "Server ... not found"
+echo "[smoke] checking MCP OAuth routes from the runtime patch"
+
+flows_status="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/mcp/oauth/flows/smoke-nonexistent")"
+if [ "${flows_status}" != "401" ]; then
+    echo "[smoke] FAIL: GET /api/mcp/oauth/flows/… unauthenticated returned ${flows_status} (expected 401; 404 means verso-gateway-mcp-oauth.patch did not register its routes)" >&2
+    exit 1
+fi
+
+callback_body="${HOME_DIR}/smoke-oauth-callback.txt"
+curl -s -o "${callback_body}" "http://127.0.0.1:${PORT}/api/mcp/oauth/callback/smoke_nonexistent?state=abc"
+if ! grep -q "OAuth flow expired" "${callback_body}"; then
+    echo "[smoke] FAIL: OAuth callback route did not answer with the patch's handler; body:" >&2
+    head -3 "${callback_body}" >&2
+    exit 1
+fi
+
+auth_body="${HOME_DIR}/smoke-oauth-start.txt"
+auth_status="$(curl -s -o "${auth_body}" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer ${API_KEY}" \
+    "http://127.0.0.1:${PORT}/api/mcp/servers/smoke_nonexistent/auth")"
+if [ "${auth_status}" != "404" ] || ! grep -q "not found" "${auth_body}"; then
+    echo "[smoke] FAIL: POST /api/mcp/servers/…/auth returned ${auth_status}; body:" >&2
+    head -3 "${auth_body}" >&2
+    exit 1
+fi
+echo "[smoke] PASS: MCP OAuth routes registered and dispatching"
+
 # ── Pin-liveness contract ────────────────────────────────────────────────
 # Hermes silently ignores pinned tool names that match nothing registered,
 # so a drift in the MCP naming convention (0.19 renamed mcp_verso_* to
@@ -131,7 +168,7 @@ echo "[smoke] (response.failed is expected without model credentials — the han
 # error anywhere. Ask THIS bundle's own naming function what wire name each
 # core tool gets, and assert the orchestrator's pinned list contains it.
 echo "[smoke] checking pinned-tool naming contract against the bundle"
-CORE_TOOLS="request_connection search_toolkits list_connections get_connection_status propose_message_draft search_memory get_memory_page write_memory_page"
+CORE_TOOLS="request_connection search_toolkits list_connections get_connection_status propose_message_draft search_memory get_memory_page write_memory_page request_browser_connection browser_session_start browser_session_stop"
 
 expected_names="$(PYTHONPATH="${SITE_PACKAGES}" "${PYTHON_BIN}" - "${CORE_TOOLS}" <<'PYEOF'
 import sys
@@ -163,6 +200,27 @@ if [ -n "${missing}" ]; then
     exit 1
 fi
 echo "[smoke] PASS: all core pins match the bundle's MCP naming convention"
+
+# ── Browser domain guard (verso-browser-domain-guard.patch) ──────────────
+# The guard gates every browser command behind a per-lease allowlist file.
+# `patch --batch` at bundle time already fails hard on a mis-anchored hunk;
+# this asserts the guard actually landed in THIS bundle's browser_tool and
+# that the file still parses after patching.
+echo "[smoke] checking browser domain-guard runtime patch"
+PYTHONPATH="${SITE_PACKAGES}" "${PYTHON_BIN}" - "${SITE_PACKAGES}/tools/browser_tool.py" <<'PYEOF'
+import ast, sys
+
+source = open(sys.argv[1], "rt", encoding="utf-8").read()
+tree = ast.parse(source)
+names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+required = {"_verso_domain_guard_check", "_verso_domain_allowed", "_verso_guard_config"}
+missing = required - names
+if missing:
+    raise SystemExit(f"domain-guard patch did not land: missing {sorted(missing)}")
+if "guard_block = _verso_domain_guard_check(task_id, command, args)" not in source:
+    raise SystemExit("domain-guard patch landed but _run_browser_command does not call it")
+PYEOF
+echo "[smoke] PASS: browser domain guard present in bundled browser_tool"
 
 # Record the pass, keyed to the exact site-packages build we just validated.
 # The marker is a copy of the venv stage's .stamp; a rebuild wipes the arch

@@ -143,6 +143,89 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 
 
 @mcp.tool()
+def request_browser_connection(name: str | None = None) -> types.CallToolResult:
+    """Start the user-facing setup flow for automating a website in a browser.
+
+    Use this ONLY when the user wants a routine that works inside a website
+    for which no connector/toolkit integration exists (check search_toolkits
+    first). Verso shows a setup card in chat: the user opens a dedicated
+    browser window, signs in to the site, and confirms. Do not ask the user
+    for URLs or credentials yourself — the card handles everything.
+
+    After calling this, tell the user to use the setup card that appears.
+    When the connection completes, you will receive a follow-up message with
+    the connected site and a `browser-connection:<id>` token. Then create the
+    routine with the cronjob tool, and its prompt MUST:
+    - include the literal token `browser-connection:<id>` (Verso uses it to
+      link the routine to the saved sign-in),
+    - begin the work by calling browser_session_start with that connection id,
+    - end by calling browser_session_stop with the lease id and an outcome,
+    - state the safety rules: stay on the connected site, stop and report on
+      login pages / payment or destructive screens / anything unexpected,
+      skip items you are not confident about, and report an itemized summary.
+    Create the routine paused/disabled first so the user can watch a
+    supervised first run before enabling the schedule.
+    """
+
+    payload = _request(
+        "POST",
+        "/browser/connections/request",
+        {"name": (name or "").strip() or None},
+    )
+    return _structured_result({"kind": "browser_connection_request", **payload})
+
+
+@mcp.tool()
+def browser_session_start(connection_id: str) -> types.CallToolResult:
+    """Open the saved browser sign-in for a `browser-connection:<id>` routine.
+
+    Call this FIRST in a browser routine, before any browser_* tool. Verso
+    launches the website's dedicated browser profile (already signed in) and
+    connects the browser tools to it. Returns a lease_id you must keep.
+
+    If it returns browser_busy, report that this run was skipped and finish.
+    If it returns connection_not_ready, report that the user needs to
+    reconnect the website from the routine page, and finish. When you are
+    done — or blocked by a login page or anything unexpected — call
+    browser_session_stop.
+    """
+
+    payload = _request(
+        "POST",
+        "/browser/session/start",
+        {"connection_id": connection_id.strip()},
+    )
+    return _structured_result(payload)
+
+
+@mcp.tool()
+def browser_session_stop(
+    lease_id: str,
+    outcome: str = "done",
+    summary: str | None = None,
+) -> types.CallToolResult:
+    """Close the browser session opened by browser_session_start.
+
+    Always call this when the routine's browser work ends. outcome must be
+    one of: "done" (work finished, even partially), "needs_login" (the site
+    showed a login page — Verso pauses the routine and asks the user to sign
+    in again), or "error" (something else went wrong). summary is a short
+    human-readable report of what happened.
+    """
+
+    payload = _request(
+        "POST",
+        "/browser/session/stop",
+        {
+            "lease_id": lease_id.strip(),
+            "outcome": outcome.strip().lower(),
+            "summary": (summary or "").strip() or None,
+        },
+    )
+    return _structured_result(payload)
+
+
+@mcp.tool()
 def propose_message_draft(
     channel: str,
     body: str,

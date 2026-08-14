@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { createReadStream, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
@@ -6,7 +5,7 @@ import { json, route, type Route } from './router.ts';
 import { CustomConnectorsStore, sanitizeCustomConnectorSlug, type CustomConnectorRecord } from './custom-connectors-store.ts';
 import { CustomConnectorKeychain } from './keychain.ts';
 import { probeMcpServer } from './mcp-probe.ts';
-import { countCustomConnectorTools, fetchRegisteredToolNames } from './hermes-toolsets.ts';
+import { countCustomConnectorTools, fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-toolsets.ts';
 import type { HermesSupervisor } from './hermes-supervisor.ts';
 
 export type CustomConnectorStatus =
@@ -57,16 +56,26 @@ export function buildCustomConnectorRoutes(
 }
 
 export class CustomConnectorService {
+  // Last error reported by a gateway OAuth flow, per connector id. In-memory
+  // only: it exists to explain a stuck "pending sign-in" state in the UI, and
+  // a fresh launch (or a retry) should start clean.
+  private readonly lastAuthErrors = new Map<string, string>();
+
   constructor(
     private readonly store: CustomConnectorsStore,
     private readonly keychain: CustomConnectorKeychain,
     private readonly hermes: HermesSupervisor,
-    private readonly opts: { registrationDelayMs?: number; registrationAttempts?: number } = {},
+    private readonly opts: {
+      registrationDelayMs?: number;
+      registrationAttempts?: number;
+      authPollDelayMs?: number;
+      authPollAttempts?: number;
+    } = {},
   ) {}
 
   async list(): Promise<CustomConnectorView[]> {
     const registered = await fetchRegisteredToolNames(this.hermes.gatewayConfig);
-    return this.store.list().map((record) => viewFor(record, registered));
+    return this.store.list().map((record) => viewFor(record, registered, this.lastAuthErrors.get(record.id)));
   }
 
   async add(body: unknown): Promise<CustomConnectorView> {
@@ -103,18 +112,33 @@ export class CustomConnectorService {
   async retry(id: string): Promise<CustomConnectorView> {
     const current = this.store.get(id);
     if (!current) throw new HttpInputError(`Unknown custom connector: ${id}`, 404);
-    const token = current.auth === 'bearer' ? await this.keychain.getSecret(current.id) : null;
-    const probe = await probeMcpServer(current.url, { token });
-    const updated = this.store.update(id, {
-      transport: probe.transport,
-      auth: current.auth === 'bearer' ? 'bearer' : probe.auth,
-      logoUrl: probe.iconPath ? `/connectors/custom/${encodeURIComponent(current.id)}/icon` : probe.logoUrl ?? current.logoUrl,
-      iconPath: probe.iconPath ?? current.iconPath ?? null,
-      iconContentType: probe.iconContentType ?? current.iconContentType ?? null,
-    });
-    await this.hermes.restart();
-    await this.hermes.waitUntilReady(90_000);
-    return viewFor(updated, await this.waitForConnectorTools(updated));
+    this.lastAuthErrors.delete(id);
+    try {
+      const token = current.auth === 'bearer' ? await this.keychain.getSecret(current.id) : null;
+      const probe = await probeMcpServer(current.url, { token });
+      const updated = this.store.update(id, {
+        transport: probe.transport,
+        auth: current.auth === 'bearer' ? 'bearer' : probe.auth,
+        logoUrl: probe.iconPath ? `/connectors/custom/${encodeURIComponent(current.id)}/icon` : probe.logoUrl ?? current.logoUrl,
+        iconPath: probe.iconPath ?? current.iconPath ?? null,
+        iconContentType: probe.iconContentType ?? current.iconContentType ?? null,
+      });
+      if (updated.auth === 'oauth') {
+        // Sign-in runs through the gateway's OAuth flow (openAuth); the config
+        // entry is unchanged, so a gateway restart buys nothing — and would tear
+        // down the gateway that hosts the OAuth callback the user is about to
+        // be redirected to. Report status as-is so the UI can open sign-in now.
+        return viewFor(updated, await fetchRegisteredToolNames(this.hermes.gatewayConfig));
+      }
+      await this.hermes.restart();
+      await this.hermes.waitUntilReady(90_000);
+      return viewFor(updated, await this.waitForConnectorTools(updated));
+    } catch (error: unknown) {
+      // Surface the failure on the row itself — a silent 500 leaves the user
+      // clicking Retry with nothing visibly happening.
+      this.lastAuthErrors.set(id, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 
   getAuthRedirectUrl(id: string): string | null {
@@ -130,16 +154,20 @@ export class CustomConnectorService {
       return;
     }
 
-    const result = await this.startHermesMcpLogin(record);
+    const result = await this.startGatewayOAuthFlow(record);
     if (result.kind === 'redirect') {
+      this.lastAuthErrors.delete(record.id);
+      void this.watchAuthFlow(record, result.flowId).catch(() => {});
       res.writeHead(302, { Location: result.url });
       res.end();
       return;
     }
+    this.lastAuthErrors.set(record.id, result.message);
     sendHtml(res, 500, 'Sign-in unavailable', result.message);
   }
 
   async remove(id: string): Promise<void> {
+    this.lastAuthErrors.delete(id);
     const removed = this.store.delete(id);
     if (!removed) return;
     await this.keychain.deleteSecret(removed.id);
@@ -167,82 +195,86 @@ export class CustomConnectorService {
     });
   }
 
-  private async startHermesMcpLogin(record: CustomConnectorRecord): Promise<
-    | { kind: 'redirect'; url: string }
+  /**
+   * Ask the gateway to start an MCP OAuth flow (routes added by the
+   * verso-gateway-mcp-oauth runtime patch). The gateway runs the SDK flow
+   * in-process and hands back the provider's authorization URL; the provider
+   * later redirects straight to the gateway's own callback route.
+   */
+  private async startGatewayOAuthFlow(record: CustomConnectorRecord): Promise<
+    | { kind: 'redirect'; url: string; flowId: string }
     | { kind: 'error'; message: string }
   > {
-    const invocation = this.hermes.invoke(['mcp', 'login', `custom_${record.slug}`]);
-    if (!invocation) {
-      return { kind: 'error', message: 'Hermes command is not configured. Install Hermes or set VERSO_HERMES_COMMAND.' };
+    const config = this.hermes.gatewayConfig;
+    let res: Response;
+    try {
+      res = await fetch(`${config.baseUrl}/api/mcp/servers/${encodeURIComponent(`custom_${record.slug}`)}/auth`, {
+        method: 'POST',
+        headers: hermesGatewayAuthHeaders(config),
+        // The gateway waits up to 30s for the provider to produce an
+        // authorization URL (discovery + client registration).
+        signal: AbortSignal.timeout(45_000),
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { kind: 'error', message: `Could not reach the Hermes gateway to start sign-in: ${message}` };
     }
+    const body = await res.json().catch(() => null) as
+      | { flow_id?: string; status?: string; authorization_url?: string | null; error?: string | null }
+      | null;
+    if (!res.ok) {
+      return { kind: 'error', message: body?.error || `The Hermes gateway returned ${res.status} starting sign-in.` };
+    }
+    if (body?.status === 'authorization_required' && typeof body.authorization_url === 'string' && body.flow_id) {
+      return { kind: 'redirect', url: body.authorization_url, flowId: String(body.flow_id) };
+    }
+    return { kind: 'error', message: body?.error || 'Hermes did not produce an authorization URL.' };
+  }
 
-    return new Promise((resolve) => {
-      let settled = false;
-      let stderrTail = '';
-      let outputBuffer = '';
-      let timeout: NodeJS.Timeout;
-      const child = spawn(invocation.command, invocation.args, {
-        cwd: this.hermes.launchCwd ?? undefined,
-        env: {
-          ...process.env,
-          ...invocation.env,
-          HERMES_HOME: this.hermes.hermesHome,
-          PYTHONUNBUFFERED: '1',
-          NO_COLOR: '1',
-          CLICOLOR: '0',
-          // We handle the browser open by redirecting this route. Marking the
-          // subprocess as "remote" makes Hermes print the authorization URL
-          // instead of trying to open a second browser tab itself.
-          SSH_CLIENT: process.env.SSH_CLIENT || '127.0.0.1 0 0',
-        },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      const finish = (result: { kind: 'redirect'; url: string } | { kind: 'error'; message: string }) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve(result);
-      };
-
-      const consume = (chunk: string) => {
-        outputBuffer = (outputBuffer + chunk).slice(-4096);
-        const url = extractExternalUrl(outputBuffer);
-        if (url) finish({ kind: 'redirect', url });
-      };
-
-      timeout = setTimeout(() => {
-        child.kill('SIGTERM');
-        finish({
-          kind: 'error',
-          message: [
-            'Timed out waiting for Hermes to produce an MCP authorization URL.',
-            outputBuffer.trim() ? `Recent output: ${stripAnsi(outputBuffer).trim()}` : null,
-          ].filter(Boolean).join(' '),
+  /**
+   * Follow a started flow to completion in the background. On approval the
+   * gateway has already verified tokens and live-reconnected the MCP server;
+   * a gateway restart is only the fallback when tools still don't register.
+   */
+  private async watchAuthFlow(record: CustomConnectorRecord, flowId: string): Promise<void> {
+    const config = this.hermes.gatewayConfig;
+    const delayMs = this.opts.authPollDelayMs ?? 5_000;
+    const attempts = this.opts.authPollAttempts ?? 390; // ≈32.5 min, past the gateway's 30 min callback window
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await delay(delayMs);
+      let snapshot: { status?: string; error?: string | null } | null = null;
+      try {
+        const res = await fetch(`${config.baseUrl}/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`, {
+          headers: hermesGatewayAuthHeaders(config),
+          signal: AbortSignal.timeout(5_000),
         });
-      }, 90_000);
+        if (res.status === 404) return; // flow expired or gateway restarted — nothing left to watch
+        if (!res.ok) continue;
+        snapshot = await res.json() as { status?: string; error?: string | null };
+      } catch {
+        continue; // transient — gateway restarting, etc.
+      }
+      if (snapshot?.status === 'approved') {
+        this.lastAuthErrors.delete(record.id);
+        await this.ensureConnectorTools(record);
+        return;
+      }
+      if (snapshot?.status === 'error') {
+        this.lastAuthErrors.set(record.id, snapshot.error || 'Sign-in failed.');
+        return;
+      }
+    }
+  }
 
-      child.stdout?.setEncoding('utf8');
-      child.stderr?.setEncoding('utf8');
-      child.stdout?.on('data', consume);
-      child.stderr?.on('data', (chunk: string) => {
-        stderrTail = (stderrTail + chunk).slice(-2048);
-        consume(chunk);
-      });
-      child.on('error', (error) => finish({ kind: 'error', message: error.message }));
-      child.on('close', (code) => {
-        if (code === 0) {
-          void this.hermes.restart().catch(() => {});
-          finish({
-            kind: 'error',
-            message: 'Hermes finished MCP sign-in without returning an authorization URL.',
-          });
-          return;
-        }
-        const message = stripAnsi(stderrTail).trim() || `hermes mcp login exited with code ${code ?? 'unknown'}.`;
-        finish({ kind: 'error', message });
-      });
-    });
+  private async ensureConnectorTools(record: CustomConnectorRecord): Promise<void> {
+    const registered = await fetchRegisteredToolNames(this.hermes.gatewayConfig);
+    if (registered && countCustomConnectorTools(registered, record.slug) > 0) return;
+    try {
+      await this.hermes.restart();
+      await this.hermes.waitUntilReady(90_000);
+    } catch {
+      // The connector stays pending; the user can Retry from the UI.
+    }
   }
 }
 
@@ -269,9 +301,10 @@ export function removeHermesOAuthFiles(hermesHome: string, serverName: string): 
   }
 }
 
-function viewFor(record: CustomConnectorRecord, registered: string[] | null): CustomConnectorView {
+function viewFor(record: CustomConnectorRecord, registered: string[] | null, authError?: string): CustomConnectorView {
   const toolCount = registered ? countCustomConnectorTools(registered, record.slug) : 0;
   if (toolCount > 0) return { ...record, status: { state: 'connected', toolCount } };
+  if (authError) return { ...record, status: { state: 'failed', toolCount: 0, reason: authError } };
   if (record.auth === 'oauth') return { ...record, status: { state: 'pending_auth', toolCount: 0 } };
   return {
     ...record,
@@ -315,25 +348,6 @@ function contentTypeForPath(filePath: string): string {
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
   if (ext === '.webp') return 'image/webp';
   return 'image/x-icon';
-}
-
-const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
-const URL_PATTERN = /https?:\/\/[^\s"'<>]+/g;
-
-export function extractExternalUrl(text: string): string | null {
-  const urls = stripAnsi(text).match(URL_PATTERN) ?? [];
-  return urls.find((url) => {
-    try {
-      const parsed = new URL(url);
-      return parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost';
-    } catch {
-      return false;
-    }
-  }) ?? null;
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(ANSI_PATTERN, '');
 }
 
 function sendHtml(res: ServerResponse, status: number, title: string, message: string): void {
