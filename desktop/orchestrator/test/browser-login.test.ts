@@ -10,6 +10,7 @@ class FakeRuntime implements BrowserCommandRuntime {
   ready = true;
   commands: string[][] = [];
   ensure: () => Promise<void> = async () => undefined;
+  openFailures = 0;
 
   isReady(): boolean {
     return this.ready;
@@ -21,6 +22,10 @@ class FakeRuntime implements BrowserCommandRuntime {
 
   async runCli(args: string[]): Promise<string> {
     this.commands.push(args);
+    if (args.includes('--headed') && args.includes('open') && this.openFailures > 0) {
+      this.openFailures -= 1;
+      throw new Error('transient browser launch failure');
+    }
     if (args.at(-2) === 'get' && args.at(-1) === 'url') {
       return JSON.stringify({ success: true, data: { url: 'https://example.com/account' }, error: null });
     }
@@ -72,6 +77,34 @@ describe('BrowserLoginService', () => {
 
     void login.begin(first.id);
     expect(() => login.begin(second.id)).toThrow(/already active/);
+  });
+
+  it('cleans up and retries one transient headed launch failure', async () => {
+    const runtime = new FakeRuntime();
+    runtime.openFailures = 1;
+    const login = new BrowserLoginService(runtime);
+    const request = login.request('Example', 'https://example.com/login');
+
+    await login.begin(request.id);
+
+    expect(request.phase).toEqual({ kind: 'waiting_login' });
+    expect(runtime.commands.filter((args) => args.includes('open'))).toHaveLength(2);
+    expect(runtime.commands.filter((args) => args.at(-1) === 'close')).toHaveLength(2);
+  });
+
+  it('surfaces a permanent launch failure after one retry', async () => {
+    const runtime = new FakeRuntime();
+    runtime.openFailures = 2;
+    const login = new BrowserLoginService(runtime);
+    const request = login.request('Example', 'https://example.com/login');
+
+    await login.begin(request.id);
+
+    expect(request.phase).toEqual({
+      kind: 'error',
+      message: 'transient browser launch failure (launch retry also failed)',
+    });
+    expect(runtime.commands.filter((args) => args.includes('open'))).toHaveLength(2);
   });
 
   it('does not open a window when cancelled during installation', async () => {

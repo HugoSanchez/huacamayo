@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -57,7 +57,16 @@ export class BrowserRuntime {
 
   cliPath(): string | null {
     const p = path.join(this.binDir, 'agent-browser');
-    return existsSync(p) ? p : null;
+    if (!existsSync(p)) return null;
+    try {
+      const manifest = JSON.parse(readFileSync(
+        path.join(this.root, 'node_modules', 'agent-browser', 'package.json'),
+        'utf8',
+      )) as { version?: unknown };
+      return manifest.version === AGENT_BROWSER_VERSION ? p : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Newest Chrome for Testing executable from the agent-browser home. */
@@ -175,7 +184,7 @@ export class BrowserRuntime {
       });
       const timer = setTimeout(() => {
         child.kill('SIGKILL');
-        reject(new Error(`${path.basename(command)} ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s`));
+        reject(new Error(`${path.basename(command)} ${commandAction(args)} timed out after ${Math.round(timeoutMs / 1000)}s`));
       }, timeoutMs);
       child.once('error', (err) => {
         clearTimeout(timer);
@@ -184,10 +193,56 @@ export class BrowserRuntime {
       child.once('exit', (code) => {
         clearTimeout(timer);
         if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`${path.basename(command)} ${args[0]} exited ${code}: ${stderr.trim().slice(-400)}`));
+        else {
+          const detail = commandFailureDetail(stdout, stderr);
+          reject(new Error(
+            `${path.basename(command)} ${commandAction(args)} exited ${code}${detail ? `: ${detail}` : ''}`,
+          ));
+        }
       });
     });
   }
+}
+
+const OPTIONS_WITH_VALUES = new Set([
+  '--args', '--enable', '--executable-path', '--extension', '--headers', '--init-script',
+  '--namespace', '--profile', '--restore', '--restore-check-fn', '--restore-check-text',
+  '--restore-check-url', '--restore-save', '--session', '--session-name', '--state', '--user-agent',
+]);
+
+function commandAction(args: string[]): string {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (OPTIONS_WITH_VALUES.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (!arg.startsWith('-')) return arg;
+  }
+  return args[0] ?? 'command';
+}
+
+function commandFailureDetail(stdout: string, stderr: string): string {
+  const cleanStderr = stderr.trim();
+  const cleanStdout = stdout.trim();
+  // `agent-browser --json` reports command failures on stdout, while Node/npm
+  // failures generally use stderr. Prefer a structured message from either
+  // stream before falling back to unparsed text from either one.
+  for (const raw of [cleanStdout, cleanStderr]) {
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as { error?: unknown; message?: unknown };
+      if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error.trim().slice(-1000);
+      if (parsed.error && typeof parsed.error === 'object') {
+        const message = (parsed.error as { message?: unknown }).message;
+        if (typeof message === 'string' && message.trim()) return message.trim().slice(-1000);
+      }
+      if (typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message.trim().slice(-1000);
+    } catch {
+      // Some subprocess failures are plain text; fall through below.
+    }
+  }
+  return (cleanStderr || cleanStdout).slice(-1000);
 }
 
 function compareVersions(a: string, b: string): number {

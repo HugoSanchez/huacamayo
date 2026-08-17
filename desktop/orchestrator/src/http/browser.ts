@@ -134,7 +134,7 @@ export class BrowserLoginService {
       // touched here.
       await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
       if (this.requests.get(request.id) !== request) return;
-      await this.runtime.runCli(this.args(['--headed', 'open', request.url]), 60_000);
+      await this.openWithRecovery(request);
       if (this.requests.get(request.id) !== request) {
         await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
         return;
@@ -144,6 +144,26 @@ export class BrowserLoginService {
       if (this.requests.get(request.id) !== request) return;
       request.phase = { kind: 'error', message: error instanceof Error ? error.message : String(error) };
       this.activeId = null;
+    }
+  }
+
+  private async openWithRecovery(request: BrowserLoginRequest): Promise<void> {
+    const open = () => this.runtime.runCli(this.args(['--headed', 'open', request.url]), 60_000);
+    try {
+      await open();
+    } catch {
+      // A crashed app can leave an agent-browser daemon/socket in the narrow
+      // interval where the initial close succeeds but the next launch still
+      // attaches to stale state. One clean close + retry is safe because this
+      // session is dedicated to interactive login and never owns cron runs.
+      await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
+      if (this.requests.get(request.id) !== request) return;
+      try {
+        await open();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message} (launch retry also failed)`);
+      }
     }
   }
 
