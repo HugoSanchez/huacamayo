@@ -239,6 +239,7 @@ export class HermesSupervisor {
   private orchestratorBaseUrl: string | null = null;
   private child: ChildProcess | null = null;
   private startPromise: Promise<void> | null = null;
+  private shutdownPromise: Promise<void> | null = null;
   private restartPromise: Promise<void> | null = null;
   private state: HermesRuntimeState;
   private source: HermesRuntimeSource = 'none';
@@ -387,6 +388,17 @@ export class HermesSupervisor {
   }
 
   async shutdown(): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise;
+    }
+    const promise = this.shutdownInner().finally(() => {
+      if (this.shutdownPromise === promise) this.shutdownPromise = null;
+    });
+    this.shutdownPromise = promise;
+    return promise;
+  }
+
+  private async shutdownInner(): Promise<void> {
     const child = this.child;
     this.startPromise = null;
 
@@ -1136,13 +1148,29 @@ export class HermesSupervisor {
   }
 
   private formatExitMessage(code: number | null, signal: NodeJS.Signals | null): string {
-    const details = this.logTail.length > 0
-      ? ` Recent logs: ${this.logTail.slice(-6).join(' | ')}`
-      : '';
+    const details = this.formatDiagnosticLogDetails();
     if (signal) {
       return `Hermes process exited on signal ${signal}.${details}`;
     }
+    if (code === 0) {
+      return `Hermes gateway stopped unexpectedly (process exit code 0).${details}`;
+    }
     return `Hermes process exited with code ${code ?? 'unknown'}.${details}`;
+  }
+
+  private formatDiagnosticLogDetails(): string {
+    if (this.logTail.length === 0) return '';
+
+    // Hermes prints its banner to stdout after some startup failures. A plain
+    // tail therefore hid the actual stderr error and showed only ASCII art in
+    // the UI. Preserve the most useful failure lines alongside the last few
+    // lines of context, without duplicating entries that are already recent.
+    const diagnostic = this.logTail
+      .filter((line) => /\[hermes stderr\].*(?:error|failed|failure|conflict|could not|traceback|exception)/i.test(line))
+      .slice(-3);
+    const recent = this.logTail.slice(-3);
+    const selected = [...new Set([...diagnostic, ...recent])];
+    return ` Recent logs: ${selected.join(' | ')}`;
   }
 
   private async waitForGatewayHealthy(child: ChildProcess): Promise<void> {
@@ -1158,9 +1186,7 @@ export class HermesSupervisor {
       await delay(250);
     }
 
-    const details = this.logTail.length > 0
-      ? ` Recent logs: ${this.logTail.slice(-6).join(' | ')}`
-      : '';
+    const details = this.formatDiagnosticLogDetails();
     this.lastError = `Timed out waiting for Hermes gateway at ${this.config.baseUrl}.${details}`;
     this.state = 'error';
     throw new Error(this.lastError);

@@ -304,12 +304,22 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const server = http.createServer((req, res) => {
     dispatch(routes, req, res, { authSecret, allowUnauthenticated });
   });
+  let cleanupPromise: Promise<void> | null = null;
+  const cleanup = (): Promise<void> => {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      memoryExtraction.stop();
+      sourceIngestion.stop();
+      await Promise.all([
+        browserLogin.login.shutdown(),
+        hermes.shutdown(),
+        memoryProvider.stop(),
+      ]);
+    })();
+    return cleanupPromise;
+  };
   server.on('close', () => {
-    void browserLogin.login.shutdown();
-    void hermes.shutdown();
-    memoryExtraction.stop();
-    sourceIngestion.stop();
-    void memoryProvider.stop();
+    void cleanup();
   });
 
   const port = opts.port ?? parseInt(process.env.PORT || '0', 10);
@@ -317,11 +327,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
-    await browserLogin.login.shutdown();
-    await hermes.shutdown();
-    memoryExtraction.stop();
-    sourceIngestion.stop();
-    await memoryProvider.stop();
+    await cleanup();
   };
 
   return new Promise((resolve) => {

@@ -15,15 +15,19 @@ const child = spawn(command, args, {
   stdio: 'inherit',
 });
 
+let shuttingDown = false;
+
 const shutdown = (signal = 'SIGTERM') => {
-  if (child.exitCode !== null || child.killed) {
+  if (child.exitCode !== null || child.signalCode !== null) {
     process.exit(0);
     return;
   }
+  if (shuttingDown) return;
+  shuttingDown = true;
 
   child.kill(signal);
   setTimeout(() => {
-    if (child.exitCode === null && !child.killed) {
+    if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGKILL');
     }
   }, 2_000).unref();

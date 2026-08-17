@@ -82,4 +82,24 @@ describe('HermesSupervisor restart', () => {
     expect(statusAfter.reachable).toBe(true);
     expect(new URL(statusAfter.baseUrl).port).toBe(portAfter);
   }, 30_000);
+
+  it('surfaces stderr startup failures even when the stdout banner is newer', () => {
+    const internals = supervisor as unknown as {
+      logTail: string[];
+      formatExitMessage: (code: number | null, signal: NodeJS.Signals | null) => string;
+    };
+    internals.logTail = [
+      '[hermes stderr] ERROR Could not bind 127.0.0.1:8642: address already in use',
+      '[hermes stdout] banner line 1',
+      '[hermes stdout] banner line 2',
+      '[hermes stdout] banner line 3',
+      '[hermes stdout] banner line 4',
+      '[hermes stdout] banner line 5',
+      '[hermes stdout] banner line 6',
+    ];
+
+    const message = internals.formatExitMessage(0, null);
+    expect(message).toContain('stopped unexpectedly');
+    expect(message).toContain('Could not bind 127.0.0.1:8642');
+  });
 });

@@ -147,7 +147,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStateObservers()
         createMainWindow()
-        sidecar.updateManagedSession(managedSessionStore.currentSession)
         sidecar.start()
         scheduleLaunchUpdateCheckIfReady()
     }
