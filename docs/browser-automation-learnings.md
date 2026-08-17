@@ -1,7 +1,9 @@
 # Browser automation: findings and next steps
 
-Date: 2026-08-17  
-Status: not shipping in Verso 1.0.20  
+Date: 2026-08-17
+
+Status: not shipping in Verso 1.0.20
+
 Related work: PR #80
 
 ## Decision
@@ -232,4 +234,3 @@ automation belongs in the product at all.
   history.
 - Kept the generic serialized shutdown/restart fixes and their regression
   tests.
-
