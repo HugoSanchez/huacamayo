@@ -11,6 +11,8 @@ class FakeRuntime implements BrowserCommandRuntime {
   commands: string[][] = [];
   ensure: () => Promise<void> = async () => undefined;
   openFailures = 0;
+  loginUrls: string[] = [];
+  loginCloseCount = 0;
 
   isReady(): boolean {
     return this.ready;
@@ -22,10 +24,6 @@ class FakeRuntime implements BrowserCommandRuntime {
 
   async runCli(args: string[]): Promise<string> {
     this.commands.push(args);
-    if (args.includes('--headed') && args.includes('open') && this.openFailures > 0) {
-      this.openFailures -= 1;
-      throw new Error('transient browser launch failure');
-    }
     if (args.at(-2) === 'get' && args.at(-1) === 'url') {
       return JSON.stringify({ success: true, data: { url: 'https://example.com/account' }, error: null });
     }
@@ -33,6 +31,19 @@ class FakeRuntime implements BrowserCommandRuntime {
       return JSON.stringify({ success: true, data: { title: 'Your account' }, error: null });
     }
     return JSON.stringify({ success: true, data: { closed: args.at(-1) === 'close' }, error: null });
+  }
+
+  async openLoginBrowser(url: string): Promise<number> {
+    this.loginUrls.push(url);
+    if (this.openFailures > 0) {
+      this.openFailures -= 1;
+      throw new Error('transient browser launch failure');
+    }
+    return 9333;
+  }
+
+  async closeLoginBrowser(): Promise<void> {
+    this.loginCloseCount += 1;
   }
 }
 
@@ -43,18 +54,23 @@ describe('BrowserLoginService', () => {
     expect(() => login.request('Example', 'file:///tmp/example')).toThrow(/valid http/);
   });
 
-  it('uses one native restore key from headed sign-in through completion', async () => {
+  it('imports a normal Chrome login into one native restore key', async () => {
     const runtime = new FakeRuntime();
     const login = new BrowserLoginService(runtime);
     const request = login.request('Example', 'https://example.com/login');
 
     await login.begin(request.id);
     expect(request.phase).toEqual({ kind: 'waiting_login' });
-    expect(runtime.commands.some((args) => args.includes('--headed') && args.includes('open'))).toBe(true);
+    expect(runtime.loginUrls).toEqual(['https://example.com/login']);
+    expect(runtime.commands.some((args) => args.includes('--cdp') && args.includes('open'))).toBe(true);
+    expect(runtime.commands.every((args) => !args.includes('--headed'))).toBe(true);
     for (const args of runtime.commands) {
       expect(args).toContain(BROWSER_NAMESPACE);
       expect(args).toContain(BROWSER_RESTORE_KEY);
       expect(args).toContain('always');
+    }
+    for (const args of runtime.commands.filter((args) => args.includes('open'))) {
+      expect(args).toContain('9333');
     }
 
     const page = await login.complete(request.id);
@@ -64,6 +80,7 @@ describe('BrowserLoginService', () => {
       domain: 'example.com',
     });
     expect(runtime.commands.at(-1)?.at(-1)).toBe('close');
+    expect(runtime.loginCloseCount).toBe(1);
     expect(login.get(request.id)).toBeNull();
   });
 
@@ -79,7 +96,7 @@ describe('BrowserLoginService', () => {
     expect(() => login.begin(second.id)).toThrow(/already active/);
   });
 
-  it('cleans up and retries one transient headed launch failure', async () => {
+  it('cleans up and retries one transient normal Chrome launch failure', async () => {
     const runtime = new FakeRuntime();
     runtime.openFailures = 1;
     const login = new BrowserLoginService(runtime);
@@ -88,8 +105,8 @@ describe('BrowserLoginService', () => {
     await login.begin(request.id);
 
     expect(request.phase).toEqual({ kind: 'waiting_login' });
-    expect(runtime.commands.filter((args) => args.includes('open'))).toHaveLength(2);
-    expect(runtime.commands.filter((args) => args.at(-1) === 'close')).toHaveLength(2);
+    expect(runtime.loginUrls).toHaveLength(2);
+    expect(runtime.loginCloseCount).toBe(1);
   });
 
   it('surfaces a permanent launch failure after one retry', async () => {
@@ -104,7 +121,22 @@ describe('BrowserLoginService', () => {
       kind: 'error',
       message: 'transient browser launch failure (launch retry also failed)',
     });
-    expect(runtime.commands.filter((args) => args.includes('open'))).toHaveLength(2);
+    expect(runtime.loginUrls).toHaveLength(2);
+    expect(runtime.loginCloseCount).toBe(2);
+  });
+
+  it('disconnects agent-browser and closes the dedicated Chrome window on cancel', async () => {
+    const runtime = new FakeRuntime();
+    const login = new BrowserLoginService(runtime);
+    const request = login.request('Example', 'https://example.com/login');
+
+    await login.begin(request.id);
+    await login.cancel(request.id);
+
+    expect(runtime.commands.at(-1)).toContain('--cdp');
+    expect(runtime.commands.at(-1)?.at(-1)).toBe('close');
+    expect(runtime.loginCloseCount).toBe(1);
+    expect(login.get(request.id)).toBeNull();
   });
 
   it('does not open a window when cancelled during installation', async () => {
@@ -121,6 +153,7 @@ describe('BrowserLoginService', () => {
     await launch;
 
     expect(runtime.commands).toHaveLength(0);
+    expect(runtime.loginUrls).toHaveLength(0);
     expect(login.get(request.id)).toBeNull();
   });
 });

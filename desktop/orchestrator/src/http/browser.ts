@@ -30,6 +30,8 @@ export interface BrowserCommandRuntime {
   isReady(): boolean;
   ensureInstalled(): Promise<void>;
   runCli(args: string[], timeoutMs?: number): Promise<string>;
+  openLoginBrowser(url: string): Promise<number>;
+  closeLoginBrowser(): Promise<void>;
 }
 
 /**
@@ -41,6 +43,7 @@ export interface BrowserCommandRuntime {
 export class BrowserLoginService {
   private readonly requests = new Map<string, BrowserLoginRequest>();
   private activeId: string | null = null;
+  private loginCdpPort: number | null = null;
 
   constructor(private readonly runtime: BrowserCommandRuntime) {}
 
@@ -78,8 +81,9 @@ export class BrowserLoginService {
   async page(id: string): Promise<BrowserLoginPage | null> {
     const request = this.require(id);
     if (request.phase.kind !== 'waiting_login') return null;
-    const urlResult = parseCliResult(await this.runtime.runCli(this.args(['get', 'url'])));
-    const titleResult = parseCliResult(await this.runtime.runCli(this.args(['get', 'title'])));
+    if (this.loginCdpPort === null) return null;
+    const urlResult = parseCliResult(await this.runtime.runCli(this.args(['get', 'url'], this.loginCdpPort)));
+    const titleResult = parseCliResult(await this.runtime.runCli(this.args(['get', 'title'], this.loginCdpPort)));
     const url = typeof urlResult.url === 'string' ? normalizeWebUrl(urlResult.url) : null;
     if (!url) return null;
     return {
@@ -96,7 +100,10 @@ export class BrowserLoginService {
     }
     const page = await this.page(id);
     if (!page) throw new Error('Could not read the open website. Leave the sign-in window open and try again.');
-    await this.runtime.runCli(this.args(['close']));
+    if (this.loginCdpPort === null) throw new Error('The browser sign-in window is no longer available.');
+    await this.runtime.runCli(this.args(['close'], this.loginCdpPort));
+    await this.runtime.closeLoginBrowser();
+    this.loginCdpPort = null;
     this.activeId = null;
     this.requests.delete(id);
     return page;
@@ -109,7 +116,11 @@ export class BrowserLoginService {
     if (this.activeId !== id) return;
     this.activeId = null;
     if (request.phase.kind === 'launching' || request.phase.kind === 'waiting_login') {
-      await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
+      if (this.loginCdpPort !== null) {
+        await this.runtime.runCli(this.args(['close'], this.loginCdpPort)).catch(() => undefined);
+      }
+      await this.runtime.closeLoginBrowser().catch(() => undefined);
+      this.loginCdpPort = null;
     }
   }
 
@@ -136,27 +147,30 @@ export class BrowserLoginService {
       if (this.requests.get(request.id) !== request) return;
       await this.openWithRecovery(request);
       if (this.requests.get(request.id) !== request) {
-        await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
+        await this.closeLoginBridge();
         return;
       }
       request.phase = { kind: 'waiting_login' };
     } catch (error) {
       if (this.requests.get(request.id) !== request) return;
+      await this.closeLoginBridge();
       request.phase = { kind: 'error', message: error instanceof Error ? error.message : String(error) };
       this.activeId = null;
     }
   }
 
   private async openWithRecovery(request: BrowserLoginRequest): Promise<void> {
-    const open = () => this.runtime.runCli(this.args(['--headed', 'open', request.url]), 60_000);
+    const open = async () => {
+      this.loginCdpPort = await this.runtime.openLoginBrowser(request.url);
+      // Attach through CDP immediately so the native restore key is loaded,
+      // then navigate once more with that state in place. The browser itself
+      // was launched normally, without Playwright's automation markers.
+      await this.runtime.runCli(this.args(['open', request.url], this.loginCdpPort), 60_000);
+    };
     try {
       await open();
     } catch {
-      // A crashed app can leave an agent-browser daemon/socket in the narrow
-      // interval where the initial close succeeds but the next launch still
-      // attaches to stale state. One clean close + retry is safe because this
-      // session is dedicated to interactive login and never owns cron runs.
-      await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
+      await this.closeLoginBridge();
       if (this.requests.get(request.id) !== request) return;
       try {
         await open();
@@ -167,12 +181,21 @@ export class BrowserLoginService {
     }
   }
 
-  private args(command: string[]): string[] {
+  private async closeLoginBridge(): Promise<void> {
+    if (this.loginCdpPort !== null) {
+      await this.runtime.runCli(this.args(['close'], this.loginCdpPort)).catch(() => undefined);
+    }
+    await this.runtime.closeLoginBrowser().catch(() => undefined);
+    this.loginCdpPort = null;
+  }
+
+  private args(command: string[], cdpPort: number | null = null): string[] {
     return [
       '--namespace', BROWSER_NAMESPACE,
       '--session', LOGIN_SESSION,
       '--restore', BROWSER_RESTORE_KEY,
       '--restore-save', 'always',
+      ...(cdpPort === null ? [] : ['--cdp', String(cdpPort)]),
       '--json',
       ...command,
     ];

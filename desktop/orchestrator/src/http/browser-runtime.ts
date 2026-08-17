@@ -1,5 +1,7 @@
-import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { get as httpGet } from 'node:http';
+import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -32,12 +34,18 @@ function defaultAgentBrowserHome(): string {
  *    ~/.agent-browser/browsers/chrome-<version>/ (the CLI's own fixed
  *    layout — verified against the pinned version).
  * `resolveChromium()` is the one shared answer for "which browser binary".
- * Both the headed sign-in flow and Hermes receive it through
- * AGENT_BROWSER_EXECUTABLE_PATH.
+ * Hermes receives it through AGENT_BROWSER_EXECUTABLE_PATH. Interactive
+ * sign-in prefers ordinary stable Chrome and falls back to this binary, but
+ * launches it directly without automation flags before agent-browser attaches.
  */
 export class BrowserRuntime {
   private phase: BrowserRuntimePhase = { kind: 'idle', ready: false };
   private installPromise: Promise<void> | null = null;
+  private loginBrowser: {
+    child: ChildProcess;
+    cdpPort: number;
+    profileDir: string;
+  } | null = null;
 
   constructor(
     private root = process.env.VERSO_BROWSER_RUNTIME_DIR?.trim() || defaultRuntimeRoot(),
@@ -123,6 +131,72 @@ export class BrowserRuntime {
     });
   }
 
+  /**
+   * Open an ordinary, dedicated Chrome instance for human authentication.
+   * It deliberately omits Playwright/automation launch flags, which identity
+   * providers such as Google reject during sign-in. A non-default temporary
+   * profile is required by Chrome 136+ for remote debugging and keeps this
+   * flow isolated from the user's everyday browser profile.
+   */
+  async openLoginBrowser(url: string): Promise<number> {
+    await this.ensureInstalled();
+    await this.closeLoginBrowser();
+    const executable = this.loginBrowserExecutable();
+    if (!executable) throw new Error('No compatible Chrome browser is available for sign-in.');
+
+    const cdpPort = await reserveLoopbackPort();
+    const profileDir = mkdtempSync(path.join(os.tmpdir(), 'verso-browser-login-'));
+    const child = spawn(executable, [
+      `--user-data-dir=${profileDir}`,
+      `--remote-debugging-port=${cdpPort}`,
+      '--remote-debugging-address=127.0.0.1',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-background-mode',
+      url,
+    ], {
+      stdio: 'ignore',
+    });
+    let spawnError: Error | null = null;
+    child.once('error', (error) => {
+      spawnError = error;
+    });
+    this.loginBrowser = { child, cdpPort, profileDir };
+
+    try {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        if (spawnError) throw spawnError;
+        if (!childIsRunning(child)) {
+          throw new Error(`Chrome sign-in window exited before it was ready (${child.exitCode ?? child.signalCode}).`);
+        }
+        if (await isCdpReady(cdpPort)) return cdpPort;
+        await delay(200);
+      }
+      throw new Error('Chrome sign-in window did not become ready in time.');
+    } catch (error) {
+      await this.closeLoginBrowser();
+      throw error;
+    }
+  }
+
+  async closeLoginBrowser(): Promise<void> {
+    const browser = this.loginBrowser;
+    this.loginBrowser = null;
+    if (!browser) return;
+
+    if (childIsRunning(browser.child)) {
+      const exited = new Promise<void>((resolve) => browser.child.once('exit', () => resolve()));
+      browser.child.kill('SIGTERM');
+      await Promise.race([exited, delay(5_000)]);
+      if (childIsRunning(browser.child)) {
+        browser.child.kill('SIGKILL');
+        await Promise.race([exited, delay(2_000)]);
+      }
+    }
+    rmSync(browser.profileDir, { recursive: true, force: true });
+  }
+
   private async install(): Promise<void> {
     mkdirSync(this.root, { recursive: true });
     try {
@@ -161,6 +235,14 @@ export class BrowserRuntime {
     // ships next to it. Fall back to PATH resolution for dev launches.
     const sibling = path.join(path.dirname(process.execPath), 'npm');
     return existsSync(sibling) ? sibling : 'npm';
+  }
+
+  private loginBrowserExecutable(): string | null {
+    const override = process.env.VERSO_LOGIN_BROWSER_PATH?.trim();
+    if (override && existsSync(override)) return override;
+    const stableChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    if (existsSync(stableChrome)) return stableChrome;
+    return this.resolveChromium();
   }
 
   private run(
@@ -205,7 +287,7 @@ export class BrowserRuntime {
 }
 
 const OPTIONS_WITH_VALUES = new Set([
-  '--args', '--enable', '--executable-path', '--extension', '--headers', '--init-script',
+  '--args', '--cdp', '--enable', '--executable-path', '--extension', '--headers', '--init-script',
   '--namespace', '--profile', '--restore', '--restore-check-fn', '--restore-check-text',
   '--restore-check-url', '--restore-save', '--session', '--session-name', '--state', '--user-agent',
 ]);
@@ -243,6 +325,50 @@ function commandFailureDetail(stdout: string, stderr: string): string {
     }
   }
   return (cleanStderr || cleanStdout).slice(-1000);
+}
+
+function reserveLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('Could not reserve a browser debugging port.'));
+        return;
+      }
+      server.close((error) => error ? reject(error) : resolve(address.port));
+    });
+  });
+}
+
+function isCdpReady(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const request = httpGet({
+      hostname: '127.0.0.1',
+      port,
+      path: '/json/version',
+      timeout: 500,
+    }, (response) => {
+      response.resume();
+      resolve(response.statusCode === 200);
+    });
+    request.once('timeout', () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.once('error', () => resolve(false));
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function childIsRunning(child: ChildProcess): boolean {
+  return child.pid !== undefined && child.exitCode === null && child.signalCode === null;
 }
 
 function compareVersions(a: string, b: string): number {

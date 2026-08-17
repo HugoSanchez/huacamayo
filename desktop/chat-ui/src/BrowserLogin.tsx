@@ -94,7 +94,8 @@ export function BrowserLoginCard({ setupId, siteName }: { setupId: string; siteN
         {phase.kind === 'complete'
           ? <>Sign-in saved for <strong>{phase.site.domain}</strong>.</>
           : <>To automate {siteName ? <strong>{siteName}</strong> : 'this website'} while signed in,
-            Verso opens its automation browser once. Your login stays on this Mac.</>}
+            Verso opens a dedicated Chrome window where you can sign in normally. Your credentials never
+            enter chat; only the browser session is saved on this Mac.</>}
       </div>
       {phase.kind === 'idle' && (
         <div className="browser-connect-actions">
@@ -104,7 +105,7 @@ export function BrowserLoginCard({ setupId, siteName }: { setupId: string; siteN
         </div>
       )}
       {phase.kind === 'installing' && <div className="browser-connect-status">Installing the browser (one-time download)…</div>}
-      {phase.kind === 'launching' && <div className="browser-connect-status">Opening the sign-in window…</div>}
+      {phase.kind === 'launching' && <div className="browser-connect-status">Opening a dedicated Chrome sign-in window…</div>}
       {phase.kind === 'completing' && <div className="browser-connect-status">Saving sign-in…</div>}
       {phase.kind === 'error' && (
         <div className="browser-connect-error-row">
