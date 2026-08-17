@@ -148,8 +148,15 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 
 
 @mcp.tool()
-def request_browser_connection(name: str | None = None) -> types.CallToolResult:
+def request_browser_connection(
+    name: str | None = None,
+    url: str | None = None,
+) -> types.CallToolResult:
     """Start the user-facing setup flow for automating a website in a browser.
+
+    ALWAYS pass `url` when you know the target site (you almost always do):
+    the setup window opens directly on that page instead of a blank tab, so
+    the user only has to sign in (if needed) and confirm.
 
     REQUIRED for EVERY routine that will interact with a website through the
     browser_* tools — including public sites that need no sign-in. Routines
@@ -184,7 +191,10 @@ def request_browser_connection(name: str | None = None) -> types.CallToolResult:
     payload = _request(
         "POST",
         "/browser/connections/request",
-        {"name": (name or "").strip() or None},
+        {
+            "name": (name or "").strip() or None,
+            "url": (url or "").strip() or None,
+        },
     )
     return _structured_result({"kind": "browser_connection_request", **payload})
 

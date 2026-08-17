@@ -174,10 +174,18 @@ export function buildBrowserRoutes(
     // ——— Agent-facing (via the verso MCP bridge) ———
 
     route('POST', '/browser/connections/request', async (_req, res, _params, body) => {
-      const name = typeof (body as { name?: unknown })?.name === 'string'
-        ? ((body as { name: string }).name.trim() || 'Website')
-        : 'Website';
-      const connection = store.create(name, profilesRoot);
+      const payload = (body ?? {}) as { name?: unknown; url?: unknown };
+      const name = typeof payload.name === 'string' ? (payload.name.trim() || 'Website') : 'Website';
+      let startUrl: string | null = null;
+      if (typeof payload.url === 'string') {
+        try {
+          const parsed = new URL(payload.url.trim());
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') startUrl = parsed.toString();
+        } catch {
+          startUrl = null;
+        }
+      }
+      const connection = store.create(name, profilesRoot, startUrl);
       json(res, 200, { ok: true, connection: connectionView(connection, store) });
     }),
 

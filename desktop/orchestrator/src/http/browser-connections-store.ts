@@ -73,14 +73,17 @@ export class BrowserConnectionsStore {
     }
   }
 
-  create(name: string, profilesRoot: string): BrowserConnection {
+  /** `startUrl` is the agent-provided target page: the setup window opens
+   * there so the user never faces a blank tab. The completion capture
+   * overwrites it with wherever the user actually landed. */
+  create(name: string, profilesRoot: string, startUrl: string | null = null): BrowserConnection {
     const id = randomBytes(6).toString('hex');
     const now = Date.now();
     const connection: BrowserConnection = {
       id,
       name,
       domain: null,
-      startUrl: null,
+      startUrl,
       title: null,
       profileDir: path.join(profilesRoot, id),
       status: 'pending',
@@ -90,7 +93,7 @@ export class BrowserConnectionsStore {
     this.db.prepare(`
       INSERT INTO browser_connections (id, name, domain, start_url, title, profile_dir, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, name, null, null, null, connection.profileDir, 'pending', now, now);
+    `).run(id, name, null, startUrl, null, connection.profileDir, 'pending', now, now);
     return connection;
   }
 

@@ -363,6 +363,16 @@ function AnthropicSection() {
       {status === null ? null : status.connected ? (
         <div className="settings-row">
           <span className="settings-label">API key</span>
+          <input
+            type="password"
+            className="settings-key-input settings-key-input-saved"
+            value="saved-anthropic-api-key"
+            aria-label="Saved Anthropic API key"
+            autoComplete="off"
+            spellCheck={false}
+            readOnly
+            disabled
+          />
           <button
             type="button"
             className="settings-button settings-button-primary"
@@ -439,6 +449,9 @@ function CodexSection() {
     }
   }
 
+  const showConnectionRow = status !== null && (phase.kind === 'idle' || phase.kind === 'connected');
+  const isConnected = status?.connected === true || phase.kind === 'connected';
+
   return (
     <section className="settings-section">
       <h2>Codex</h2>
@@ -447,10 +460,10 @@ function CodexSection() {
         <p className="settings-footnote codex-error">{statusError}</p>
       ) : null}
 
-      {phase.kind === 'idle' && status !== null ? (
+      {showConnectionRow ? (
         <div className="settings-row">
           <span className="settings-label">Connection</span>
-          {status.connected ? (
+          {isConnected ? (
             <button
               type="button"
               className="settings-button settings-button-primary"

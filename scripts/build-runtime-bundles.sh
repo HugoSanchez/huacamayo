@@ -235,7 +235,14 @@ fi
 if ${needs_hermes_clone}; then
     rm -rf "${HERMES_BUNDLE}"
     echo "[bundle] cloning hermes-agent @ ${HERMES_REF:0:9}"
-    git clone --quiet "${HERMES_REPO}" "${HERMES_BUNDLE}"
+    # --no-checkout: upstream's default branch has paths that differ only by
+    # case (contributors/emails/…), which collide on macOS's case-insensitive
+    # filesystem. Materializing the default branch first makes the subsequent
+    # pinned checkout see the collision artifact as a dirty tree and abort.
+    # Checking out ONLY the pinned ref sidesteps that; if the pinned tree ever
+    # gains its own collision, git warns and keeps one file, which is fine for
+    # contributor-email markers that never reach the bundle.
+    git clone --quiet --no-checkout "${HERMES_REPO}" "${HERMES_BUNDLE}"
     git -C "${HERMES_BUNDLE}" checkout --quiet "${HERMES_REF}"
 fi
 

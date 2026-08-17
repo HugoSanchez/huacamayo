@@ -1,5 +1,5 @@
---- a/gateway/platforms/api_server.py	2026-08-12 16:37:36
-+++ b/gateway/platforms/api_server.py	2026-08-12 16:38:42
+--- a/gateway/platforms/api_server.py	2026-08-17 10:21:52
++++ b/gateway/platforms/api_server.py	2026-08-17 10:22:29
 @@ -1521,6 +1521,16 @@
              # Chronos managed-cron fire webhook (NAS → agent). Authenticated
              # by a NAS-minted JWT (NOT API_SERVER_KEY).
@@ -18,8 +18,8 @@
  
      # ------------------------------------------------------------------
 --- a/gateway/platforms/verso_mcp_oauth.py	1970-01-01 01:00:00
-+++ b/gateway/platforms/verso_mcp_oauth.py	2026-08-12 16:38:25
-@@ -0,0 +1,322 @@
++++ b/gateway/platforms/verso_mcp_oauth.py	2026-08-17 11:02:26
+@@ -0,0 +1,359 @@
 +"""Verso runtime patch: MCP OAuth flow endpoints on the gateway API server.
 +
 +Mirrors the dashboard-mediated MCP OAuth flow from ``hermes_cli/web_server.py``
@@ -67,7 +67,7 @@
 +
 +logger = logging.getLogger(__name__)
 +
-+_FLOW_TTL_SECONDS = 30 * 60
++_FLOW_TTL_SECONDS = 15 * 60
 +_MAX_PENDING_FLOWS = 8
 +_flows: dict[str, "object"] = {}
 +_flows_lock = threading.Lock()
@@ -130,10 +130,18 @@
 +                        flow.server_name,
 +                        hermes_home=flow.hermes_home,
 +                    )
++                    # Floor BOTH timeouts above the SDK's 300s browser-callback
++                    # window. connect_timeout caps the connect attempt; the
++                    # entry's request `timeout` (the managed config writes 120)
++                    # otherwise aborts the whole OAuth handshake at 2 minutes -
++                    # less than a human needs to sign in - leaving the flow
++                    # dead ("OAuth flow expired") by the time the provider
++                    # redirects back.
++                    cfg["timeout"] = max(float(cfg.get("timeout", 0) or 0), 330)
 +                    tools = _probe_single_server(
 +                        flow.server_name,
 +                        cfg,
-+                        connect_timeout=max(float(cfg.get("connect_timeout", 0) or 0), 315),
++                        connect_timeout=max(float(cfg.get("connect_timeout", 0) or 0), 330),
 +                    )
 +                    if not _oauth_tokens_present(flow.server_name):
 +                        raise RuntimeError(
@@ -168,7 +176,11 @@
 +            reset_secret_scope(secret_token)
 +            reset_hermes_home_override(home_token)
 +    except Exception as exc:
-+        msg = str(exc)
++        # asyncio.TimeoutError and friends stringify to "" - never surface an
++        # empty reason to the UI.
++        msg = str(exc).strip() or (
++            type(exc).__name__ + ': the sign-in flow was interrupted or timed out.'
++        )
 +        # Providers that gate RFC 7591 registration to pre-approved clients
 +        # 403 the register call before any authorization URL exists — surface
 +        # what's actually happening instead of a bare "403 Forbidden".
@@ -325,6 +337,30 @@
 +    )
 +
 +
++async def handle_registered_tools(adapter, request: "web.Request") -> "web.Response":
++    """GET /api/mcp/tools - registered MCP tool names, per server.
++
++    The gateway's /v1/toolsets endpoint lists built-in toolsets only; MCP
++    servers (verso, composio, custom_*) register their tools directly into
++    the agent registry with no HTTP surface. Embedders need this to answer
++    "did connector X actually register tools?" - the alternative is grepping
++    agent.log. Shape: {"servers": {"<name>": ["mcp__<name>__<tool>", ...]}}.
++    """
++    auth_err = adapter._check_auth(request)
++    if auth_err:
++        return auth_err
++    from tools import mcp_tool
++
++    servers = getattr(mcp_tool, "_servers", {}) or {}
++    out = {}
++    for name, task in dict(servers).items():
++        try:
++            out[str(name)] = [str(t) for t in (getattr(task, "_registered_tool_names", None) or [])]
++        except Exception:
++            out[str(name)] = []
++    return web.json_response({"servers": out})
++
++
 +def _html(body: str, status: int = 200) -> "web.Response":
 +    return web.Response(
 +        text=f"<!doctype html><html><body>{body}</body></html>",
@@ -341,4 +377,5 @@
 +        ("POST", "/api/mcp/servers/{name}/auth", partial(handle_start, adapter)),
 +        ("GET", "/api/mcp/oauth/flows/{flow_id}", partial(handle_flow_status, adapter)),
 +        ("GET", "/api/mcp/oauth/callback/{name}", partial(handle_callback, adapter)),
++        ("GET", "/api/mcp/tools", partial(handle_registered_tools, adapter)),
 +    ]

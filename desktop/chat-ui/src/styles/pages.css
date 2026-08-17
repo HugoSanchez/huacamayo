@@ -890,6 +890,16 @@
   color: var(--ink-dim);
 }
 
+.settings-key-input:disabled {
+  opacity: 1;
+  color: var(--ink-dim);
+  cursor: default;
+}
+
+.settings-key-input-saved {
+  max-width: 360px;
+}
+
 .settings-button {
   appearance: none;
   display: inline-flex;
@@ -1035,19 +1045,6 @@
 
 .codex-error {
   color: var(--danger-btn-text);
-}
-
-.codex-connected {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 2px 0;
-}
-
-.codex-connected-text {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
 }
 
 @media (prefers-color-scheme: dark) {

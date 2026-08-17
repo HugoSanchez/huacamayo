@@ -240,6 +240,7 @@ export class HermesSupervisor {
   private resolveBaseUrlPromise: Promise<void> | null = null;
   private child: ChildProcess | null = null;
   private startPromise: Promise<void> | null = null;
+  private restartPromise: Promise<void> | null = null;
   private state: HermesRuntimeState;
   private source: HermesRuntimeSource = 'none';
   private lastError: string | null = null;
@@ -421,10 +422,25 @@ export class HermesSupervisor {
    * only reads at startup (.env API keys, api_server model_routes). Chat
    * sessions survive: the orchestrator rebuilds conversation history from
    * its own store when Hermes forgets a previous_response_id.
+   *
+   * Concurrent callers coalesce onto one in-flight restart. Without this,
+   * two overlapping restarts (e.g. connector remove followed quickly by
+   * add) have the second shutdown() SIGTERM the healthy gateway the first
+   * restart just started, and the loser reports "did not become ready"
+   * while a perfectly good gateway is running.
    */
   async restart(): Promise<void> {
-    await this.shutdown();
-    await this.ensureReady();
+    if (this.restartPromise) {
+      return this.restartPromise;
+    }
+    const promise = (async () => {
+      await this.shutdown();
+      await this.ensureReady();
+    })().finally(() => {
+      this.restartPromise = null;
+    });
+    this.restartPromise = promise;
+    return promise;
   }
 
   async waitUntilReady(timeoutMs: number): Promise<void> {
@@ -594,16 +610,25 @@ export class HermesSupervisor {
   }
 
   private async ensureSpawnTargetAvailable(): Promise<void> {
-    if (!await this.ping(200)) {
-      return;
-    }
-
     if (!this.hasExplicitBaseUrl) {
+      // Always spawn onto a fresh port. Reusing the previous child's port
+      // races its socket lingering in TIME_WAIT after shutdown (the gateway
+      // binds without address reuse on macOS) and Hermes treats that bind
+      // conflict as a NON-retryable startup failure (exit 78), which
+      // surfaced as "gateway did not become ready" on every connector
+      // add/remove restart. A brand-new ephemeral port cannot collide with
+      // our own leftovers. Nothing holds the old port's URL across a spawn:
+      // every consumer reads gatewayConfig dynamically, and the child gets
+      // the URL via env at spawn time.
       const port = await allocatePort();
       this.config = {
         ...this.config,
         baseUrl: `http://${DEFAULT_HOST}:${port}`,
       };
+      return;
+    }
+
+    if (!await this.ping(200)) {
       return;
     }
 

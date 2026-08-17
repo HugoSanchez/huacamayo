@@ -279,7 +279,7 @@ describe('custom MCP connectors', () => {
       if (url.includes('/api/mcp/oauth/flows/flow-1')) {
         return new Response(JSON.stringify({ status: 'approved', error: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.endsWith('/v1/toolsets')) return toolsetsResponse(['mcp__custom_holded__list_invoices']);
+      if (url.endsWith('/api/mcp/tools')) return toolsetsResponse(['mcp__custom_holded__list_invoices']);
       return new Response('', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -326,7 +326,7 @@ describe('custom MCP connectors', () => {
           error: "'custom_holded' only allows pre-approved OAuth clients",
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
-      if (url.endsWith('/v1/toolsets')) return toolsetsResponse([]);
+      if (url.endsWith('/api/mcp/tools')) return toolsetsResponse([]);
       return new Response('', { status: 404 });
     }));
     const service = new CustomConnectorService(store, keychain.instance, hermes, {
@@ -362,7 +362,7 @@ describe('custom MCP connectors', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url.endsWith('/favicon.ico')) return new Response('', { status: 404 });
-      if (url.endsWith('/v1/toolsets')) return toolsetsResponse([]);
+      if (url.endsWith('/api/mcp/tools')) return toolsetsResponse([]);
       return new Response('', { status: 401, headers: { 'WWW-Authenticate': 'Bearer realm="mcp"' } });
     }));
     const service = new CustomConnectorService(store, keychain.instance, hermes, { registrationAttempts: 1, registrationDelayMs: 0 });
@@ -387,7 +387,7 @@ describe('custom MCP connectors', () => {
     });
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = String(input);
-      if (url.endsWith('/v1/toolsets')) return toolsetsResponse([]);
+      if (url.endsWith('/api/mcp/tools')) return toolsetsResponse([]);
       throw new Error('network down');
     }));
     const service = new CustomConnectorService(store, keychain.instance, hermes, { registrationAttempts: 1, registrationDelayMs: 0 });
@@ -446,7 +446,7 @@ function initializeResponse(name: string): Response {
 }
 
 function toolsetsResponse(tools: string[]): Response {
-  return new Response(JSON.stringify({ toolsets: [{ tools }] }), {
+  return new Response(JSON.stringify({ servers: { custom_holded: tools } }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });

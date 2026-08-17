@@ -138,8 +138,9 @@ export function BrowserConnectFlow({ phase, onComplete, onCancel }: {
   return (
     <div className="browser-connect-waiting">
       <div className="browser-connect-status">
-        A browser window is open. Sign in and go to the page the routine should
-        work on, then come back here.
+        Verso's automation browser is open (it may show a "for testing" notice —
+        that's normal, don't install anything). Make sure the page the routine
+        should work on is open, sign in if the site asks, then come back here.
         {phase.currentTitle ? (
           <span className="browser-connect-current"> Currently open: {phase.currentTitle}</span>
         ) : null}
@@ -181,8 +182,9 @@ export function BrowserConnectCard({ connectionId, siteName }: { connectionId: s
       <div className="codex-connect-card-text">
         {phase.kind === 'connected'
           ? 'Website connected. The routine can now use this sign-in.'
-          : <>To automate {siteName ? <strong>{siteName}</strong> : 'this website'}, Verso opens a
-            dedicated browser window where you sign in once. Your login stays on this Mac.</>}
+          : <>To automate {siteName ? <strong>{siteName}</strong> : 'this website'}, Verso opens its own
+            browser window on the site — sign in there once if needed, then confirm here.
+            Your login stays on this Mac.</>}
       </div>
       {phase.kind === 'idle' ? (
         <div className="browser-connect-actions">

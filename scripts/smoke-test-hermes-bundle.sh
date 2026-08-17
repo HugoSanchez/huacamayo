@@ -159,6 +159,18 @@ if [ "${auth_status}" != "404" ] || ! grep -q "not found" "${auth_body}"; then
     head -3 "${auth_body}" >&2
     exit 1
 fi
+tools_status="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/mcp/tools")"
+if [ "${tools_status}" != "401" ]; then
+    echo "[smoke] FAIL: GET /api/mcp/tools unauthenticated returned ${tools_status} (expected 401; 404 means the registry route is missing — connector status will never show connected)" >&2
+    exit 1
+fi
+tools_body="${HOME_DIR}/smoke-mcp-tools.txt"
+curl -s -o "${tools_body}" -H "Authorization: Bearer ${API_KEY}" "http://127.0.0.1:${PORT}/api/mcp/tools"
+if ! grep -q '"servers"' "${tools_body}"; then
+    echo "[smoke] FAIL: /api/mcp/tools did not return a servers map; body:" >&2
+    head -3 "${tools_body}" >&2
+    exit 1
+fi
 echo "[smoke] PASS: MCP OAuth routes registered and dispatching"
 
 # ── Pin-liveness contract ────────────────────────────────────────────────
