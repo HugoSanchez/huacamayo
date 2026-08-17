@@ -267,10 +267,10 @@ export async function addCustomConnector(input: { name: string; url: string; tok
   return body.connector;
 }
 
-export async function removeCustomConnector(id: string): Promise<void> {
+export async function disconnectCustomConnector(id: string): Promise<void> {
   const res = await sidecarFetch(`${baseURL()}/connectors/custom/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to remove custom connector'));
+    throw new Error(await readError(res, 'Failed to disconnect custom connector'));
   }
   notifyConnectionsChanged();
 }

@@ -235,8 +235,14 @@ fi
 if ${needs_hermes_clone}; then
     rm -rf "${HERMES_BUNDLE}"
     echo "[bundle] cloning hermes-agent @ ${HERMES_REF:0:9}"
-    git clone --quiet "${HERMES_REPO}" "${HERMES_BUNDLE}"
-    git -C "${HERMES_BUNDLE}" checkout --quiet "${HERMES_REF}"
+    # Fetch only the pinned commit. Besides avoiding a large full-history
+    # clone, this never materializes upstream's default branch, which has paths
+    # that differ only by case and collide on macOS filesystems.
+    mkdir -p "${HERMES_BUNDLE}"
+    git -C "${HERMES_BUNDLE}" init --quiet
+    git -C "${HERMES_BUNDLE}" remote add origin "${HERMES_REPO}"
+    git -C "${HERMES_BUNDLE}" fetch --quiet --depth 1 origin "${HERMES_REF}"
+    git -C "${HERMES_BUNDLE}" checkout --quiet --detach FETCH_HEAD
 fi
 
 # Drop the .git dir from the snapshot so the bundle is smaller and unambiguous

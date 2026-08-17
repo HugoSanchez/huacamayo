@@ -208,28 +208,6 @@ function CheckMark() {
   );
 }
 
-function SuccessBadge() {
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <circle cx="12" cy="12" r="11" fill="#2e7d32" />
-      <polyline
-        points="7 12.5 10.5 16 17 9"
-        fill="none"
-        stroke="white"
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 // Renders the OpenAI / Codex flower glyph. fill="currentColor" so it inherits
 // whatever text color the surrounding button uses.
 export function CodexMark({ size = 16 }: { size?: number } = {}) {
@@ -247,8 +225,8 @@ export function CodexMark({ size = 16 }: { size?: number } = {}) {
   );
 }
 
-// Renders the non-idle phase of a Codex connect flow (starting → waiting →
-// connected → error). The parent owns the idle/Connect-button layout.
+// Renders the active Codex connect flow. The parent owns the idle and
+// connected row layout.
 export function CodexConnectFlow({ phase, onRetry, onCancel }: {
   phase: CodexConnectPhase;
   onRetry: () => void;
@@ -291,12 +269,7 @@ export function CodexConnectFlow({ phase, onRetry, onCancel }: {
   }
 
   if (phase.kind === 'connected') {
-    return (
-      <div className="codex-connected">
-        <SuccessBadge />
-        <span className="codex-connected-text">You&rsquo;re good to go!</span>
-      </div>
-    );
+    return null;
   }
 
   // phase.kind === 'error'

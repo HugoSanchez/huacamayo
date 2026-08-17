@@ -220,6 +220,7 @@ const DEFAULT_DISABLED_HERMES_SKILLS = [
   'github-issues',
 ];
 const DEFAULT_DISABLED_SKILLS_MARKER = '.verso-default-disabled-skills-v1';
+const PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER = '.verso-paused-pre-release-browser-crons-v1';
 
 export class HermesSupervisor {
   private readonly launch: HermesLaunchConfig;
@@ -235,10 +236,10 @@ export class HermesSupervisor {
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
-  private baseUrlResolved: boolean;
-  private resolveBaseUrlPromise: Promise<void> | null = null;
   private child: ChildProcess | null = null;
   private startPromise: Promise<void> | null = null;
+  private shutdownPromise: Promise<void> | null = null;
+  private restartPromise: Promise<void> | null = null;
   private state: HermesRuntimeState;
   private source: HermesRuntimeSource = 'none';
   private lastError: string | null = null;
@@ -261,7 +262,6 @@ export class HermesSupervisor {
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
     this.seedHermesHome = this.templateHermesHome;
-    this.baseUrlResolved = this.hasExplicitBaseUrl;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
 
@@ -331,8 +331,6 @@ export class HermesSupervisor {
   }
 
   async ensureReady(signal?: AbortSignal): Promise<HermesGatewayConfig> {
-    await this.ensureResolvedBaseUrl();
-
     if (!this.launch.command && this.manualMode) {
       if (await this.ping(800, signal)) {
         this.lastError = null;
@@ -371,7 +369,6 @@ export class HermesSupervisor {
   }
 
   async getStatus(timeoutMs = 1200): Promise<HermesRuntimeSnapshot> {
-    await this.ensureResolvedBaseUrl();
     const reachable = this.isChildRunning() ? await this.ping(timeoutMs) : false;
     if (!this.launch.command && this.manualMode) {
       const manualReachable = await this.ping(timeoutMs);
@@ -390,27 +387,40 @@ export class HermesSupervisor {
   }
 
   async shutdown(): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise;
+    }
+    const promise = this.shutdownInner().finally(() => {
+      if (this.shutdownPromise === promise) this.shutdownPromise = null;
+    });
+    this.shutdownPromise = promise;
+    return promise;
+  }
+
+  private async shutdownInner(): Promise<void> {
     const child = this.child;
-    this.child = null;
     this.startPromise = null;
 
-    if (!child || child.exitCode !== null || child.killed) {
+    if (!child || hasExited(child)) {
+      if (this.child === child) this.child = null;
       this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
       this.source = 'none';
       return;
     }
 
-    const exited = new Promise<void>((resolve) => {
-      child.once('exit', () => resolve());
-    });
+    const exited = childExitPromise(child);
 
     child.kill('SIGTERM');
-    await Promise.race([exited, delay(2_000)]);
-    if (child.exitCode === null && !child.killed) {
+    let didExit = await waitForExit(exited, 2_000);
+    if (!didExit && !hasExited(child)) {
       child.kill('SIGKILL');
-      await Promise.race([exited, delay(1_000)]);
+      didExit = await waitForExit(exited, 1_000);
+    }
+    if (!didExit && !hasExited(child)) {
+      throw new Error(`Hermes gateway process ${child.pid ?? 'unknown'} did not exit after SIGKILL.`);
     }
 
+    if (this.child === child) this.child = null;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
     this.source = 'none';
   }
@@ -420,35 +430,29 @@ export class HermesSupervisor {
    * only reads at startup (.env API keys, api_server model_routes). Chat
    * sessions survive: the orchestrator rebuilds conversation history from
    * its own store when Hermes forgets a previous_response_id.
+   *
+   * Concurrent callers coalesce onto one in-flight restart. Without this,
+   * two overlapping restarts (e.g. connector remove followed quickly by
+   * add) have the second shutdown() SIGTERM the healthy gateway the first
+   * restart just started, and the loser reports "did not become ready"
+   * while a perfectly good gateway is running.
    */
   async restart(): Promise<void> {
-    await this.shutdown();
-    await this.ensureReady();
+    if (this.restartPromise) {
+      return this.restartPromise;
+    }
+    const promise = (async () => {
+      await this.shutdown();
+      await this.ensureReady();
+    })().finally(() => {
+      this.restartPromise = null;
+    });
+    this.restartPromise = promise;
+    return promise;
   }
 
   async waitUntilReady(timeoutMs: number): Promise<void> {
     await this.ensureReady(AbortSignal.timeout(timeoutMs));
-  }
-
-  private async ensureResolvedBaseUrl(): Promise<void> {
-    if (this.baseUrlResolved) return;
-    if (this.resolveBaseUrlPromise) {
-      await this.resolveBaseUrlPromise;
-      return;
-    }
-
-    this.resolveBaseUrlPromise = (async () => {
-      const port = await allocatePort();
-      this.config = {
-        ...this.config,
-        baseUrl: `http://${DEFAULT_HOST}:${port}`,
-      };
-      this.baseUrlResolved = true;
-    })().finally(() => {
-      this.resolveBaseUrlPromise = null;
-    });
-
-    await this.resolveBaseUrlPromise;
   }
 
   private snapshot(reachable: boolean): HermesRuntimeSnapshot {
@@ -533,7 +537,7 @@ export class HermesSupervisor {
   }
 
   private isChildRunning(): boolean {
-    return Boolean(this.child && this.child.exitCode === null && !this.child.killed);
+    return Boolean(this.child && !hasExited(this.child));
   }
 
   private async startManaged(): Promise<void> {
@@ -593,16 +597,15 @@ export class HermesSupervisor {
   }
 
   private async ensureSpawnTargetAvailable(): Promise<void> {
-    if (!await this.ping(200)) {
+    const target = new URL(this.config.baseUrl);
+    const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
+    if (await canBind(target.hostname, port)) {
       return;
     }
 
     if (!this.hasExplicitBaseUrl) {
       const port = await allocatePort();
-      this.config = {
-        ...this.config,
-        baseUrl: `http://${DEFAULT_HOST}:${port}`,
-      };
+      this.config = { ...this.config, baseUrl: `http://${DEFAULT_HOST}:${port}` };
       return;
     }
 
@@ -688,6 +691,7 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
+    this.pausePreReleaseBrowserCrons();
     this.configureModelRoutes();
     this.restoreManagedModelConfigIfProxyOwned();
     this.seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed);
@@ -722,6 +726,61 @@ export class HermesSupervisor {
     }
     mkdirSync(dirname(targetPath), { recursive: true });
     copyFileSync(sourcePath, targetPath);
+  }
+
+  /**
+   * Pre-release builds briefly allowed the agent to create browser-backed
+   * cron jobs. That path proved unreliable and was removed before release,
+   * but jobs already written to a test profile would otherwise resume when
+   * Hermes starts. Preserve the jobs and their history while pausing active
+   * ones exactly once; users can still inspect or delete them in the UI.
+   */
+  private pausePreReleaseBrowserCrons(): void {
+    const markerPath = join(this.managedHermesHome, PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER);
+    if (existsSync(markerPath)) return;
+
+    const jobsPath = join(this.managedHermesHome, 'cron', 'jobs.json');
+    let pausedCount = 0;
+    if (existsSync(jobsPath)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(jobsPath, 'utf8'));
+      } catch (error) {
+        console.warn(
+          `[cron-cleanup] could not read ${jobsPath}; browser routines were not changed:`,
+          error instanceof Error ? error.message : String(error),
+        );
+        return;
+      }
+
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      const jobs = (parsed as Record<string, unknown>).jobs;
+      if (Array.isArray(jobs)) {
+        const pausedAt = new Date().toISOString();
+        for (const rawJob of jobs) {
+          if (!rawJob || typeof rawJob !== 'object' || Array.isArray(rawJob)) continue;
+          const job = rawJob as Record<string, unknown>;
+          if (!Array.isArray(job.enabled_toolsets) || !job.enabled_toolsets.includes('browser')) continue;
+          if (job.enabled === false && job.state === 'paused') continue;
+          job.enabled = false;
+          job.state = 'paused';
+          job.paused_at = pausedAt;
+          job.paused_reason = 'Browser routines are disabled in this Verso release.';
+          pausedCount += 1;
+        }
+      }
+
+      if (pausedCount > 0) {
+        const tempPath = `${jobsPath}.verso-cleanup-${process.pid}.tmp`;
+        writeFileSync(tempPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
+        renameSync(tempPath, jobsPath);
+      }
+    }
+
+    writeFileSync(markerPath, 'Browser cron cleanup v1 completed.\n', 'utf8');
+    if (pausedCount > 0) {
+      console.warn(`[cron-cleanup] paused ${pausedCount} pre-release browser routine(s)`);
+    }
   }
 
   private syncManagedAuthStore(): void {
@@ -842,13 +901,6 @@ export class HermesSupervisor {
   }
 
   /**
-   * Earlier managed-profile experiments pointed Hermes at verso's local
-   * `/llm/v1` proxy. That proxy is no longer part of the product path; Hermes
-   * should preserve the user's own Codex/OpenAI auth and model config. If we
-   * find the exact old proxy-owned model config, restore the template model
-   * section. Other model configs are left untouched.
-   */
-  /**
    * Reconcile api_server model_routes with the credentials that actually
    * exist, so the chat-input model selector can switch providers per
    * request. A routed alias makes the gateway re-resolve provider
@@ -908,6 +960,24 @@ export class HermesSupervisor {
     apiServer.extra = extra;
     platforms.api_server = apiServer;
     config.platforms = platforms;
+
+    // Chat requests always carry an explicit model, but cron runs (and any
+    // session without one) fall back to the top-level `model.default`. A
+    // claude-* default paired with the Codex backend 400s every such run
+    // ("model not supported when using Codex with a ChatGPT account"), so
+    // repair that known-broken pairing whenever Codex credentials exist.
+    const modelCfg = asRecord(config.model);
+    if (modelCfg && hasCodex) {
+      const defaultModel = typeof modelCfg.default === 'string' ? modelCfg.default : '';
+      const provider = typeof modelCfg.provider === 'string' ? modelCfg.provider : '';
+      const baseUrl = typeof modelCfg.base_url === 'string' ? modelCfg.base_url : '';
+      const codexBackend = provider === 'openai-codex' || baseUrl.includes('chatgpt.com');
+      if (codexBackend && defaultModel.startsWith('claude-')) {
+        modelCfg.default = CODEX_CHAT_MODELS[0];
+        config.model = modelCfg;
+      }
+    }
+
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
@@ -922,6 +992,13 @@ export class HermesSupervisor {
     }
   }
 
+  /**
+   * Earlier managed-profile experiments pointed Hermes at verso's local
+   * `/llm/v1` proxy. That proxy is no longer part of the product path; Hermes
+   * should preserve the user's own Codex/OpenAI auth and model config. If we
+   * find the exact old proxy-owned model config, restore the template model
+   * section. Other model configs are left untouched.
+   */
   private restoreManagedModelConfigIfProxyOwned(): void {
     if (this.runtimeMode !== 'managed') return;
 
@@ -1093,20 +1170,36 @@ export class HermesSupervisor {
   }
 
   private formatExitMessage(code: number | null, signal: NodeJS.Signals | null): string {
-    const details = this.logTail.length > 0
-      ? ` Recent logs: ${this.logTail.slice(-6).join(' | ')}`
-      : '';
+    const details = this.formatDiagnosticLogDetails();
     if (signal) {
       return `Hermes process exited on signal ${signal}.${details}`;
     }
+    if (code === 0) {
+      return `Hermes gateway stopped unexpectedly (process exit code 0).${details}`;
+    }
     return `Hermes process exited with code ${code ?? 'unknown'}.${details}`;
+  }
+
+  private formatDiagnosticLogDetails(): string {
+    if (this.logTail.length === 0) return '';
+
+    // Hermes prints its banner to stdout after some startup failures. A plain
+    // tail therefore hid the actual stderr error and showed only ASCII art in
+    // the UI. Preserve the most useful failure lines alongside the last few
+    // lines of context, without duplicating entries that are already recent.
+    const diagnostic = this.logTail
+      .filter((line) => /\[hermes stderr\].*(?:error|failed|failure|conflict|could not|traceback|exception)/i.test(line))
+      .slice(-3);
+    const recent = this.logTail.slice(-3);
+    const selected = [...new Set([...diagnostic, ...recent])];
+    return ` Recent logs: ${selected.join(' | ')}`;
   }
 
   private async waitForGatewayHealthy(child: ChildProcess): Promise<void> {
     const deadline = Date.now() + this.launch.startupTimeoutMs;
 
     while (Date.now() < deadline) {
-      if (child.exitCode !== null || child.killed) {
+      if (hasExited(child)) {
         throw new Error(this.formatExitMessage(child.exitCode, child.signalCode));
       }
       if (await this.ping(500)) {
@@ -1115,9 +1208,7 @@ export class HermesSupervisor {
       await delay(250);
     }
 
-    const details = this.logTail.length > 0
-      ? ` Recent logs: ${this.logTail.slice(-6).join(' | ')}`
-      : '';
+    const details = this.formatDiagnosticLogDetails();
     this.lastError = `Timed out waiting for Hermes gateway at ${this.config.baseUrl}.${details}`;
     this.state = 'error';
     throw new Error(this.lastError);
@@ -1176,6 +1267,30 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function childExitPromise(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    const onExit = () => resolve();
+    child.once('exit', onExit);
+    // Cover the narrow race where the process exits between the caller's
+    // initial state check and registration of the exit listener.
+    if (hasExited(child)) {
+      child.off('exit', onExit);
+      resolve();
+    }
+  });
+}
+
+async function waitForExit(exited: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return Promise.race([
+    exited.then(() => true),
+    delay(timeoutMs).then(() => false),
+  ]);
+}
+
 function anySignal(signals: AbortSignal[]): AbortSignal {
   const controller = new AbortController();
   const activeSignals = signals.filter(Boolean);
@@ -1220,6 +1335,17 @@ async function allocatePort(): Promise<number> {
         }
         resolve(port);
       });
+    });
+  });
+}
+
+async function canBind(host: string, port: number): Promise<boolean> {
+  const server = net.createServer();
+  server.unref();
+  return new Promise((resolve) => {
+    server.once('error', () => resolve(false));
+    server.listen(port, host, () => {
+      server.close((error) => resolve(!error));
     });
   });
 }

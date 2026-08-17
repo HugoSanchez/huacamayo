@@ -1,0 +1,429 @@
+--- a/gateway/platforms/api_server.py	2026-08-17 10:21:52
++++ b/gateway/platforms/api_server.py	2026-08-17 10:22:29
+@@ -1521,6 +1521,16 @@
+             # Chronos managed-cron fire webhook (NAS → agent). Authenticated
+             # by a NAS-minted JWT (NOT API_SERVER_KEY).
+             routes.append(("POST", "/api/cron/fire", self._handle_cron_fire))
++        try:
++            # Verso runtime patch: MCP OAuth flow endpoints (see
++            # gateway/platforms/verso_mcp_oauth.py for the why and the wire).
++            from gateway.platforms import verso_mcp_oauth as _verso_mcp_oauth
++
++            routes.extend(_verso_mcp_oauth.route_table(self))
++        except Exception as _verso_exc:
++            logger.debug(
++                "[api_server] verso MCP OAuth routes unavailable: %s", _verso_exc
++            )
+         return routes
+ 
+     # ------------------------------------------------------------------
+--- a/gateway/platforms/verso_mcp_oauth.py	1970-01-01 01:00:00
++++ b/gateway/platforms/verso_mcp_oauth.py	2026-08-17 11:25:21
+@@ -0,0 +1,407 @@
++"""Verso runtime patch: MCP OAuth flow endpoints on the gateway API server.
++
++Mirrors the dashboard-mediated MCP OAuth flow from ``hermes_cli/web_server.py``
++(``/api/mcp/servers/{name}/auth`` + flow status + callback) so a headless
++embedder that only runs ``hermes gateway run`` can drive browser OAuth for MCP
++servers without a TTY or the dashboard process.
++
++The MCP SDK still owns discovery, dynamic client registration, PKCE, state
++validation and token exchange (via ``tools.mcp_oauth``). This module only moves
++the two human/browser touchpoints — "open this URL" and "receive the redirect"
++— onto the gateway's own aiohttp listener:
++
++    POST /api/mcp/servers/{name}/auth      start a flow, returns
++                                           {flow_id, authorization_url, status}
++                                           (auth: API_SERVER_KEY bearer)
++    GET  /api/mcp/oauth/flows/{flow_id}    poll flow status; ``approved`` means
++                                           tokens are on disk and the server was
++                                           live-reconnected (auth: bearer)
++    GET  /api/mcp/oauth/callback/{name}    OAuth redirect target; state-checked,
++                                           unauthenticated (the provider's
++                                           browser redirect carries no key)
++
++The registered redirect URI is ``http://127.0.0.1:<gateway_port>/api/mcp/
++oauth/callback/<name>`` — stable across launches, which dynamic client
++registration requires (providers pin the redirect URI to the client_id).
++
++Delete this module (and the ``_http_route_table`` hook in api_server.py) if
++the equivalent lands upstream in hermes-agent.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import logging
++import secrets
++import threading
++import time
++from functools import partial
++from pathlib import Path
++from urllib.parse import quote
++
++try:
++    from aiohttp import web
++except ImportError:  # pragma: no cover - api_server refuses to start anyway
++    web = None  # type: ignore[assignment]
++
++logger = logging.getLogger(__name__)
++
++_FLOW_TTL_SECONDS = 15 * 60
++_MAX_PENDING_FLOWS = 8
++_flows: dict[str, "object"] = {}
++_flows_lock = threading.Lock()
++# Serialize concurrent flows per (hermes_home, server): a second flow for the
++# same server would race the first over the on-disk token/client files.
++_transactions: dict[tuple[str, str], threading.Lock] = {}
++_transactions_lock = threading.Lock()
++
++
++def _gc_flows() -> None:
++    cutoff = time.time() - _FLOW_TTL_SECONDS
++    with _flows_lock:
++        stale = [
++            flow_id
++            for flow_id, flow in _flows.items()
++            if getattr(flow, "created_at", 0) < cutoff
++        ]
++        for flow_id in stale:
++            _flows.pop(flow_id, None)
++
++
++def _transaction(flow) -> threading.Lock:
++    key = (flow.hermes_home, flow.server_name)
++    with _transactions_lock:
++        return _transactions.setdefault(key, threading.Lock())
++
++
++def _reset_mismatched_dynamic_client(
++    storage, server_name: str, cfg: dict, redirect_uri: str
++) -> None:
++    """Discard cached DCR state that is pinned to another callback URI.
++
++    Older Verso builds selected a new gateway port on every restart. OAuth
++    providers bind a dynamically registered client_id to its exact redirect
++    URI, so those cached registrations cannot be reused by the stable gateway
++    callback. An explicit pre-registered client is left untouched.
++
++    The caller snapshots storage first and restores it if the new flow fails.
++    """
++    oauth_cfg = cfg.get("oauth") or {}
++    if isinstance(oauth_cfg, dict) and oauth_cfg.get("client_id"):
++        return
++    try:
++        client = asyncio.run(storage.get_client_info())
++        redirects = [str(uri) for uri in (client.redirect_uris or [])] if client else []
++    except (OSError, ValueError, TypeError, RuntimeError):
++        return
++    if redirect_uri in redirects or not redirects:
++        return
++    logger.info(
++        "[verso_mcp_oauth] replacing stale OAuth client registration for '%s' "
++        "(%s -> %s)",
++        server_name,
++        redirects[0],
++        redirect_uri,
++    )
++    storage.remove()
++
++
++def _run_flow(flow, cfg: dict) -> None:
++    """Run the MCP probe with dashboard redirect/callback handlers.
++
++    Adapted from ``web_server._run_dashboard_mcp_oauth`` with the dashboard-only
++    parts removed: no profile multiplexing (the gateway process is single-home),
++    and no ``_save_mcp_server`` — the config entry already exists and is owned
++    by the embedder's config writer, so rewriting config.yaml here would race it.
++    """
++    from hermes_cli.mcp_config import _oauth_tokens_present, _probe_single_server
++
++    try:
++        from agent.secret_scope import (
++            build_profile_secret_scope,
++            reset_secret_scope,
++            set_secret_scope,
++        )
++        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
++        from tools.mcp_dashboard_oauth import dashboard_oauth_flow
++        from tools.mcp_oauth import HermesTokenStorage, force_interactive_oauth
++        from tools.mcp_oauth_manager import get_manager
++
++        home_token = set_hermes_home_override(flow.hermes_home)
++        secret_token = set_secret_scope(build_profile_secret_scope(Path(flow.hermes_home)))
++        try:
++            transaction = _transaction(flow)
++            with transaction, force_interactive_oauth(), dashboard_oauth_flow(flow):
++                manager = get_manager()
++                storage = HermesTokenStorage(flow.server_name)
++                backup = storage.snapshot()
++                previous_entry = None
++                try:
++                    _reset_mismatched_dynamic_client(
++                        storage, flow.server_name, cfg, flow.redirect_uri
++                    )
++                    previous_entry = manager.remove(
++                        flow.server_name,
++                        hermes_home=flow.hermes_home,
++                    )
++                    # Floor BOTH timeouts above the SDK's 300s browser-callback
++                    # window. connect_timeout caps the connect attempt; the
++                    # entry's request `timeout` (the managed config writes 120)
++                    # otherwise aborts the whole OAuth handshake at 2 minutes -
++                    # less than a human needs to sign in - leaving the flow
++                    # dead ("OAuth flow expired") by the time the provider
++                    # redirects back.
++                    cfg["timeout"] = max(float(cfg.get("timeout", 0) or 0), 330)
++                    tools = _probe_single_server(
++                        flow.server_name,
++                        cfg,
++                        connect_timeout=max(float(cfg.get("connect_timeout", 0) or 0), 330),
++                    )
++                    if not _oauth_tokens_present(flow.server_name):
++                        raise RuntimeError(
++                            "The server responded, but no OAuth token was obtained — "
++                            "this provider may require a manually-registered OAuth client."
++                        )
++                    flow.tools = [{"name": t, "description": d} for t, d in tools]
++                    flow.mark_approved()
++                    # The gateway process owns the live MCP connections, so a
++                    # reconnect picks up the new tokens without a restart. Best
++                    # effort: the tokens are already on disk, and the embedder
++                    # restarts the gateway as a fallback if tools never appear.
++                    try:
++                        from tools.mcp_tool import reconnect_mcp_server
++
++                        reconnect_mcp_server(flow.server_name)
++                    except Exception:
++                        logger.warning(
++                            "[verso_mcp_oauth] live reconnect of '%s' failed after OAuth",
++                            flow.server_name,
++                            exc_info=True,
++                        )
++                except Exception:
++                    storage.restore(backup, only_if_absent=True)
++                    manager.restore_entry(
++                        flow.server_name,
++                        previous_entry,
++                        hermes_home=flow.hermes_home,
++                    )
++                    raise
++        finally:
++            reset_secret_scope(secret_token)
++            reset_hermes_home_override(home_token)
++    except Exception as exc:
++        # asyncio.TimeoutError and friends stringify to "" - never surface an
++        # empty reason to the UI.
++        msg = str(exc).strip() or (
++            type(exc).__name__ + ': the sign-in flow was interrupted or timed out.'
++        )
++        # Providers that gate RFC 7591 registration to pre-approved clients
++        # 403 the register call before any authorization URL exists — surface
++        # what's actually happening instead of a bare "403 Forbidden".
++        lowered = msg.lower()
++        if "403" in msg and ("regist" in lowered or "forbidden" in lowered):
++            msg = (
++                f"'{flow.server_name}' only allows pre-approved OAuth clients — it rejected "
++                "client registration (403), so no browser flow can start. "
++                "Options: add a pre-registered client to this server's entry "
++                "(oauth: {client_id: ..., client_secret: ...}), or use the "
++                "provider's stdio / API-key server instead."
++            )
++        flow.mark_error(msg)
++    finally:
++        flow.mark_worker_done()
++
++
++async def handle_start(adapter, request: "web.Request") -> "web.Response":
++    """POST /api/mcp/servers/{name}/auth — start an OAuth flow."""
++    auth_err = adapter._check_auth(request)
++    if auth_err:
++        return auth_err
++    _gc_flows()
++
++    from hermes_cli.mcp_config import _get_mcp_servers
++    from hermes_constants import get_hermes_home
++    from tools.mcp_dashboard_oauth import DashboardOAuthFlow
++
++    name = request.match_info["name"]
++    servers = _get_mcp_servers()
++    if name not in servers or not isinstance(servers[name], dict):
++        return web.json_response(
++            {"error": f"Server '{name}' not found"}, status=404
++        )
++    cfg = dict(servers[name])
++    if not cfg.get("url"):
++        return web.json_response(
++            {"error": "stdio servers authenticate via env keys, not OAuth"}, status=400
++        )
++    if cfg.get("headers") and cfg.get("auth") != "oauth":
++        return web.json_response(
++            {"error": "This server uses header/API-key auth, not OAuth"}, status=400
++        )
++    cfg["auth"] = "oauth"
++
++    flow_home = str(get_hermes_home().expanduser().resolve(strict=False))
++    redirect_uri = (cfg.get("oauth") or {}).get("redirect_uri") or (
++        f"http://127.0.0.1:{adapter._port}/api/mcp/oauth/callback/{quote(name, safe='')}"
++    )
++    flow_id = secrets.token_urlsafe(24)
++    flow = DashboardOAuthFlow(
++        flow_id=flow_id,
++        server_name=name,
++        profile=None,
++        hermes_home=flow_home,
++        redirect_uri=redirect_uri,
++        reconnect_live=True,
++    )
++    with _flows_lock:
++        pending = sum(not f.worker_done for f in _flows.values())
++        if pending >= _MAX_PENDING_FLOWS:
++            return web.json_response(
++                {"error": "Too many MCP OAuth flows are already in progress"},
++                status=429,
++            )
++        if any(
++            f.server_name == name and f.hermes_home == flow_home and not f.worker_done
++            for f in _flows.values()
++        ):
++            return web.json_response(
++                {"error": f"MCP OAuth for '{name}' is already in progress"},
++                status=409,
++            )
++        _flows[flow_id] = flow
++    threading.Thread(
++        target=_run_flow,
++        args=(flow, cfg),
++        daemon=True,
++        name=f"verso-mcp-oauth-{name}",
++    ).start()
++    try:
++        await flow.wait_for_authorization_url(timeout=30)
++    except Exception as exc:
++        flow.mark_error(str(exc))
++    return web.json_response(flow.snapshot())
++
++
++async def handle_flow_status(adapter, request: "web.Request") -> "web.Response":
++    """GET /api/mcp/oauth/flows/{flow_id} — poll a flow."""
++    auth_err = adapter._check_auth(request)
++    if auth_err:
++        return auth_err
++    _gc_flows()
++    flow = _flows.get(request.match_info["flow_id"])
++    if flow is None:
++        return web.json_response(
++            {"error": "OAuth flow not found or expired"}, status=404
++        )
++    snapshot = flow.snapshot()
++    snapshot["tools"] = flow.tools
++    return web.json_response(snapshot)
++
++
++async def handle_callback(adapter, request: "web.Request") -> "web.Response":
++    """GET /api/mcp/oauth/callback/{name} — the provider's browser redirect.
++
++    Unauthenticated by design (the provider redirect carries no API key); the
++    CSRF/state token minted by the MCP SDK is the auth, compared constant-time
++    against the pending flow before the code is accepted.
++    """
++    _gc_flows()
++    name = request.match_info["name"]
++    code = request.query.get("code")
++    state = request.query.get("state")
++    error = request.query.get("error")
++
++    with _flows_lock:
++        candidates = [
++            f
++            for f in _flows.values()
++            if f.server_name == name and f.status == "authorization_required"
++        ]
++    flow = next(
++        (
++            candidate
++            for candidate in candidates
++            if candidate.expected_state is not None
++            and state is not None
++            and secrets.compare_digest(candidate.expected_state, state)
++        ),
++        None,
++    )
++    if flow is None:
++        return _html(
++            "<h1>OAuth flow expired</h1><p>Return to Verso and start the sign-in again.</p>",
++            status=404,
++        )
++    try:
++        flow.deliver_callback(code=code, state=state, error=error)
++    except ValueError as exc:
++        status = 409 if "already received" in str(exc) else 400
++        return _html(
++            "<h1>OAuth callback rejected</h1>"
++            "<p>The callback was invalid or already used.</p>",
++            status=status,
++        )
++    if error:
++        return _html(
++            "<h1>Authorization failed</h1><p>Return to Verso for details.</p>",
++            status=400,
++        )
++    return _html(
++        "<h1>Authorization received</h1><p>You can close this tab and return to Verso.</p>"
++    )
++
++
++async def handle_registered_tools(adapter, request: "web.Request") -> "web.Response":
++    """GET /api/mcp/tools - registered MCP tool names, per server.
++
++    The gateway's /v1/toolsets endpoint lists built-in toolsets only; MCP
++    servers (verso, composio, custom_*) register their tools directly into
++    the agent registry with no HTTP surface. Embedders need this to answer
++    "did connector X actually register tools?" - the alternative is grepping
++    agent.log. Shape: {"servers": {"<name>": ["mcp__<name>__<tool>", ...]}}.
++    """
++    auth_err = adapter._check_auth(request)
++    if auth_err:
++        return auth_err
++    from tools import mcp_tool
++
++    servers = getattr(mcp_tool, "_servers", {}) or {}
++    out = {}
++    for name, task in dict(servers).items():
++        try:
++            out[str(name)] = [str(t) for t in (getattr(task, "_registered_tool_names", None) or [])]
++        except Exception:
++            out[str(name)] = []
++    return web.json_response({"servers": out})
++
++
++def _html(body: str, status: int = 200) -> "web.Response":
++    # Match Verso's editorial look (paper/ink palette) so the OAuth hand-off
++    # pages feel like part of the product rather than a bare debug page.
++    page = (
++        "<!doctype html><html><head><meta charset=\"utf-8\">"
++        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
++        "<title>Verso</title><style>"
++        "body{margin:0;min-height:100vh;display:flex;align-items:center;"
++        "justify-content:center;background:#f4f1e9;color:#1f1d1a;"
++        "font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif}"
++        "main{max-width:26rem;padding:2.5rem;text-align:center}"
++        "h1{font-size:1.5rem;font-weight:600;letter-spacing:-0.01em;margin:0 0 0.75rem}"
++        "p{font-size:0.95rem;line-height:1.5;color:#5c574d;margin:0}"
++        "main::before{content:\"Verso\";display:block;margin-bottom:2rem;"
++        "font-size:0.8rem;letter-spacing:0.18em;text-transform:uppercase;color:#8a8478}"
++        "</style></head><body><main>" + body + "</main></body></html>"
++    )
++    return web.Response(text=page, status=status, content_type="text/html")
++
++
++def route_table(adapter) -> list:
++    """(method, path, handler) rows for api_server._http_route_table()."""
++    if web is None:
++        return []
++    return [
++        ("POST", "/api/mcp/servers/{name}/auth", partial(handle_start, adapter)),
++        ("GET", "/api/mcp/oauth/flows/{flow_id}", partial(handle_flow_status, adapter)),
++        ("GET", "/api/mcp/oauth/callback/{name}", partial(handle_callback, adapter)),
++        ("GET", "/api/mcp/tools", partial(handle_registered_tools, adapter)),
++    ]

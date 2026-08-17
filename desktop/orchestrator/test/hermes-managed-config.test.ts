@@ -86,6 +86,53 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.toolsets).toEqual(['hermes-cli']);
   });
 
+  it('pauses pre-release browser routines without changing other cron jobs', () => {
+    const cronDir = path.join(managedHome, 'cron');
+    mkdirSync(cronDir, { recursive: true });
+    writeFileSync(path.join(cronDir, 'jobs.json'), JSON.stringify({
+      jobs: [
+        {
+          id: 'browser-job',
+          name: 'Legacy browser routine',
+          enabled: true,
+          state: 'scheduled',
+          enabled_toolsets: ['browser', 'file'],
+          paused_at: null,
+          paused_reason: null,
+        },
+        {
+          id: 'regular-job',
+          name: 'Regular routine',
+          enabled: true,
+          state: 'scheduled',
+          enabled_toolsets: ['file'],
+          paused_at: null,
+          paused_reason: null,
+        },
+      ],
+    }), 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = JSON.parse(readFileSync(path.join(cronDir, 'jobs.json'), 'utf8')) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(parsed.jobs[0]).toMatchObject({
+      enabled: false,
+      state: 'paused',
+      paused_reason: 'Browser routines are disabled in this Verso release.',
+    });
+    expect(parsed.jobs[0].paused_at).toEqual(expect.any(String));
+    expect(parsed.jobs[1]).toMatchObject({
+      enabled: true,
+      state: 'scheduled',
+      paused_at: null,
+      paused_reason: null,
+    });
+    expect(existsSync(path.join(managedHome, '.verso-paused-pre-release-browser-crons-v1'))).toBe(true);
+  });
+
   it('replaces old managed auth.json with the template Hermes auth store', () => {
     writeFileSync(path.join(tempRoot, 'auth.json'), JSON.stringify({
       version: 2,

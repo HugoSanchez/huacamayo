@@ -277,9 +277,14 @@ function readJsonBody(req, cb) {
   });
 }
 
-server.listen(port, host, () => {
-  console.log(JSON.stringify({ status: 'ready', port, host }));
-});
+// Optional slow-boot mode: lets tests hold the supervisor in its
+// health-wait window (e.g. to fire a concurrent restart mid-startup).
+const bootDelayMs = parseInt(process.env.FAKE_HERMES_BOOT_DELAY_MS || '0', 10);
+setTimeout(() => {
+  server.listen(port, host, () => {
+    console.log(JSON.stringify({ status: 'ready', port, host }));
+  });
+}, Number.isFinite(bootDelayMs) && bootDelayMs > 0 ? bootDelayMs : 0);
 
 const shutdown = () => {
   server.close(() => process.exit(0));

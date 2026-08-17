@@ -124,6 +124,55 @@ terminal="$(grep -Eo "^event: response\.(completed|failed)" "${response_file}" |
 echo "[smoke] PASS: HTTP 200, SSE stream terminated with ${terminal#event: }"
 echo "[smoke] (response.failed is expected without model credentials — the handler is healthy either way)"
 
+# ── MCP OAuth routes (verso-gateway-mcp-oauth.patch) ─────────────────────
+# The patch adds three routes to the gateway. A mis-anchored or missing patch
+# means aiohttp's default 404 on all of them; a healthy patch is
+# distinguishable on each route without running a real OAuth flow:
+#   - flows/<id> unauthenticated  → 401 (route exists, auth enforced;
+#                                   missing route would 404)
+#   - callback/<name>             → 404 BUT with the handler's own
+#                                   "OAuth flow expired" body, not aiohttp's
+#                                   default "404: Not Found"
+#   - servers/<name>/auth (auth'd)→ handler JSON "Server ... not found"
+echo "[smoke] checking MCP OAuth routes from the runtime patch"
+
+flows_status="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/mcp/oauth/flows/smoke-nonexistent")"
+if [ "${flows_status}" != "401" ]; then
+    echo "[smoke] FAIL: GET /api/mcp/oauth/flows/… unauthenticated returned ${flows_status} (expected 401; 404 means verso-gateway-mcp-oauth.patch did not register its routes)" >&2
+    exit 1
+fi
+
+callback_body="${HOME_DIR}/smoke-oauth-callback.txt"
+curl -s -o "${callback_body}" "http://127.0.0.1:${PORT}/api/mcp/oauth/callback/smoke_nonexistent?state=abc"
+if ! grep -q "OAuth flow expired" "${callback_body}"; then
+    echo "[smoke] FAIL: OAuth callback route did not answer with the patch's handler; body:" >&2
+    head -3 "${callback_body}" >&2
+    exit 1
+fi
+
+auth_body="${HOME_DIR}/smoke-oauth-start.txt"
+auth_status="$(curl -s -o "${auth_body}" -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer ${API_KEY}" \
+    "http://127.0.0.1:${PORT}/api/mcp/servers/smoke_nonexistent/auth")"
+if [ "${auth_status}" != "404" ] || ! grep -q "not found" "${auth_body}"; then
+    echo "[smoke] FAIL: POST /api/mcp/servers/…/auth returned ${auth_status}; body:" >&2
+    head -3 "${auth_body}" >&2
+    exit 1
+fi
+tools_status="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/mcp/tools")"
+if [ "${tools_status}" != "401" ]; then
+    echo "[smoke] FAIL: GET /api/mcp/tools unauthenticated returned ${tools_status} (expected 401; 404 means the registry route is missing — connector status will never show connected)" >&2
+    exit 1
+fi
+tools_body="${HOME_DIR}/smoke-mcp-tools.txt"
+curl -s -o "${tools_body}" -H "Authorization: Bearer ${API_KEY}" "http://127.0.0.1:${PORT}/api/mcp/tools"
+if ! grep -q '"servers"' "${tools_body}"; then
+    echo "[smoke] FAIL: /api/mcp/tools did not return a servers map; body:" >&2
+    head -3 "${tools_body}" >&2
+    exit 1
+fi
+echo "[smoke] PASS: MCP OAuth routes registered and dispatching"
+
 # ── Pin-liveness contract ────────────────────────────────────────────────
 # Hermes silently ignores pinned tool names that match nothing registered,
 # so a drift in the MCP naming convention (0.19 renamed mcp_verso_* to

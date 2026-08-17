@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import os
 import Security
 
@@ -24,6 +25,7 @@ final class SidecarManager: ObservableObject {
     private var activityToken: NSObjectProtocol?
     private var stopRequested = false
     private var launchGeneration = 0
+    private var restartTask: Task<Void, Never>?
     private var restartAttempts = 0
     private let maxRestartAttempts = 8
     private let logger = Logger(subsystem: "com.verso.app", category: "Sidecar")
@@ -143,6 +145,7 @@ final class SidecarManager: ObservableObject {
         stopRequested = false
         launchGeneration += 1
         let generation = launchGeneration
+        let launchManagedSession = managedSession
         beginActivityIfNeeded()
         state = .starting
 
@@ -150,11 +153,29 @@ final class SidecarManager: ObservableObject {
             do {
                 let launchAuthToken = try Self.generateAuthToken()
                 self.authToken = launchAuthToken
-                let detectedPort = try await launchProcess()
+                let detectedPort = try await launchProcess(managedSession: launchManagedSession)
                 guard generation == launchGeneration, !stopRequested else { return }
                 state = .running(port: detectedPort)
                 restartAttempts = 0
                 logger.info("Sidecar running on port \(detectedPort)")
+
+                // Keychain restoration is intentionally asynchronous so it
+                // can never block app launch. If it completes while the
+                // sidecar is starting, make sure that launch is not allowed
+                // to keep running under the previous account identity. A
+                // same-user token refresh can be applied live; an identity
+                // change requires a serialized process restart so all local
+                // state is re-isolated for the new user.
+                if shouldRestartForManagedSessionChange(
+                    previousUserId: launchManagedSession?.userId,
+                    nextUserId: managedSession?.userId
+                ) {
+                    restart()
+                    return
+                }
+                if launchManagedSession != managedSession {
+                    await pushManagedSession(managedSession)
+                }
                 await refreshManagedAccount()
             } catch {
                 guard generation == launchGeneration, !stopRequested else { return }
@@ -168,6 +189,8 @@ final class SidecarManager: ObservableObject {
     }
 
     func stop() {
+        restartTask?.cancel()
+        restartTask = nil
         stopRequested = true
         launchGeneration += 1
         if let process, process.isRunning {
@@ -188,8 +211,81 @@ final class SidecarManager: ObservableObject {
     }
 
     private func restart() {
-        stop()
-        start()
+        guard restartTask == nil else { return }
+        restartTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.restartTask = nil }
+
+            let stopped = await self.stopCurrentProcessForRestart()
+            guard stopped, !Task.isCancelled else { return }
+
+            self.stopRequested = false
+            self.state = .idle
+            self.start()
+        }
+    }
+
+    /// Stop the complete sidecar-owned process tree before starting its
+    /// replacement. The sidecar awaits Hermes shutdown, so its exit is the
+    /// ownership boundary that guarantees the stable gateway port has been
+    /// released. Starting immediately after `Process.terminate()` used to
+    /// overlap two Hermes gateways whenever Keychain session restoration
+    /// completed shortly after app launch.
+    private func stopCurrentProcessForRestart() async -> Bool {
+        stopRequested = true
+        launchGeneration += 1
+        state = .starting
+
+        guard let process else {
+            clearProcessResources()
+            return true
+        }
+
+        if process.isRunning {
+            logger.info("Stopping sidecar before restart")
+            process.terminate()
+        }
+
+        var didExit = await waitForProcessExit(process, timeout: .seconds(5))
+        if !didExit, process.isRunning, !Task.isCancelled {
+            logger.warning("Sidecar did not exit after SIGTERM; sending SIGKILL")
+            Darwin.kill(process.processIdentifier, SIGKILL)
+            didExit = await waitForProcessExit(process, timeout: .seconds(1))
+        }
+
+        guard didExit || !process.isRunning else {
+            authToken = nil
+            state = .failed("The previous sidecar process did not stop. Quit and reopen Verso before retrying.")
+            logger.error("Sidecar process \(process.processIdentifier) did not exit before restart")
+            return false
+        }
+
+        if self.process === process {
+            self.process = nil
+        }
+        clearProcessResources()
+        managedAccount = nil
+        authToken = nil
+        return true
+    }
+
+    private func waitForProcessExit(_ process: Process, timeout: Duration) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while process.isRunning, clock.now < deadline {
+            if Task.isCancelled { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return !process.isRunning
+    }
+
+    private func clearProcessResources() {
+        stderrTailHandle?.readabilityHandler = nil
+        stdoutTailHandle?.readabilityHandler = nil
+        stderrTailHandle = nil
+        stdoutTailHandle = nil
+        try? logFileHandle?.close()
+        logFileHandle = nil
     }
 
     private func shouldRestartForManagedSessionChange(previousUserId: String?, nextUserId: String?) -> Bool {
@@ -313,7 +409,7 @@ final class SidecarManager: ObservableObject {
         }
     }
 
-    private func launchProcess() async throws -> Int {
+    private func launchProcess(managedSession launchManagedSession: ManagedAppSession?) async throws -> Int {
         let process = Process()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -364,10 +460,10 @@ final class SidecarManager: ObservableObject {
         // required. Debug builds leave these unset so HermesSupervisor falls
         // back to the developer's existing ~/.hermes install.
         Self.applyBundledRuntimeEnv(&env)
-        if let managedSession, !managedSession.isExpired {
-            env["VERSO_MANAGED_SESSION_TOKEN"] = managedSession.token
-            env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = managedSession.expiresAt
-            env["VERSO_MANAGED_USER_ID"] = managedSession.userId
+        if let launchManagedSession, !launchManagedSession.isExpired {
+            env["VERSO_MANAGED_SESSION_TOKEN"] = launchManagedSession.token
+            env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = launchManagedSession.expiresAt
+            env["VERSO_MANAGED_USER_ID"] = launchManagedSession.userId
         }
         guard let authToken else {
             throw SidecarError.authTokenUnavailable

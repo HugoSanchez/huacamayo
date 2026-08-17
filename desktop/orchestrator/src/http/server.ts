@@ -290,17 +290,27 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     || process.env.VERSO_ALLOW_UNAUTHENTICATED_SIDECAR === '1'
   );
   if (!authSecret && !allowUnauthenticated) {
-    throw new Error('VERSO_SIDECAR_AUTH_SECRET is required. For local browser development only, set VERSO_ALLOW_UNAUTHENTICATED_SIDECAR=1.');
+    throw new Error('VERSO_SIDECAR_AUTH_SECRET is required. For local development only, set VERSO_ALLOW_UNAUTHENTICATED_SIDECAR=1.');
   }
 
   const server = http.createServer((req, res) => {
     dispatch(routes, req, res, { authSecret, allowUnauthenticated });
   });
+  let cleanupPromise: Promise<void> | null = null;
+  const cleanup = (): Promise<void> => {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      memoryExtraction.stop();
+      sourceIngestion.stop();
+      await Promise.all([
+        hermes.shutdown(),
+        memoryProvider.stop(),
+      ]);
+    })();
+    return cleanupPromise;
+  };
   server.on('close', () => {
-    void hermes.shutdown();
-    memoryExtraction.stop();
-    sourceIngestion.stop();
-    void memoryProvider.stop();
+    void cleanup();
   });
 
   const port = opts.port ?? parseInt(process.env.PORT || '0', 10);
@@ -308,10 +318,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
-    await hermes.shutdown();
-    memoryExtraction.stop();
-    sourceIngestion.stop();
-    await memoryProvider.stop();
+    await cleanup();
   };
 
   return new Promise((resolve) => {
