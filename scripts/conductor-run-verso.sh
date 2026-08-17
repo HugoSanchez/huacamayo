@@ -149,11 +149,5 @@ if [ ! -x "${binary_path}" ]; then
     exit 1
 fi
 
-touch "${app_path}"
-lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-if [ -x "${lsregister}" ]; then
-    "${lsregister}" -f "${app_path}" >/dev/null 2>&1 || true
-fi
-
 echo "[conductor-run] launching ${binary_path}"
 exec "${binary_path}"

@@ -699,25 +699,6 @@ export function App() {
     };
   }, [handleCloseCatalogs]);
 
-  // Sign-in completion happens outside the chat stream. Hand the site back to
-  // the agent so it can finish the paused routine using Hermes' native browser.
-  // handleSend is defined further down; the ref keeps this listener stable.
-  const handleSendRef = useRef<((text: string) => void) | null>(null);
-  useEffect(() => {
-    const handleBrowserLoginReady = (event: Event) => {
-      const detail = (event as CustomEvent<{ domain?: unknown; title?: unknown }>).detail;
-      const domain = typeof detail?.domain === 'string' ? detail.domain : 'the website';
-      handleSendRef.current?.(
-        `Browser sign-in is ready for ${domain}. Create the routine now using Hermes' native browser tools. `
-        + 'Include "browser" in its toolsets and create it paused so I can watch a supervised first run before enabling it.',
-      );
-    };
-    window.addEventListener('verso:browser-login-ready', handleBrowserLoginReady as EventListener);
-    return () => {
-      window.removeEventListener('verso:browser-login-ready', handleBrowserLoginReady as EventListener);
-    };
-  }, []);
-
   useEffect(() => {
     const handleOpenSettings = () => {
       setIsSettingsOpen(true);
@@ -1148,7 +1129,6 @@ export function App() {
     updateSessionMessages(sessionKey, (prev) => [...prev, userMsg, assistantMsg]);
     streamInto(assistantMsg.id, text, attached, attachments);
   }, [anthropicConnected, codexConnected, connected, defaultModel, model, streamInto, streamingSessions, updateSessionMessages]);
-  handleSendRef.current = handleSend;
 
   const handleCodexConnected = useCallback((widgetId: string) => {
     setCodexConnected(true);

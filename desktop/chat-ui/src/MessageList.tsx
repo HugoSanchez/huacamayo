@@ -18,7 +18,6 @@ import {
 import { displayToolkitName } from './display-names';
 import { useIsSystemAsleep } from './useSystemSleep';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
-import { BrowserLoginCard } from './BrowserLogin';
 
 interface DraftOverlayItem {
   step: Extract<ActivityStep, { type: 'tool' }>;
@@ -555,17 +554,14 @@ function StepView({
     return <ThinkingStep text={step.text} />;
   }
 
-  // Interactive cards are pulled out of `steps` upstream and rendered next
-  // to the assistant response rather than inside the activity collapsible.
+  // Connection cards are pulled out of `steps` upstream and rendered next to
+  // the assistant's response, not inside the activity collapsible. Anything
+  // still tagged with a connection here is unexpected — fall through to the
+  // generic ToolStep rather than rendering a card in the wrong place.
 
   if (step.name === 'cronjob') {
     const card = parseCronToolStep(step);
     if (card) return <CronToolCard {...card} />;
-  }
-
-  if (step.type === 'tool' && isBrowserLoginRequestStep(step)) {
-    const card = parseBrowserLoginStep(step);
-    if (card) return <BrowserLoginCard setupId={card.setupId} siteName={card.siteName} />;
   }
 
   return <ToolStep step={step} toolkits={toolkits} />;
@@ -656,59 +652,6 @@ interface CronToolCardProps {
   jobId: string | null;
   name: string | null;
   scheduleDisplay: string | null;
-}
-
-// The verso MCP bridge tool that starts authenticated browser setup.
-// Hermes has shipped both single- and double-underscore MCP tool prefixes,
-// so match the suffix rather than one exact wire name.
-function isBrowserLoginRequestStep(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
-  return typeof step.name === 'string' && step.name.endsWith('request_browser_login');
-}
-
-function parseBrowserLoginStep(
-  step: Extract<ActivityStep, { type: 'tool' }>,
-): { setupId: string; siteName: string | null } | null {
-  if (typeof step.result !== 'string' || step.result.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(step.result);
-  } catch {
-    return null;
-  }
-  // MCP results sometimes arrive as a content-block array; unwrap the first
-  // text block when they do.
-  if (Array.isArray(parsed)) {
-    const textBlock = parsed.find((b) => b && typeof b === 'object' && typeof (b as { text?: unknown }).text === 'string');
-    if (!textBlock) return null;
-    try {
-      parsed = JSON.parse((textBlock as { text: string }).text);
-    } catch {
-      return null;
-    }
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  // Hermes wraps MCP tool results in an envelope:
-  //   {"result": "<payload as JSON string>", "structuredContent": {…payload…}}
-  // Prefer structuredContent; fall back to parsing the stringified result.
-  const envelope = parsed as Record<string, unknown>;
-  if (envelope.structuredContent && typeof envelope.structuredContent === 'object') {
-    parsed = envelope.structuredContent;
-  } else if (typeof envelope.result === 'string') {
-    try {
-      parsed = JSON.parse(envelope.result);
-    } catch {
-      return null;
-    }
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const obj = parsed as Record<string, unknown>;
-  if (obj.kind !== 'browser_login_request' || obj.ok !== true) return null;
-  const setup = (obj.setup && typeof obj.setup === 'object')
-    ? obj.setup as Record<string, unknown>
-    : null;
-  if (!setup || typeof setup.id !== 'string') return null;
-  const name = typeof setup.name === 'string' ? setup.name : null;
-  return { setupId: setup.id, siteName: name };
 }
 
 function parseCronToolStep(step: Extract<ActivityStep, { type: 'tool' }>): CronToolCardProps | null {

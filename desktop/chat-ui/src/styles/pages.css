@@ -1053,39 +1053,3 @@
     opacity: 0.85;
   }
 }
-
-/* ——— Browser sign-in ——— */
-
-/* The inline sign-in card shares .codex-connect-card's shell. */
-.browser-connect-status {
-  font-size: 13px;
-  color: var(--ink-2);
-  line-height: 1.5;
-}
-
-.browser-connect-current {
-  color: var(--ink-dim);
-}
-
-.browser-connect-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.browser-connect-waiting {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.browser-connect-error-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.browser-connect-error {
-  font-size: 12px;
-  color: var(--danger-btn-text);
-}

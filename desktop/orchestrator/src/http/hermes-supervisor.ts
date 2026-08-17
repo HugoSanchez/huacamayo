@@ -21,8 +21,6 @@ import { readAnthropicKeyFromEnvFile } from './model-auth.ts';
 import { CustomConnectorsStore } from './custom-connectors-store.ts';
 import { CustomConnectorKeychain } from './keychain.ts';
 import { fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-toolsets.ts';
-import { browserRuntime } from './browser-runtime.ts';
-import { BROWSER_NAMESPACE, BROWSER_RESTORE_KEY } from './browser.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -222,6 +220,7 @@ const DEFAULT_DISABLED_HERMES_SKILLS = [
   'github-issues',
 ];
 const DEFAULT_DISABLED_SKILLS_MARKER = '.verso-default-disabled-skills-v1';
+const PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER = '.verso-paused-pre-release-browser-crons-v1';
 
 export class HermesSupervisor {
   private readonly launch: HermesLaunchConfig;
@@ -655,21 +654,6 @@ export class HermesSupervisor {
       HERMES_HOME: this.managedHermesHome,
       VERSO_HERMES_GATEWAY_URL: this.config.baseUrl,
       ...(this.orchestratorBaseUrl ? { VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
-      // Hermes' browser tools resolve `agent-browser` via PATH; point it at
-      // the Verso-managed pinned CLI (harmless when not installed yet). The
-      // CLI keeps Chrome for Testing under ~/.agent-browser — a layout the
-      // bundled Hermes' Playwright-cache probe doesn't know — so also export
-      // the resolved executable, which Hermes accepts as an explicit browser.
-      PATH: [browserRuntime.binDir, process.env.PATH].filter(Boolean).join(':'),
-      ...(browserRuntime.resolveChromium()
-        ? { AGENT_BROWSER_EXECUTABLE_PATH: browserRuntime.resolveChromium() as string }
-        : {}),
-      // Hermes already owns per-task browser startup/cleanup. A stable native
-      // restore key is enough to give those isolated sessions the sign-in the
-      // user established in Verso's headed setup window.
-      AGENT_BROWSER_NAMESPACE: BROWSER_NAMESPACE,
-      AGENT_BROWSER_RESTORE: BROWSER_RESTORE_KEY,
-      AGENT_BROWSER_RESTORE_SAVE: 'always',
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {
@@ -707,7 +691,7 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
-    this.configureBrowserCronSafety();
+    this.pausePreReleaseBrowserCrons();
     this.configureModelRoutes();
     this.restoreManagedModelConfigIfProxyOwned();
     this.seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed);
@@ -742,6 +726,61 @@ export class HermesSupervisor {
     }
     mkdirSync(dirname(targetPath), { recursive: true });
     copyFileSync(sourcePath, targetPath);
+  }
+
+  /**
+   * Pre-release builds briefly allowed the agent to create browser-backed
+   * cron jobs. That path proved unreliable and was removed before release,
+   * but jobs already written to a test profile would otherwise resume when
+   * Hermes starts. Preserve the jobs and their history while pausing active
+   * ones exactly once; users can still inspect or delete them in the UI.
+   */
+  private pausePreReleaseBrowserCrons(): void {
+    const markerPath = join(this.managedHermesHome, PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER);
+    if (existsSync(markerPath)) return;
+
+    const jobsPath = join(this.managedHermesHome, 'cron', 'jobs.json');
+    let pausedCount = 0;
+    if (existsSync(jobsPath)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(jobsPath, 'utf8'));
+      } catch (error) {
+        console.warn(
+          `[cron-cleanup] could not read ${jobsPath}; browser routines were not changed:`,
+          error instanceof Error ? error.message : String(error),
+        );
+        return;
+      }
+
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      const jobs = (parsed as Record<string, unknown>).jobs;
+      if (Array.isArray(jobs)) {
+        const pausedAt = new Date().toISOString();
+        for (const rawJob of jobs) {
+          if (!rawJob || typeof rawJob !== 'object' || Array.isArray(rawJob)) continue;
+          const job = rawJob as Record<string, unknown>;
+          if (!Array.isArray(job.enabled_toolsets) || !job.enabled_toolsets.includes('browser')) continue;
+          if (job.enabled === false && job.state === 'paused') continue;
+          job.enabled = false;
+          job.state = 'paused';
+          job.paused_at = pausedAt;
+          job.paused_reason = 'Browser routines are disabled in this Verso release.';
+          pausedCount += 1;
+        }
+      }
+
+      if (pausedCount > 0) {
+        const tempPath = `${jobsPath}.verso-cleanup-${process.pid}.tmp`;
+        writeFileSync(tempPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
+        renameSync(tempPath, jobsPath);
+      }
+    }
+
+    writeFileSync(markerPath, 'Browser cron cleanup v1 completed.\n', 'utf8');
+    if (pausedCount > 0) {
+      console.warn(`[cron-cleanup] paused ${pausedCount} pre-release browser routine(s)`);
+    }
   }
 
   private syncManagedAuthStore(): void {
@@ -862,13 +901,6 @@ export class HermesSupervisor {
   }
 
   /**
-   * Earlier managed-profile experiments pointed Hermes at verso's local
-   * `/llm/v1` proxy. That proxy is no longer part of the product path; Hermes
-   * should preserve the user's own Codex/OpenAI auth and model config. If we
-   * find the exact old proxy-owned model config, restore the template model
-   * section. Other model configs are left untouched.
-   */
-  /**
    * Reconcile api_server model_routes with the credentials that actually
    * exist, so the chat-input model selector can switch providers per
    * request. A routed alias makes the gateway re-resolve provider
@@ -882,23 +914,6 @@ export class HermesSupervisor {
    * aliases in the model catalog are touched; any hand-added route is
    * preserved.
    */
-  /**
-   * All browser routines share one agent-browser restore key. Hermes can run
-   * cron jobs concurrently by default, which would let two sessions race to
-   * save that state. Keep the managed profile serial using Hermes' native
-   * scheduler setting; no custom lease manager is needed.
-   */
-  private configureBrowserCronSafety(): void {
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    if (!existsSync(configPath)) return;
-    const config = readYamlRecord(configPath) ?? {};
-    const cron = asRecord(config.cron) ?? {};
-    if (cron.max_parallel_jobs === 1) return;
-    cron.max_parallel_jobs = 1;
-    config.cron = cron;
-    writeFileSync(configPath, YAML.stringify(config), 'utf8');
-  }
-
   private configureModelRoutes(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     if (!existsSync(configPath)) return;
@@ -977,6 +992,13 @@ export class HermesSupervisor {
     }
   }
 
+  /**
+   * Earlier managed-profile experiments pointed Hermes at verso's local
+   * `/llm/v1` proxy. That proxy is no longer part of the product path; Hermes
+   * should preserve the user's own Codex/OpenAI auth and model config. If we
+   * find the exact old proxy-owned model config, restore the template model
+   * section. Other model configs are left untouched.
+   */
   private restoreManagedModelConfigIfProxyOwned(): void {
     if (this.runtimeMode !== 'managed') return;
 

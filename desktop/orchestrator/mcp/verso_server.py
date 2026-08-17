@@ -53,11 +53,7 @@ mcp = FastMCP(
         "conversation.\n\n"
         "Use search_toolkits only to resolve an ambiguous app name to a "
         "Composio toolkit slug, and get_connection_status to poll an "
-        "in-flight connection request.\n\n"
-        "Hermes browser_* tools manage their own isolated browser sessions. "
-        "For public websites, create browser routines directly with the browser "
-        "toolset. Only call request_browser_login when the requested work needs "
-        "the user's authenticated website session."
+        "in-flight connection request."
     ),
 )
 
@@ -163,37 +159,6 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 
     payload = _request("GET", f"/connections/requests/{urllib.parse.quote(request_id)}")
     return _structured_result(payload)
-
-
-@mcp.tool()
-def request_browser_login(
-    name: str | None = None,
-    url: str = "",
-) -> types.CallToolResult:
-    """Open the user-facing sign-in flow for authenticated browser automation.
-
-    Call this only when a browser routine needs the user's logged-in website
-    state. Public websites need no setup: use Hermes' browser_* tools directly.
-    Prefer a connector/toolkit integration when one exists.
-
-    Always pass the target site's http(s) URL. Verso opens that URL in a
-    dedicated headed browser and saves its cookies/local storage locally.
-    After the user confirms sign-in, a follow-up message arrives. Then create
-    the routine with the cronjob tool, include "browser" in toolsets, and
-    create it paused/disabled for a supervised first run. Its prompt should
-    tell the browser agent to stop and report on login, payment, destructive,
-    or unexpected screens and to provide an itemized summary.
-    """
-
-    payload = _request(
-        "POST",
-        "/browser/login/request",
-        {
-            "name": (name or "").strip() or None,
-            "url": url.strip(),
-        },
-    )
-    return _structured_result({"kind": "browser_login_request", **payload})
 
 
 @mcp.tool()

@@ -180,7 +180,7 @@ echo "[smoke] PASS: MCP OAuth routes registered and dispatching"
 # error anywhere. Ask THIS bundle's own naming function what wire name each
 # core tool gets, and assert the orchestrator's pinned list contains it.
 echo "[smoke] checking pinned-tool naming contract against the bundle"
-CORE_TOOLS="request_connection search_toolkits list_connections get_connection_status propose_message_draft search_memory get_memory_page write_memory_page request_browser_login"
+CORE_TOOLS="request_connection search_toolkits list_connections get_connection_status propose_message_draft search_memory get_memory_page write_memory_page"
 
 expected_names="$(PYTHONPATH="${SITE_PACKAGES}" "${PYTHON_BIN}" - "${CORE_TOOLS}" <<'PYEOF'
 import sys

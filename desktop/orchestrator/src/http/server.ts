@@ -32,8 +32,6 @@ import { HermesSkillsConfig } from './skills-store.ts';
 import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
 import { CronDescriptionsStore } from './cron-descriptions-store.ts';
-import { buildBrowserRoutes } from './browser.ts';
-import { browserRuntime } from './browser-runtime.ts';
 import { LocalEmbedder, resolveEmbedderConfig } from './embedder.ts';
 import { isChatCaptureEnabled, LexicalMemoryProvider, resolveLexicalMemoryConfig } from './lexical-provider.ts';
 import { buildMemoryRoutes } from './memory-routes.ts';
@@ -106,10 +104,6 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const customConnectorsStore = new CustomConnectorsStore();
   const customConnectorKeychain = new CustomConnectorKeychain();
   const hermes = new HermesSupervisor({ runtimeMode, customConnectorsStore, customConnectorKeychain });
-  // Hermes' own lazy dependency bootstrap and the headed sign-in UI now use
-  // one agent-browser installation. This avoids the parallel app-support
-  // runtime tree that the original browser implementation introduced.
-  browserRuntime.configureInstallRoot(hermes.hermesHome);
   const hermesHistoryHomes = hermesHistoryHomeCandidates(hermes.hermesHome);
   // Hermes has the exact model for conversations it executed. Restore that
   // durable per-session state for databases created before Verso stored model
@@ -252,7 +246,6 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const skillsConfig = new HermesSkillsConfig(path.join(hermes.hermesHome, 'config.yaml'));
   const pinnedSkills = new PinnedSkillsStore();
   const cronDescriptions = new CronDescriptionsStore();
-  const browserLogin = buildBrowserRoutes(browserRuntime);
   const codexAuth = new CodexAuthService(hermes);
   const anthropicAuth = new AnthropicAuthService(
     hermes,
@@ -280,7 +273,6 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
-    ...browserLogin.routes,
     ...buildModelAuthRoutes(codexAuth, anthropicAuth),
     ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction, async () => {
       const codex = await codexAuth.getStatus();
@@ -298,7 +290,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     || process.env.VERSO_ALLOW_UNAUTHENTICATED_SIDECAR === '1'
   );
   if (!authSecret && !allowUnauthenticated) {
-    throw new Error('VERSO_SIDECAR_AUTH_SECRET is required. For local browser development only, set VERSO_ALLOW_UNAUTHENTICATED_SIDECAR=1.');
+    throw new Error('VERSO_SIDECAR_AUTH_SECRET is required. For local development only, set VERSO_ALLOW_UNAUTHENTICATED_SIDECAR=1.');
   }
 
   const server = http.createServer((req, res) => {
@@ -311,7 +303,6 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
       memoryExtraction.stop();
       sourceIngestion.stop();
       await Promise.all([
-        browserLogin.login.shutdown(),
         hermes.shutdown(),
         memoryProvider.stop(),
       ]);
