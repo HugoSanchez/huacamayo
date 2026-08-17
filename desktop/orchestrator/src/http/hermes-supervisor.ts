@@ -954,6 +954,24 @@ export class HermesSupervisor {
     apiServer.extra = extra;
     platforms.api_server = apiServer;
     config.platforms = platforms;
+
+    // Chat requests always carry an explicit model, but cron runs (and any
+    // session without one) fall back to the top-level `model.default`. A
+    // claude-* default paired with the Codex backend 400s every such run
+    // ("model not supported when using Codex with a ChatGPT account"), so
+    // repair that known-broken pairing whenever Codex credentials exist.
+    const modelCfg = asRecord(config.model);
+    if (modelCfg && hasCodex) {
+      const defaultModel = typeof modelCfg.default === 'string' ? modelCfg.default : '';
+      const provider = typeof modelCfg.provider === 'string' ? modelCfg.provider : '';
+      const baseUrl = typeof modelCfg.base_url === 'string' ? modelCfg.base_url : '';
+      const codexBackend = provider === 'openai-codex' || baseUrl.includes('chatgpt.com');
+      if (codexBackend && defaultModel.startsWith('claude-')) {
+        modelCfg.default = CODEX_CHAT_MODELS[0];
+        config.model = modelCfg;
+      }
+    }
+
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 

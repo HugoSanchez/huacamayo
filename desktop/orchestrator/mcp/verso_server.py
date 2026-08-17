@@ -53,7 +53,12 @@ mcp = FastMCP(
         "conversation.\n\n"
         "Use search_toolkits only to resolve an ambiguous app name to a "
         "Composio toolkit slug, and get_connection_status to poll an "
-        "in-flight connection request."
+        "in-flight connection request.\n\n"
+        "Routines that work inside a website via the browser_* tools require "
+        "a website connection: call request_browser_connection first (even "
+        "for public sites without login) and follow its instructions for "
+        "composing the routine. Never create a browser-based routine without "
+        "one — the routine would have no browser to drive."
     ),
 )
 
@@ -146,11 +151,18 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 def request_browser_connection(name: str | None = None) -> types.CallToolResult:
     """Start the user-facing setup flow for automating a website in a browser.
 
-    Use this ONLY when the user wants a routine that works inside a website
-    for which no connector/toolkit integration exists (check search_toolkits
-    first). Verso shows a setup card in chat: the user opens a dedicated
-    browser window, signs in to the site, and confirms. Do not ask the user
-    for URLs or credentials yourself — the card handles everything.
+    REQUIRED for EVERY routine that will interact with a website through the
+    browser_* tools — including public sites that need no sign-in. Routines
+    only get a browser through a website connection: Verso installs the
+    managed browser, launches it per run, and scopes it to the connected
+    site. A routine that calls browser_* tools without a connection has no
+    browser to drive. (Still prefer a connector/toolkit integration when one
+    exists — check search_toolkits first.)
+
+    Verso shows a setup card in chat: the user opens a dedicated browser
+    window, signs in if needed, navigates to the target page, and confirms.
+    Do not ask the user for URLs or credentials yourself — the card handles
+    everything.
 
     After calling this, tell the user to use the setup card that appears.
     When the connection completes, you will receive a follow-up message with
@@ -163,8 +175,10 @@ def request_browser_connection(name: str | None = None) -> types.CallToolResult:
     - state the safety rules: stay on the connected site, stop and report on
       login pages / payment or destructive screens / anything unexpected,
       skip items you are not confident about, and report an itemized summary.
-    Create the routine paused/disabled first so the user can watch a
-    supervised first run before enabling the schedule.
+    If you set toolsets for the job, the list must include "browser" (plus
+    whatever else the task needs). Create the routine paused/disabled first
+    so the user can watch a supervised first run before enabling the
+    schedule.
     """
 
     payload = _request(
