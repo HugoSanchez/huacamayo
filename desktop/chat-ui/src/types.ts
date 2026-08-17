@@ -83,10 +83,11 @@ export interface CustomConnectorView {
   transport: 'http' | 'sse';
   auth: 'none' | 'bearer' | 'oauth';
   logoUrl: string | null;
+  lastKnownToolCount?: number;
   createdAt: string;
   updatedAt: string;
   status:
-    | { state: 'connected'; toolCount: number }
+    | { state: 'connected'; toolCount: number; cached?: true }
     | { state: 'pending_auth'; toolCount: 0 }
     | { state: 'failed'; toolCount: 0; reason: string };
 }

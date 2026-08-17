@@ -347,6 +347,157 @@ describe('custom MCP connectors', () => {
     expect(hermes.restart).not.toHaveBeenCalled();
   });
 
+  it('marks an expired gateway OAuth flow as failed instead of leaving it pending forever', async () => {
+    const store = new CustomConnectorsStore(path.join(tempRoot, 'store.json'));
+    const keychain = fakeKeychain();
+    const hermes = fakeHermes(tempRoot);
+    const connector = store.create({
+      name: 'Holded',
+      slug: 'holded',
+      url: 'https://mcp.holded.com/mcp',
+      transport: 'http',
+      auth: 'oauth',
+      logoUrl: null,
+    });
+    let flowPolls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/mcp/servers/custom_holded/auth') && init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          flow_id: 'expired-flow',
+          status: 'authorization_required',
+          authorization_url: 'https://app.holded.com/oauth/authorize?state=expired',
+          error: null,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/mcp/oauth/flows/expired-flow')) {
+        flowPolls += 1;
+        return new Response('', { status: 404 });
+      }
+      if (url.endsWith('/api/mcp/tools')) return toolsetsResponse([]);
+      return new Response('', { status: 404 });
+    }));
+    const service = new CustomConnectorService(store, keychain.instance, hermes, {
+      authPollDelayMs: 0,
+      authPollAttempts: 1,
+    });
+
+    await service.openAuth(connector.id, fakeResponse() as any);
+    await vi.waitFor(() => expect(flowPolls).toBe(1));
+
+    const [view] = await service.list();
+    expect(view.status).toEqual({
+      state: 'failed',
+      toolCount: 0,
+      reason: 'The sign-in session expired. Start the sign-in again.',
+    });
+  });
+
+  it('marks an approved OAuth flow as failed when Hermes still registers no tools', async () => {
+    const store = new CustomConnectorsStore(path.join(tempRoot, 'store.json'));
+    const keychain = fakeKeychain();
+    const hermes = fakeHermes(tempRoot);
+    const connector = store.create({
+      name: 'Holded',
+      slug: 'holded',
+      url: 'https://mcp.holded.com/mcp',
+      transport: 'http',
+      auth: 'oauth',
+      logoUrl: null,
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/mcp/servers/custom_holded/auth') && init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          flow_id: 'approved-without-tools',
+          status: 'authorization_required',
+          authorization_url: 'https://app.holded.com/oauth/authorize?state=approved',
+          error: null,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/mcp/oauth/flows/approved-without-tools')) {
+        return new Response(JSON.stringify({ status: 'approved', error: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/mcp/tools')) return toolsetsResponse([]);
+      return new Response('', { status: 404 });
+    }));
+    const service = new CustomConnectorService(store, keychain.instance, hermes, {
+      registrationAttempts: 1,
+      registrationDelayMs: 0,
+      authPollDelayMs: 0,
+      authPollAttempts: 1,
+    });
+
+    await service.openAuth(connector.id, fakeResponse() as any);
+    await vi.waitFor(() => expect(hermes.restart).toHaveBeenCalledTimes(1));
+    await vi.waitFor(async () => {
+      const [view] = await service.list();
+      expect(view.status).toEqual({
+        state: 'failed',
+        toolCount: 0,
+        reason: 'Sign-in completed, but the connector could not be activated: The connector signed in, but Hermes registered no tools for it.',
+      });
+    });
+  });
+
+  it('hydrates an existing OAuth connection from persisted credentials while tools warm up', async () => {
+    const store = new CustomConnectorsStore(path.join(tempRoot, 'store.json'));
+    const keychain = fakeKeychain();
+    const hermes = fakeHermes(tempRoot);
+    const connector = store.create({
+      name: 'Holded',
+      slug: 'holded',
+      url: 'https://mcp.holded.com/mcp',
+      transport: 'http',
+      auth: 'oauth',
+      logoUrl: null,
+      lastKnownToolCount: 47,
+    });
+    mkdirSync(path.join(tempRoot, 'mcp-tokens'), { recursive: true });
+    writeFileSync(path.join(tempRoot, 'mcp-tokens', 'custom_holded.json'), '{"access_token":"cached"}', 'utf8');
+    vi.stubGlobal('fetch', vi.fn(async () => toolsetsResponse([])));
+    const service = new CustomConnectorService(store, keychain.instance, hermes);
+
+    const [view] = await service.list();
+
+    expect(view.id).toBe(connector.id);
+    expect(view.status).toEqual({ state: 'connected', toolCount: 47, cached: true });
+
+    writeFileSync(path.join(tempRoot, 'mcp-tokens', 'custom_holded.json'), JSON.stringify({
+      access_token: 'expired',
+      expires_at: 1,
+    }), 'utf8');
+    const [expiredView] = await service.list();
+    expect(expiredView.status).toEqual({ state: 'pending_auth', toolCount: 0 });
+  });
+
+  it('persists the last verified tool count for immediate status on the next launch', async () => {
+    const storePath = path.join(tempRoot, 'store.json');
+    const store = new CustomConnectorsStore(storePath);
+    const keychain = fakeKeychain();
+    const hermes = fakeHermes(tempRoot);
+    const connector = store.create({
+      name: 'Holded',
+      slug: 'holded',
+      url: 'https://mcp.holded.com/mcp',
+      transport: 'http',
+      auth: 'oauth',
+      logoUrl: null,
+    });
+    const tools = Array.from({ length: 47 }, (_, index) => `mcp__custom_holded__tool_${index}`);
+    vi.stubGlobal('fetch', vi.fn(async () => toolsetsResponse(tools)));
+    const service = new CustomConnectorService(store, keychain.instance, hermes);
+
+    const [view] = await service.list();
+    const persisted = new CustomConnectorsStore(storePath).get(connector.id);
+
+    expect(view.status).toEqual({ state: 'connected', toolCount: 47 });
+    expect(persisted?.lastKnownToolCount).toBe(47);
+  });
+
   it('retry on an oauth connector skips the gateway restart and reports pending sign-in', async () => {
     const store = new CustomConnectorsStore(path.join(tempRoot, 'store.json'));
     const keychain = fakeKeychain();
@@ -359,6 +510,8 @@ describe('custom MCP connectors', () => {
       auth: 'oauth',
       logoUrl: null,
     });
+    mkdirSync(path.join(tempRoot, 'mcp-tokens'), { recursive: true });
+    writeFileSync(path.join(tempRoot, 'mcp-tokens', 'custom_holded.json'), '{"access_token":"cached"}', 'utf8');
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url.endsWith('/favicon.ico')) return new Response('', { status: 404 });
@@ -396,6 +549,64 @@ describe('custom MCP connectors', () => {
     const [view] = await service.list();
     expect(view.status.state).toBe('failed');
     expect((view.status as { reason?: string }).reason).toBeTruthy();
+  });
+
+  it('service add stores bearer secrets and returns the registered tool count', async () => {
+    const store = new CustomConnectorsStore(path.join(tempRoot, 'store.json'));
+    const keychain = fakeKeychain();
+    const hermes = fakeHermes(tempRoot);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith('/favicon.ico') || url === 'https://linear.example/') {
+        return new Response('', { status: 404 });
+      }
+      if (url.endsWith('/api/mcp/tools')) {
+        return toolsetsResponse(['mcp__custom_linear__search']);
+      }
+      return initializeResponse('Linear');
+    }));
+    const service = new CustomConnectorService(store, keychain.instance, hermes, {
+      registrationAttempts: 1,
+      registrationDelayMs: 0,
+    });
+
+    const view = await service.add({
+      name: 'Linear',
+      url: 'https://linear.example/mcp',
+      token: 'secret-token',
+    });
+
+    expect(keychain.setSecret).toHaveBeenCalledWith(view.id, 'secret-token');
+    expect(hermes.restart).toHaveBeenCalledTimes(1);
+    expect(view.status).toEqual({ state: 'connected', toolCount: 1 });
+    expect(readFileSync(store.path, 'utf8')).not.toContain('secret-token');
+  });
+
+  it('service add keeps a new OAuth connector pending until browser sign-in', async () => {
+    const store = new CustomConnectorsStore(path.join(tempRoot, 'store.json'));
+    const keychain = fakeKeychain();
+    const hermes = fakeHermes(tempRoot);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith('/favicon.ico') || url === 'https://holded.example/') {
+        return new Response('', { status: 404 });
+      }
+      if (url.endsWith('/api/mcp/tools')) return toolsetsResponse([]);
+      return new Response('', {
+        status: 401,
+        headers: { 'WWW-Authenticate': 'Bearer realm="mcp"' },
+      });
+    }));
+    const service = new CustomConnectorService(store, keychain.instance, hermes, {
+      registrationAttempts: 1,
+      registrationDelayMs: 0,
+    });
+
+    const view = await service.add({ name: 'Holded', url: 'https://holded.example/mcp' });
+
+    expect(view.status).toEqual({ state: 'pending_auth', toolCount: 0 });
+    expect(keychain.setSecret).not.toHaveBeenCalled();
+    expect(hermes.restart).toHaveBeenCalledTimes(1);
   });
 
   it('service add rolls back store and keychain when restart fails', async () => {

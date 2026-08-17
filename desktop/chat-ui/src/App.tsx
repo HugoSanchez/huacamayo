@@ -25,7 +25,7 @@ import {
   openConnectionRequest,
   openCustomConnectorAuth,
   openExternalUrl,
-  removeCustomConnector,
+  disconnectCustomConnector,
   retryCustomConnector,
   resolveSidecarUrl,
   setSidecarAuthToken,
@@ -345,6 +345,20 @@ export function App() {
       // Ignore best-effort refresh failures.
     }
   }, []);
+
+  // Custom-connector OAuth completes outside the app (system browser →
+  // gateway callback), so no UI action fires when it finishes. Existing
+  // OAuth sessions also hydrate instantly from their cached tool count while
+  // Hermes warms up. Poll either transient state until the live registry is
+  // authoritative, then stop.
+  useEffect(() => {
+    if (!connected) return;
+    if (!customConnectors.some((c) => c.status.state === 'pending_auth' || c.status.cached === true)) return;
+    const timer = window.setInterval(() => {
+      void refreshConnections();
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [connected, customConnectors, refreshConnections]);
 
   const refreshCodexStatus = useCallback(async () => {
     if (!getSidecarPort()) return;
@@ -1435,7 +1449,7 @@ export function App() {
 
         <CustomConnectorSection
           connectors={customConnectors}
-          onRetry={(id) => {
+          onSignIn={(id) => {
             void retryCustomConnector(id)
               .then((connector) => {
                 if (connector.status.state === 'pending_auth') openCustomConnectorAuth(connector.id);
@@ -1445,8 +1459,11 @@ export function App() {
               .catch(() => {})
               .then(() => refreshConnections());
           }}
-          onRemove={(id) => {
-            void removeCustomConnector(id).then(() => refreshConnections());
+          onDisconnect={(id) => {
+            setCustomConnectors((current) => current.filter((connector) => connector.id !== id));
+            void disconnectCustomConnector(id)
+              .catch(() => {})
+              .then(() => refreshConnections());
           }}
         />
       </aside>
@@ -1523,12 +1540,12 @@ function SessionSection({
 
 function CustomConnectorSection({
   connectors,
-  onRetry,
-  onRemove,
+  onSignIn,
+  onDisconnect,
 }: {
   connectors: CustomConnectorView[];
-  onRetry: (id: string) => void;
-  onRemove: (id: string) => void;
+  onSignIn: (id: string) => void;
+  onDisconnect: (id: string) => void;
 }) {
   if (connectors.length === 0) return null;
   return (
@@ -1553,11 +1570,13 @@ function CustomConnectorSection({
               <div className="custom-connector-status">{customConnectorStatusText(connector)}</div>
             </div>
             <div className="custom-connector-actions">
-              <button type="button" onClick={() => onRetry(connector.id)} aria-label={`Re-authenticate ${connector.name}`}>
-                Retry
-              </button>
-              <button type="button" onClick={() => onRemove(connector.id)} aria-label={`Remove ${connector.name}`}>
-                Remove
+              {connector.status.state !== 'connected' && (
+                <button type="button" onClick={() => onSignIn(connector.id)} aria-label={`Sign in to ${connector.name}`}>
+                  Sign in
+                </button>
+              )}
+              <button type="button" onClick={() => onDisconnect(connector.id)} aria-label={`Disconnect ${connector.name}`}>
+                Disconnect
               </button>
             </div>
           </div>
@@ -1568,7 +1587,9 @@ function CustomConnectorSection({
 }
 
 function customConnectorStatusText(connector: CustomConnectorView): string {
-  if (connector.status.state === 'connected') return `${connector.status.toolCount} tools`;
+  if (connector.status.state === 'connected') {
+    return connector.status.toolCount > 0 ? `${connector.status.toolCount} tools` : 'Connected';
+  }
   if (connector.status.state === 'pending_auth') return 'Waiting for sign-in';
   return connector.status.reason;
 }

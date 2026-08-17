@@ -18,8 +18,8 @@
  
      # ------------------------------------------------------------------
 --- a/gateway/platforms/verso_mcp_oauth.py	1970-01-01 01:00:00
-+++ b/gateway/platforms/verso_mcp_oauth.py	2026-08-17 11:02:26
-@@ -0,0 +1,359 @@
++++ b/gateway/platforms/verso_mcp_oauth.py	2026-08-17 11:25:21
+@@ -0,0 +1,407 @@
 +"""Verso runtime patch: MCP OAuth flow endpoints on the gateway API server.
 +
 +Mirrors the dashboard-mediated MCP OAuth flow from ``hermes_cli/web_server.py``
@@ -52,6 +52,7 @@
 +
 +from __future__ import annotations
 +
++import asyncio
 +import logging
 +import secrets
 +import threading
@@ -95,6 +96,38 @@
 +        return _transactions.setdefault(key, threading.Lock())
 +
 +
++def _reset_mismatched_dynamic_client(
++    storage, server_name: str, cfg: dict, redirect_uri: str
++) -> None:
++    """Discard cached DCR state that is pinned to another callback URI.
++
++    Older Verso builds selected a new gateway port on every restart. OAuth
++    providers bind a dynamically registered client_id to its exact redirect
++    URI, so those cached registrations cannot be reused by the stable gateway
++    callback. An explicit pre-registered client is left untouched.
++
++    The caller snapshots storage first and restores it if the new flow fails.
++    """
++    oauth_cfg = cfg.get("oauth") or {}
++    if isinstance(oauth_cfg, dict) and oauth_cfg.get("client_id"):
++        return
++    try:
++        client = asyncio.run(storage.get_client_info())
++        redirects = [str(uri) for uri in (client.redirect_uris or [])] if client else []
++    except (OSError, ValueError, TypeError, RuntimeError):
++        return
++    if redirect_uri in redirects or not redirects:
++        return
++    logger.info(
++        "[verso_mcp_oauth] replacing stale OAuth client registration for '%s' "
++        "(%s -> %s)",
++        server_name,
++        redirects[0],
++        redirect_uri,
++    )
++    storage.remove()
++
++
 +def _run_flow(flow, cfg: dict) -> None:
 +    """Run the MCP probe with dashboard redirect/callback handlers.
 +
@@ -126,6 +159,9 @@
 +                backup = storage.snapshot()
 +                previous_entry = None
 +                try:
++                    _reset_mismatched_dynamic_client(
++                        storage, flow.server_name, cfg, flow.redirect_uri
++                    )
 +                    previous_entry = manager.remove(
 +                        flow.server_name,
 +                        hermes_home=flow.hermes_home,
@@ -315,7 +351,7 @@
 +    )
 +    if flow is None:
 +        return _html(
-+            "<h1>OAuth flow expired</h1><p>Return to Verso and try again.</p>",
++            "<h1>OAuth flow expired</h1><p>Return to Verso and start the sign-in again.</p>",
 +            status=404,
 +        )
 +    try:
@@ -362,11 +398,23 @@
 +
 +
 +def _html(body: str, status: int = 200) -> "web.Response":
-+    return web.Response(
-+        text=f"<!doctype html><html><body>{body}</body></html>",
-+        status=status,
-+        content_type="text/html",
++    # Match Verso's editorial look (paper/ink palette) so the OAuth hand-off
++    # pages feel like part of the product rather than a bare debug page.
++    page = (
++        "<!doctype html><html><head><meta charset=\"utf-8\">"
++        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
++        "<title>Verso</title><style>"
++        "body{margin:0;min-height:100vh;display:flex;align-items:center;"
++        "justify-content:center;background:#f4f1e9;color:#1f1d1a;"
++        "font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif}"
++        "main{max-width:26rem;padding:2.5rem;text-align:center}"
++        "h1{font-size:1.5rem;font-weight:600;letter-spacing:-0.01em;margin:0 0 0.75rem}"
++        "p{font-size:0.95rem;line-height:1.5;color:#5c574d;margin:0}"
++        "main::before{content:\"Verso\";display:block;margin-bottom:2rem;"
++        "font-size:0.8rem;letter-spacing:0.18em;text-transform:uppercase;color:#8a8478}"
++        "</style></head><body><main>" + body + "</main></body></html>"
 +    )
++    return web.Response(text=page, status=status, content_type="text/html")
 +
 +
 +def route_table(adapter) -> list:

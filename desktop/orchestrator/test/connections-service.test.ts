@@ -68,4 +68,44 @@ describe('ConnectionsService', () => {
 
     expect(store.listConnections()).toEqual([]);
   });
+
+  it('lets the catalog reconnect a toolkit when the remote connected flag is stale after delete', async () => {
+    const { service, store } = setupService();
+    store.upsertConnection(fixtureConnection());
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith('/v1/composio/toolkits?query=slack')) {
+        return jsonResponse({
+          toolkits: [
+            {
+              slug: 'slack',
+              name: 'Slack',
+              description: null,
+              logoUrl: null,
+              categories: [],
+              authSchemes: [],
+              composioManagedAuthSchemes: [],
+              connected: true,
+              connectedAccountId: 'ca_123',
+              noAuth: false,
+            },
+          ],
+        });
+      }
+      return jsonResponse({ connections: [] });
+    });
+
+    await service.deleteConnection('ca_123');
+    const result = await service.listToolkits({ query: 'slack' });
+
+    expect(result.toolkits).toHaveLength(1);
+    expect(result.toolkits[0]).toMatchObject({
+      slug: 'slack',
+      connected: false,
+      connectedAccountId: null,
+    });
+  });
 });

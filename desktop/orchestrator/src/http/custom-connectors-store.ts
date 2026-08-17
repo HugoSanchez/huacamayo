@@ -16,6 +16,7 @@ export interface CustomConnectorRecord {
   logoUrl: string | null;
   iconPath?: string | null;
   iconContentType?: string | null;
+  lastKnownToolCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -122,6 +123,8 @@ function isRecord(value: unknown): value is CustomConnectorRecord {
     && (typeof item.logoUrl === 'string' || item.logoUrl === null)
     && (typeof item.iconPath === 'string' || item.iconPath === null || item.iconPath === undefined)
     && (typeof item.iconContentType === 'string' || item.iconContentType === null || item.iconContentType === undefined)
+    && (item.lastKnownToolCount === undefined
+      || (Number.isInteger(item.lastKnownToolCount) && item.lastKnownToolCount >= 0))
     && typeof item.createdAt === 'string'
     && typeof item.updatedAt === 'string';
 }

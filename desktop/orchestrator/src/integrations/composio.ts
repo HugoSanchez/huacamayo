@@ -136,7 +136,8 @@ export class ConnectionsService {
     const localConnections = this.store.listConnections().map(toConnectionView);
 
     try {
-      const items = await this.bridgeClient.listToolkits(opts.query, opts.limit);
+      const items = (await this.bridgeClient.listToolkits(opts.query, opts.limit))
+        .map((toolkit) => this.clearTombstonedToolkitConnection(toolkit));
       return {
         toolkits: mergeToolkitViewsWithStoredConnections(items, localConnections, opts.query),
         nextCursor: null,
@@ -217,6 +218,16 @@ export class ConnectionsService {
     } catch {
       // Manifest refresh is best-effort and must not break connection flows.
     }
+  }
+
+  private clearTombstonedToolkitConnection(toolkit: RemoteBridgeToolkitView): RemoteBridgeToolkitView {
+    const connectedAccountId = toolkit.connectedAccountId?.trim();
+    if (!connectedAccountId || !this.store.isTombstoned(connectedAccountId)) return toolkit;
+    return {
+      ...toolkit,
+      connected: false,
+      connectedAccountId: null,
+    };
   }
 }
 

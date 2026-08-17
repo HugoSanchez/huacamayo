@@ -9,8 +9,9 @@ import { HermesSupervisor } from '../src/http/hermes-supervisor.ts';
 //    with the second shutdown() SIGTERMing the healthy gateway the first
 //    restart had just started ("did not become ready" while a good gateway
 //    was running);
-//  - restarting onto the previous child's port raced its TIME_WAIT socket,
-//    which Hermes treats as a non-retryable bind failure (exit 78).
+//  - shutdown used ChildProcess.killed as proof of exit, even though it only
+//    means a signal was sent. Restart now waits for the process to exit before
+//    reusing the stable gateway port required by OAuth redirect registrations.
 describe('HermesSupervisor restart', () => {
   let supervisor: HermesSupervisor | null = null;
   let tempHome = '';
@@ -52,7 +53,7 @@ describe('HermesSupervisor restart', () => {
     rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it('coalesces concurrent restarts and lands healthy on a fresh port', async () => {
+  it('coalesces concurrent restarts and reuses the stable gateway port', async () => {
     const first = await supervisor!.ensureReady();
     const portBefore = new URL(first.baseUrl).port;
 
@@ -73,12 +74,12 @@ describe('HermesSupervisor restart', () => {
     const status = await supervisor!.getStatus();
     expect(status.reachable).toBe(true);
     const portAfter = new URL(status.baseUrl).port;
-    expect(portAfter).not.toBe(portBefore);
+    expect(portAfter).toBe(portBefore);
 
-    // Sequential restart also lands healthy on another fresh port.
+    // Sequential restarts keep the same callback origin too.
     await supervisor!.restart();
     const statusAfter = await supervisor!.getStatus();
     expect(statusAfter.reachable).toBe(true);
-    expect(new URL(statusAfter.baseUrl).port).not.toBe(portAfter);
+    expect(new URL(statusAfter.baseUrl).port).toBe(portAfter);
   }, 30_000);
 });

@@ -133,9 +133,28 @@ def search_toolkits(query: str, limit: int | None = None) -> types.CallToolResul
 
 @mcp.tool()
 def list_connections() -> types.CallToolResult:
-    """List the user's known verso connections and whether they are active."""
+    """List catalog app and custom MCP connections with their current status."""
 
     payload = _request("GET", "/connections")
+    if isinstance(payload, dict):
+        try:
+            custom = _request("GET", "/connectors/custom")
+            connectors = custom.get("connectors") if isinstance(custom, dict) else None
+        except Exception:
+            connectors = None
+        if isinstance(connectors, list):
+            payload["custom_connectors"] = [
+                {
+                    "name": c.get("name"),
+                    "slug": c.get("slug"),
+                    "url": c.get("url"),
+                    "status": (c.get("status") or {}).get("state"),
+                    "tool_count": (c.get("status") or {}).get("toolCount"),
+                    "tools_prefix": f"mcp__custom_{c.get('slug')}__",
+                }
+                for c in connectors
+                if isinstance(c, dict)
+            ]
     return _structured_result(payload)
 
 

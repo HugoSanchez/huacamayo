@@ -71,7 +71,7 @@ describe('Managed Hermes Startup', () => {
     return { status: res.status, body };
   }
 
-  it('boots Hermes on demand and streams a response', async () => {
+  it('streams a response through managed Hermes', async () => {
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -87,7 +87,6 @@ describe('Managed Hermes Startup', () => {
 
     expect(res.status).toBe(200);
     const body = await res.text();
-    expect(body).toContain('Starting Hermes');
     expect(body).toContain('Managed Hermes: Say hello from managed Hermes');
     expect(body).toContain('content_block_delta');
 

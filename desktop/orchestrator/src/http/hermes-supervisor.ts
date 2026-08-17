@@ -236,8 +236,6 @@ export class HermesSupervisor {
 
   private config: HermesGatewayConfig;
   private orchestratorBaseUrl: string | null = null;
-  private baseUrlResolved: boolean;
-  private resolveBaseUrlPromise: Promise<void> | null = null;
   private child: ChildProcess | null = null;
   private startPromise: Promise<void> | null = null;
   private restartPromise: Promise<void> | null = null;
@@ -263,7 +261,6 @@ export class HermesSupervisor {
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
     this.seedHermesHome = this.templateHermesHome;
-    this.baseUrlResolved = this.hasExplicitBaseUrl;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
 
@@ -333,8 +330,6 @@ export class HermesSupervisor {
   }
 
   async ensureReady(signal?: AbortSignal): Promise<HermesGatewayConfig> {
-    await this.ensureResolvedBaseUrl();
-
     if (!this.launch.command && this.manualMode) {
       if (await this.ping(800, signal)) {
         this.lastError = null;
@@ -373,7 +368,6 @@ export class HermesSupervisor {
   }
 
   async getStatus(timeoutMs = 1200): Promise<HermesRuntimeSnapshot> {
-    await this.ensureResolvedBaseUrl();
     const reachable = this.isChildRunning() ? await this.ping(timeoutMs) : false;
     if (!this.launch.command && this.manualMode) {
       const manualReachable = await this.ping(timeoutMs);
@@ -393,26 +387,28 @@ export class HermesSupervisor {
 
   async shutdown(): Promise<void> {
     const child = this.child;
-    this.child = null;
     this.startPromise = null;
 
-    if (!child || child.exitCode !== null || child.killed) {
+    if (!child || hasExited(child)) {
+      if (this.child === child) this.child = null;
       this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
       this.source = 'none';
       return;
     }
 
-    const exited = new Promise<void>((resolve) => {
-      child.once('exit', () => resolve());
-    });
+    const exited = childExitPromise(child);
 
     child.kill('SIGTERM');
-    await Promise.race([exited, delay(2_000)]);
-    if (child.exitCode === null && !child.killed) {
+    let didExit = await waitForExit(exited, 2_000);
+    if (!didExit && !hasExited(child)) {
       child.kill('SIGKILL');
-      await Promise.race([exited, delay(1_000)]);
+      didExit = await waitForExit(exited, 1_000);
+    }
+    if (!didExit && !hasExited(child)) {
+      throw new Error(`Hermes gateway process ${child.pid ?? 'unknown'} did not exit after SIGKILL.`);
     }
 
+    if (this.child === child) this.child = null;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
     this.source = 'none';
   }
@@ -445,27 +441,6 @@ export class HermesSupervisor {
 
   async waitUntilReady(timeoutMs: number): Promise<void> {
     await this.ensureReady(AbortSignal.timeout(timeoutMs));
-  }
-
-  private async ensureResolvedBaseUrl(): Promise<void> {
-    if (this.baseUrlResolved) return;
-    if (this.resolveBaseUrlPromise) {
-      await this.resolveBaseUrlPromise;
-      return;
-    }
-
-    this.resolveBaseUrlPromise = (async () => {
-      const port = await allocatePort();
-      this.config = {
-        ...this.config,
-        baseUrl: `http://${DEFAULT_HOST}:${port}`,
-      };
-      this.baseUrlResolved = true;
-    })().finally(() => {
-      this.resolveBaseUrlPromise = null;
-    });
-
-    await this.resolveBaseUrlPromise;
   }
 
   private snapshot(reachable: boolean): HermesRuntimeSnapshot {
@@ -550,7 +525,7 @@ export class HermesSupervisor {
   }
 
   private isChildRunning(): boolean {
-    return Boolean(this.child && this.child.exitCode === null && !this.child.killed);
+    return Boolean(this.child && !hasExited(this.child));
   }
 
   private async startManaged(): Promise<void> {
@@ -610,25 +585,15 @@ export class HermesSupervisor {
   }
 
   private async ensureSpawnTargetAvailable(): Promise<void> {
-    if (!this.hasExplicitBaseUrl) {
-      // Always spawn onto a fresh port. Reusing the previous child's port
-      // races its socket lingering in TIME_WAIT after shutdown (the gateway
-      // binds without address reuse on macOS) and Hermes treats that bind
-      // conflict as a NON-retryable startup failure (exit 78), which
-      // surfaced as "gateway did not become ready" on every connector
-      // add/remove restart. A brand-new ephemeral port cannot collide with
-      // our own leftovers. Nothing holds the old port's URL across a spawn:
-      // every consumer reads gatewayConfig dynamically, and the child gets
-      // the URL via env at spawn time.
-      const port = await allocatePort();
-      this.config = {
-        ...this.config,
-        baseUrl: `http://${DEFAULT_HOST}:${port}`,
-      };
+    const target = new URL(this.config.baseUrl);
+    const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
+    if (await canBind(target.hostname, port)) {
       return;
     }
 
-    if (!await this.ping(200)) {
+    if (!this.hasExplicitBaseUrl) {
+      const port = await allocatePort();
+      this.config = { ...this.config, baseUrl: `http://${DEFAULT_HOST}:${port}` };
       return;
     }
 
@@ -1195,7 +1160,7 @@ export class HermesSupervisor {
     const deadline = Date.now() + this.launch.startupTimeoutMs;
 
     while (Date.now() < deadline) {
-      if (child.exitCode !== null || child.killed) {
+      if (hasExited(child)) {
         throw new Error(this.formatExitMessage(child.exitCode, child.signalCode));
       }
       if (await this.ping(500)) {
@@ -1265,6 +1230,30 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function childExitPromise(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    const onExit = () => resolve();
+    child.once('exit', onExit);
+    // Cover the narrow race where the process exits between the caller's
+    // initial state check and registration of the exit listener.
+    if (hasExited(child)) {
+      child.off('exit', onExit);
+      resolve();
+    }
+  });
+}
+
+async function waitForExit(exited: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return Promise.race([
+    exited.then(() => true),
+    delay(timeoutMs).then(() => false),
+  ]);
+}
+
 function anySignal(signals: AbortSignal[]): AbortSignal {
   const controller = new AbortController();
   const activeSignals = signals.filter(Boolean);
@@ -1309,6 +1298,17 @@ async function allocatePort(): Promise<number> {
         }
         resolve(port);
       });
+    });
+  });
+}
+
+async function canBind(host: string, port: number): Promise<boolean> {
+  const server = net.createServer();
+  server.unref();
+  return new Promise((resolve) => {
+    server.once('error', () => resolve(false));
+    server.listen(port, host, () => {
+      server.close((error) => resolve(!error));
     });
   });
 }

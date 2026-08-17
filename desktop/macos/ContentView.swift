@@ -208,6 +208,11 @@ struct ContentView: View {
     @State private var sidebarToast: SidebarToast?
     @State private var connections: [SidebarConnection] = []
     @State private var customConnectors: [SidebarCustomConnector] = []
+    private var needsCustomConnectorRefresh: Bool {
+        customConnectors.contains {
+            $0.status.state == "pending_auth" || $0.status.cached == true
+        }
+    }
     @State private var skills: [SidebarSkill] = []
     @State private var crons: [SidebarCron] = []
     @State private var pendingCronOpen: CronOpenRequest?
@@ -311,8 +316,8 @@ struct ContentView: View {
                         onRetryCustomConnector: { connectorId in
                             Task { await retryCustomConnector(connectorId) }
                         },
-                        onRemoveCustomConnector: { connectorId in
-                            Task { await removeCustomConnector(connectorId) }
+                        onDisconnectCustomConnector: { connectorId in
+                            Task { await disconnectCustomConnector(connectorId) }
                         }
                     )
                 }
@@ -470,6 +475,21 @@ struct ContentView: View {
             await refreshSkills()
             await refreshCrons()
         }
+        // Browser OAuth and Hermes tool registration complete outside the
+        // native event bridge. Poll only while a connector is genuinely
+        // waiting for auth or showing its instant cached connected state;
+        // live registry status ends the loop.
+        .task(id: needsCustomConnectorRefresh) {
+            guard needsCustomConnectorRefresh else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                } catch {
+                    return
+                }
+                await refreshConnections()
+            }
+        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in
             isSystemAsleep = true
         }
@@ -574,7 +594,15 @@ struct ContentView: View {
             }
 
             let decoded = try JSONDecoder().decode(SidebarCustomConnectorsResponse.self, from: data)
-            customConnectors = decoded.connectors
+            customConnectors = decoded.connectors.map { connector in
+                var connector = connector
+                if let logoUrl = connector.logoUrl,
+                   logoUrl.hasPrefix("/"),
+                   let resolved = URL(string: logoUrl, relativeTo: baseURL) {
+                    connector.logoUrl = resolved.absoluteURL.absoluteString
+                }
+                return connector
+            }
         } catch {
             // Keep the last known list when refresh fails.
         }
@@ -628,7 +656,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func removeCustomConnector(_ connectorId: String) async {
+    private func disconnectCustomConnector(_ connectorId: String) async {
         guard let baseURL = sidecar.baseURL else { return }
         let original = customConnectors
         customConnectors.removeAll { $0.id == connectorId }
@@ -988,7 +1016,7 @@ private struct SessionSidebar: View {
     let onDeleteCron: (String) -> Void
     let onDisconnectConnection: (String) -> Void
     let onRetryCustomConnector: (String) -> Void
-    let onRemoveCustomConnector: (String) -> Void
+    let onDisconnectCustomConnector: (String) -> Void
 
     @State private var renamingSessionId: String?
     @State private var draftTitle = ""
@@ -1226,7 +1254,7 @@ private struct SessionSidebar: View {
                                             connector: connector,
                                             theme: theme,
                                             onRetry: { onRetryCustomConnector(connector.id) },
-                                            onRemove: { onRemoveCustomConnector(connector.id) }
+                                            onDisconnect: { onDisconnectCustomConnector(connector.id) }
                                         )
                                     }
                                 }
@@ -1894,7 +1922,7 @@ private struct SidebarCustomConnector: Decodable, Identifiable {
     let url: String
     let transport: String
     let auth: String
-    let logoUrl: String?
+    var logoUrl: String?
     let status: SidebarCustomConnectorStatus
 
     var displayName: String {
@@ -1906,7 +1934,7 @@ private struct SidebarCustomConnector: Decodable, Identifiable {
         switch status.state {
         case "connected":
             let count = status.toolCount ?? 0
-            return "\(count) tool\(count == 1 ? "" : "s")"
+            return count > 0 ? "\(count) tool\(count == 1 ? "" : "s")" : "Connected"
         case "pending_auth":
             return "Waiting for sign-in"
         default:
@@ -1919,13 +1947,14 @@ private struct SidebarCustomConnectorStatus: Decodable {
     let state: String
     let toolCount: Int?
     let reason: String?
+    let cached: Bool?
 }
 
 private struct SidebarCustomConnectorRow: View {
     let connector: SidebarCustomConnector
     let theme: ConductorThemePalette
     let onRetry: () -> Void
-    let onRemove: () -> Void
+    let onDisconnect: () -> Void
 
     @State private var isHovered = false
 
@@ -1955,31 +1984,26 @@ private struct SidebarCustomConnectorRow: View {
             Spacer(minLength: 0)
 
             if isHovered {
-                HStack(spacing: 8) {
-                    Button(action: onRetry) {
-                        Text("Retry")
-                            .font(ConductorType.caption)
-                            .foregroundStyle(theme.inkFaint)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Retry sign-in or tool registration")
-
-                    Button(action: onRemove) {
-                        Text("Remove")
-                            .font(ConductorType.caption)
-                            .foregroundStyle(theme.dangerSoft)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove this custom connector")
+                Button(action: onDisconnect) {
+                    Text("Disconnect")
+                        .font(ConductorType.caption)
+                        .foregroundStyle(theme.dangerSoft)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .help("Disconnect and remove this custom connector")
             }
         }
         .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering
+        }
+        .contextMenu {
+            if !isHealthy {
+                Button("Sign in again", action: onRetry)
+            }
+            Button("Disconnect", role: .destructive, action: onDisconnect)
         }
     }
 }
@@ -2022,8 +2046,8 @@ private struct ConnectionLogo: View {
     }
 
     private func loadImage() async {
+        image = nil
         guard let logoUrl, let url = URL(string: logoUrl) else {
-            image = nil
             return
         }
         if let cached = ConnectionLogoCache.shared.image(for: logoUrl) {
@@ -2031,8 +2055,11 @@ private struct ConnectionLogo: View {
             return
         }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(from: url)
             guard !Task.isCancelled else { return }
+            if let httpResponse = response as? HTTPURLResponse {
+                guard (200..<300).contains(httpResponse.statusCode) else { return }
+            }
             if let nsImage = NSImage(data: data) {
                 ConnectionLogoCache.shared.set(nsImage, for: logoUrl)
                 image = nsImage
