@@ -1,367 +1,243 @@
+import { randomUUID } from 'node:crypto';
 import { json, route, type Route } from './router.ts';
-import { HermesSupervisor } from './hermes-supervisor.ts';
-import { HermesCronsClient, type HermesCronJob } from './hermes-crons-client.ts';
-import type { BrowserConnection, BrowserConnectionsStore } from './browser-connections-store.ts';
-import { BrowserSessionBusyError, type BrowserSessionManager } from './browser-sessions.ts';
 import type { BrowserRuntime } from './browser-runtime.ts';
 
-// Routine prompts reference their website connection with this token. It is
-// the (deliberately derivable) cron↔connection relation: scanning prompts
-// can never drift from what the routines actually use, and there is no
-// linking step the model can forget.
-export function connectionToken(connectionId: string): string {
-  return `browser-connection:${connectionId}`;
-}
+export const BROWSER_RESTORE_KEY = 'verso-browser';
+export const BROWSER_NAMESPACE = 'verso';
+const LOGIN_SESSION = 'verso-browser-login';
 
-type SetupPhase =
+export type BrowserLoginPhase =
   | { kind: 'idle' }
   | { kind: 'installing' }
   | { kind: 'launching' }
   | { kind: 'waiting_login' }
   | { kind: 'error'; message: string };
 
-interface SetupState {
-  phase: SetupPhase;
-  leaseId: string | null;
+export interface BrowserLoginRequest {
+  id: string;
+  name: string;
+  url: string;
+  phase: BrowserLoginPhase;
 }
 
-/** What a completed connection looks like to the chat UI and detail page. */
-function connectionView(connection: BrowserConnection, store: BrowserConnectionsStore) {
-  return {
-    id: connection.id,
-    name: connection.name,
-    domain: connection.domain,
-    startUrl: connection.startUrl,
-    title: connection.title,
-    status: connection.status,
-    lastLease: store.lastLease(connection.id),
-  };
+export interface BrowserLoginPage {
+  url: string;
+  title: string | null;
+  domain: string;
 }
 
-// Common multi-part public suffixes; enough that `login.example.co.uk` maps
-// to `example.co.uk` rather than `co.uk`. Not the full PSL — for exotic
-// suffixes we fall back to the last two labels, which errs broader (still
-// scoped to the connected site's registrar domain, never to everything).
-const MULTIPART_SUFFIXES = new Set([
-  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk',
-  'com.au', 'net.au', 'org.au', 'co.nz', 'org.nz',
-  'co.jp', 'or.jp', 'ne.jp', 'ac.jp',
-  'com.br', 'com.mx', 'com.ar', 'com.co', 'com.pe',
-  'co.in', 'co.za', 'co.kr', 'com.sg', 'com.hk', 'com.tw', 'com.cn', 'com.my',
-]);
-
-/** eTLD+1-ish capture: sign-in flows regularly hop subdomains
- * (app.example.com → auth.example.com), so the stored domain must be the
- * registrable domain, not the exact host the setup window landed on. */
-export function registrableDomain(hostname: string): string {
-  const host = hostname.toLowerCase();
-  // IP literals and single-label hosts (localhost) have no registrable parent.
-  if (/^[\d.]+$/.test(host) || host.includes(':') || !host.includes('.')) return host;
-  const labels = host.split('.');
-  const lastTwo = labels.slice(-2).join('.');
-  const take = MULTIPART_SUFFIXES.has(lastTwo) ? 3 : 2;
-  return labels.slice(-take).join('.');
+export interface BrowserCommandRuntime {
+  isReady(): boolean;
+  ensureInstalled(): Promise<void>;
+  runCli(args: string[], timeoutMs?: number): Promise<string>;
 }
 
-function registrableHost(rawUrl: string): string | null {
+/**
+ * The only browser lifecycle Verso owns: a single headed window where the
+ * user can establish authentication. Routine runs are entirely Hermes-native.
+ * agent-browser saves cookies/local storage under BROWSER_RESTORE_KEY and
+ * Hermes restores that same key into each isolated browser-tool session.
+ */
+export class BrowserLoginService {
+  private readonly requests = new Map<string, BrowserLoginRequest>();
+  private activeId: string | null = null;
+
+  constructor(private readonly runtime: BrowserCommandRuntime) {}
+
+  request(name: string, rawUrl: string): BrowserLoginRequest {
+    const url = normalizeWebUrl(rawUrl);
+    if (!url) throw new Error('A valid http(s) URL is required for browser sign-in.');
+    const request: BrowserLoginRequest = {
+      id: randomUUID(),
+      name: name.trim() || new URL(url).hostname,
+      url,
+      phase: { kind: 'idle' },
+    };
+    this.requests.set(request.id, request);
+    return request;
+  }
+
+  get(id: string): BrowserLoginRequest | null {
+    return this.requests.get(id) ?? null;
+  }
+
+  begin(id: string): Promise<void> {
+    const request = this.require(id);
+    if (this.activeId && this.activeId !== id) {
+      throw new Error('Another browser sign-in window is already active. Finish or cancel it first.');
+    }
+    if (request.phase.kind === 'installing' || request.phase.kind === 'launching' || request.phase.kind === 'waiting_login') {
+      return Promise.resolve();
+    }
+
+    this.activeId = id;
+    request.phase = this.runtime.isReady() ? { kind: 'launching' } : { kind: 'installing' };
+    return this.launch(request);
+  }
+
+  async page(id: string): Promise<BrowserLoginPage | null> {
+    const request = this.require(id);
+    if (request.phase.kind !== 'waiting_login') return null;
+    const urlResult = parseCliResult(await this.runtime.runCli(this.args(['get', 'url'])));
+    const titleResult = parseCliResult(await this.runtime.runCli(this.args(['get', 'title'])));
+    const url = typeof urlResult.url === 'string' ? normalizeWebUrl(urlResult.url) : null;
+    if (!url) return null;
+    return {
+      url,
+      title: typeof titleResult.title === 'string' && titleResult.title.trim() ? titleResult.title.trim() : null,
+      domain: new URL(url).hostname,
+    };
+  }
+
+  async complete(id: string): Promise<BrowserLoginPage> {
+    const request = this.require(id);
+    if (request.phase.kind !== 'waiting_login') {
+      throw new Error('No browser sign-in window is ready for this request.');
+    }
+    const page = await this.page(id);
+    if (!page) throw new Error('Could not read the open website. Leave the sign-in window open and try again.');
+    await this.runtime.runCli(this.args(['close']));
+    this.activeId = null;
+    this.requests.delete(id);
+    return page;
+  }
+
+  async cancel(id: string): Promise<void> {
+    const request = this.requests.get(id);
+    if (!request) return;
+    this.requests.delete(id);
+    if (this.activeId !== id) return;
+    this.activeId = null;
+    if (request.phase.kind === 'launching' || request.phase.kind === 'waiting_login') {
+      await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    if (!this.activeId) return;
+    await this.cancel(this.activeId);
+  }
+
+  private require(id: string): BrowserLoginRequest {
+    const request = this.requests.get(id);
+    if (!request) throw new Error('Unknown browser sign-in request.');
+    return request;
+  }
+
+  private async launch(request: BrowserLoginRequest): Promise<void> {
+    try {
+      await this.runtime.ensureInstalled();
+      if (this.requests.get(request.id) !== request) return;
+      request.phase = { kind: 'launching' };
+      // Close a stale setup daemon left by an app crash. This is deliberately
+      // only the dedicated login session; Hermes' routine sessions are never
+      // touched here.
+      await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
+      if (this.requests.get(request.id) !== request) return;
+      await this.runtime.runCli(this.args(['--headed', 'open', request.url]), 60_000);
+      if (this.requests.get(request.id) !== request) {
+        await this.runtime.runCli(this.args(['close'])).catch(() => undefined);
+        return;
+      }
+      request.phase = { kind: 'waiting_login' };
+    } catch (error) {
+      if (this.requests.get(request.id) !== request) return;
+      request.phase = { kind: 'error', message: error instanceof Error ? error.message : String(error) };
+      this.activeId = null;
+    }
+  }
+
+  private args(command: string[]): string[] {
+    return [
+      '--namespace', BROWSER_NAMESPACE,
+      '--session', LOGIN_SESSION,
+      '--restore', BROWSER_RESTORE_KEY,
+      '--restore-save', 'always',
+      '--json',
+      ...command,
+    ];
+  }
+}
+
+export function buildBrowserRoutes(runtime: BrowserRuntime): { routes: Route[]; login: BrowserLoginService } {
+  const login = new BrowserLoginService(runtime);
+  const routes = [
+    route('POST', '/browser/login/request', async (_req, res, _params, body) => {
+      const payload = (body ?? {}) as { name?: unknown; url?: unknown };
+      try {
+        const request = login.request(
+          typeof payload.name === 'string' ? payload.name : '',
+          typeof payload.url === 'string' ? payload.url : '',
+        );
+        json(res, 201, { ok: true, setup: view(request) });
+      } catch (error) {
+        json(res, 400, { ok: false, error: 'invalid_url', message: error instanceof Error ? error.message : String(error) });
+      }
+    }),
+
+    route('POST', '/browser/login/:id/start', async (_req, res, params) => {
+      const request = login.get(params.id);
+      if (!request) return json(res, 404, { ok: false, error: 'unknown_setup' });
+      try {
+        void login.begin(params.id);
+        json(res, 200, { ok: true, phase: request.phase });
+      } catch (error) {
+        json(res, 409, { ok: false, error: 'browser_busy', message: error instanceof Error ? error.message : String(error) });
+      }
+    }),
+
+    route('GET', '/browser/login/:id/state', async (_req, res, params) => {
+      const request = login.get(params.id);
+      if (!request) return json(res, 404, { ok: false, error: 'unknown_setup' });
+      let page: BrowserLoginPage | null = null;
+      if (request.phase.kind === 'waiting_login') {
+        page = await login.page(params.id).catch(() => null);
+      }
+      json(res, 200, {
+        ok: true,
+        phase: request.phase,
+        currentUrl: page?.url ?? null,
+        currentTitle: page?.title ?? null,
+        setup: view(request),
+      });
+    }),
+
+    route('POST', '/browser/login/:id/complete', async (_req, res, params) => {
+      if (!login.get(params.id)) return json(res, 404, { ok: false, error: 'unknown_setup' });
+      try {
+        const page = await login.complete(params.id);
+        json(res, 200, { ok: true, site: page });
+      } catch (error) {
+        json(res, 409, { ok: false, error: 'not_ready', message: error instanceof Error ? error.message : String(error) });
+      }
+    }),
+
+    route('POST', '/browser/login/:id/cancel', async (_req, res, params) => {
+      await login.cancel(params.id);
+      json(res, 200, { ok: true });
+    }),
+  ];
+  return { routes, login };
+}
+
+function normalizeWebUrl(raw: string): string | null {
   try {
-    const url = new URL(rawUrl);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-    return registrableDomain(url.hostname);
+    const parsed = new URL(raw.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.toString();
   } catch {
     return null;
   }
 }
 
-export function buildBrowserRoutes(
-  hermes: HermesSupervisor,
-  store: BrowserConnectionsStore,
-  sessions: BrowserSessionManager,
-  runtime: BrowserRuntime,
-  profilesRoot: string,
-): Route[] {
-  const setupStates = new Map<string, SetupState>();
+function parseCliResult(raw: string): Record<string, unknown> {
+  const parsed = JSON.parse(raw) as { success?: unknown; data?: unknown; error?: unknown };
+  if (parsed.success !== true || !parsed.data || typeof parsed.data !== 'object') {
+    throw new Error(typeof parsed.error === 'string' ? parsed.error : 'Browser command failed');
+  }
+  return parsed.data as Record<string, unknown>;
+}
 
-  const setupState = (id: string): SetupState => {
-    let state = setupStates.get(id);
-    if (!state) {
-      state = { phase: { kind: 'idle' }, leaseId: null };
-      setupStates.set(id, state);
-    }
-    // A waiting_login state is only meaningful while its lease is still the
-    // active session. If the setup window expired (lease cap) or Chromium
-    // died, surface that instead of leaving the card stuck on "waiting".
-    if (state.phase.kind === 'waiting_login'
-      && state.leaseId !== null
-      && sessions.activeLease()?.leaseId !== state.leaseId) {
-      state.phase = { kind: 'error', message: 'The setup window closed or timed out. Open it again to continue.' };
-      state.leaseId = null;
-    }
-    return state;
-  };
-
-  const cronsClient = async (): Promise<HermesCronsClient> => {
-    const config = await hermes.ensureReady();
-    return new HermesCronsClient(config.baseUrl, config.apiKey ?? undefined);
-  };
-
-  const jobsForConnection = async (connectionId: string): Promise<HermesCronJob[]> => {
-    const client = await cronsClient();
-    const jobs = await client.list();
-    const token = connectionToken(connectionId);
-    return jobs.filter((job) => typeof job.prompt === 'string' && job.prompt.includes(token));
-  };
-
-  const pauseJobsForConnection = async (connectionId: string): Promise<string[]> => {
-    const client = await cronsClient();
-    const jobs = await jobsForConnection(connectionId);
-    const paused: string[] = [];
-    for (const job of jobs) {
-      if (job.state === 'paused' || !job.enabled) continue;
-      try {
-        await client.pause(job.id);
-        paused.push(job.id);
-      } catch (error) {
-        console.warn(`[browser] failed to pause job ${job.id}:`, error instanceof Error ? error.message : String(error));
-      }
-    }
-    // Remember exactly what we paused: reconnect must not resume routines
-    // the user had paused on purpose before the sign-in expired.
-    store.setPausedJobs(connectionId, [...new Set([...store.pausedJobs(connectionId), ...paused])]);
-    return paused;
-  };
-
-  const resumeJobsForConnection = async (connectionId: string): Promise<string[]> => {
-    const client = await cronsClient();
-    const ourPauses = new Set(store.pausedJobs(connectionId));
-    if (ourPauses.size === 0) return [];
-    const jobs = await jobsForConnection(connectionId);
-    const resumed: string[] = [];
-    for (const job of jobs) {
-      if (job.state !== 'paused' || !ourPauses.has(job.id)) continue;
-      try {
-        await client.resume(job.id);
-        resumed.push(job.id);
-      } catch (error) {
-        console.warn(`[browser] failed to resume job ${job.id}:`, error instanceof Error ? error.message : String(error));
-      }
-    }
-    store.setPausedJobs(connectionId, []);
-    return resumed;
-  };
-
-  const beginSetup = async (connection: BrowserConnection): Promise<void> => {
-    const state = setupState(connection.id);
-    try {
-      if (!runtime.isReady()) {
-        state.phase = { kind: 'installing' };
-        await runtime.ensureInstalled();
-      }
-      state.phase = { kind: 'launching' };
-      const lease = await sessions.start(connection, 'setup');
-      state.leaseId = lease.leaseId;
-      state.phase = { kind: 'waiting_login' };
-    } catch (error) {
-      const message = error instanceof BrowserSessionBusyError
-        ? 'Another browser session is active. Try again when it finishes.'
-        : error instanceof Error ? error.message : String(error);
-      state.phase = { kind: 'error', message };
-      state.leaseId = null;
-    }
-  };
-
-  return [
-    // ——— Agent-facing (via the verso MCP bridge) ———
-
-    route('POST', '/browser/connections/request', async (_req, res, _params, body) => {
-      const payload = (body ?? {}) as { name?: unknown; url?: unknown };
-      const name = typeof payload.name === 'string' ? (payload.name.trim() || 'Website') : 'Website';
-      let startUrl: string | null = null;
-      if (typeof payload.url === 'string') {
-        try {
-          const parsed = new URL(payload.url.trim());
-          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') startUrl = parsed.toString();
-        } catch {
-          startUrl = null;
-        }
-      }
-      const connection = store.create(name, profilesRoot, startUrl);
-      json(res, 200, { ok: true, connection: connectionView(connection, store) });
-    }),
-
-    route('POST', '/browser/session/start', async (_req, res, _params, body) => {
-      const connectionId = String((body as { connection_id?: unknown })?.connection_id ?? '').trim();
-      const connection = connectionId ? store.get(connectionId) : null;
-      if (!connection) {
-        json(res, 404, { ok: false, error: 'unknown_connection', message: `No browser connection ${connectionId}` });
-        return;
-      }
-      if (connection.status !== 'connected') {
-        json(res, 409, {
-          ok: false,
-          error: 'connection_not_ready',
-          status: connection.status,
-          message: connection.status === 'needs_login'
-            ? 'This website connection needs the user to sign in again. Stop and report that the routine is paused until they reconnect.'
-            : 'This website connection has not completed setup yet.',
-        });
-        return;
-      }
-      try {
-        const lease = await sessions.start(connection, 'run');
-        json(res, 200, {
-          ok: true,
-          lease_id: lease.leaseId,
-          domain: connection.domain,
-          start_url: connection.startUrl,
-          expires_at: lease.expiresAt,
-          message: 'Browser is running with the saved sign-in. Use the browser_* tools now; they are connected to it. '
-            + 'When finished (or blocked), call browser_session_stop with this lease_id.',
-        });
-      } catch (error) {
-        if (error instanceof BrowserSessionBusyError) {
-          json(res, 409, {
-            ok: false,
-            error: 'browser_busy',
-            message: 'Another browser session is running. Report that this run was skipped; the next scheduled run will retry.',
-          });
-          return;
-        }
-        const failId = 'launch-failed-' + Date.now().toString(16);
-        store.logLeaseStart(failId, connection.id, 'run');
-        store.logLeaseEnd(failId, 'launch_failed', error instanceof Error ? error.message : String(error));
-        json(res, 500, {
-          ok: false,
-          error: 'launch_failed',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }),
-
-    route('POST', '/browser/session/stop', async (_req, res, _params, body) => {
-      const payload = (body ?? {}) as { lease_id?: unknown; outcome?: unknown; summary?: unknown };
-      const leaseId = String(payload.lease_id ?? '').trim();
-      const outcome = String(payload.outcome ?? 'done');
-      const summary = typeof payload.summary === 'string' ? payload.summary.slice(0, 2000) : null;
-      const lease = sessions.activeLease();
-      if (!lease || lease.leaseId !== leaseId) {
-        json(res, 404, { ok: false, error: 'unknown_lease', message: 'No active browser session with that lease id.' });
-        return;
-      }
-      const normalized = outcome === 'needs_login' || outcome === 'error' ? outcome : 'done';
-      await sessions.end(leaseId, normalized, summary);
-      if (normalized === 'needs_login') {
-        store.setStatus(lease.connectionId, 'needs_login');
-        const paused = await pauseJobsForConnection(lease.connectionId).catch(() => [] as string[]);
-        json(res, 200, {
-          ok: true,
-          paused_jobs: paused,
-          message: 'Session closed. The routine is paused until the user signs in again from the routine page.',
-        });
-        return;
-      }
-      json(res, 200, { ok: true, message: 'Session closed.' });
-    }),
-
-    // ——— UI-facing ———
-
-    route('GET', '/browser/connections/:id', async (_req, res, params) => {
-      const connection = store.get(params.id);
-      if (!connection) {
-        json(res, 404, { ok: false, error: 'unknown_connection' });
-        return;
-      }
-      json(res, 200, { ok: true, connection: connectionView(connection, store) });
-    }),
-
-    route('POST', '/browser/setup/:id/start', async (_req, res, params) => {
-      const connection = store.get(params.id);
-      if (!connection) {
-        json(res, 404, { ok: false, error: 'unknown_connection' });
-        return;
-      }
-      const state = setupState(connection.id);
-      if (state.phase.kind === 'installing' || state.phase.kind === 'launching') {
-        json(res, 200, { ok: true, phase: state.phase });
-        return;
-      }
-      if (state.phase.kind === 'waiting_login') {
-        json(res, 200, { ok: true, phase: state.phase });
-        return;
-      }
-      state.phase = runtime.isReady() ? { kind: 'launching' } : { kind: 'installing' };
-      void beginSetup(connection);
-      json(res, 200, { ok: true, phase: state.phase });
-    }),
-
-    route('GET', '/browser/setup/:id/state', async (_req, res, params) => {
-      const connection = store.get(params.id);
-      if (!connection) {
-        json(res, 404, { ok: false, error: 'unknown_connection' });
-        return;
-      }
-      const state = setupState(connection.id);
-      const page = state.phase.kind === 'waiting_login' ? await sessions.currentPage() : null;
-      json(res, 200, {
-        ok: true,
-        phase: state.phase,
-        currentUrl: page?.url ?? null,
-        currentTitle: page?.title ?? null,
-        connection: connectionView(connection, store),
-      });
-    }),
-
-    route('POST', '/browser/setup/:id/complete', async (_req, res, params) => {
-      const connection = store.get(params.id);
-      if (!connection) {
-        json(res, 404, { ok: false, error: 'unknown_connection' });
-        return;
-      }
-      const state = setupState(connection.id);
-      if (state.phase.kind !== 'waiting_login' || !state.leaseId) {
-        json(res, 409, { ok: false, error: 'not_waiting', message: 'No setup window is open for this connection.' });
-        return;
-      }
-      const page = await sessions.currentPage();
-      const host = page ? registrableHost(page.url) : null;
-      if (!page || !host) {
-        json(res, 422, {
-          ok: false,
-          error: 'no_capturable_page',
-          message: 'Could not read the current page. Make sure the site is open in the setup window, then try again.',
-        });
-        return;
-      }
-      const wasReconnect = connection.status === 'needs_login';
-      store.complete(connection.id, {
-        domain: host,
-        startUrl: page.url,
-        title: page.title || null,
-        name: page.title || host,
-      });
-      await sessions.end(state.leaseId, 'done', 'Setup window closed after capture.');
-      setupStates.delete(connection.id);
-      const resumed = wasReconnect ? await resumeJobsForConnection(connection.id).catch(() => [] as string[]) : [];
-      const updated = store.get(connection.id);
-      json(res, 200, {
-        ok: true,
-        connection: updated ? connectionView(updated, store) : null,
-        resumed_jobs: resumed,
-      });
-    }),
-
-    route('POST', '/browser/setup/:id/cancel', async (_req, res, params) => {
-      const connection = store.get(params.id);
-      if (!connection) {
-        json(res, 404, { ok: false, error: 'unknown_connection' });
-        return;
-      }
-      const state = setupState(connection.id);
-      if (state.leaseId) {
-        await sessions.end(state.leaseId, 'done', 'Setup cancelled by the user.').catch(() => {});
-      }
-      setupStates.delete(connection.id);
-      json(res, 200, { ok: true });
-    }),
-  ];
+function view(request: BrowserLoginRequest) {
+  return { id: request.id, name: request.name, url: request.url };
 }

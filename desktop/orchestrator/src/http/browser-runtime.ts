@@ -15,7 +15,8 @@ export type BrowserRuntimePhase =
   | { kind: 'error'; message: string };
 
 function defaultRuntimeRoot(): string {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'verso', 'browser-runtime');
+  return process.env.VERSO_HERMES_HOME?.trim()
+    || path.join(os.homedir(), '.hermes', 'profiles', 'verso');
 }
 
 function defaultAgentBrowserHome(): string {
@@ -25,23 +26,30 @@ function defaultAgentBrowserHome(): string {
 /**
  * Owns the on-demand install of the browser automation runtime:
  *  - the pinned `agent-browser` npm CLI (which Hermes' browser tools shell
- *    out to), installed under <app support>/verso/browser-runtime and
+ *    out to), installed into Hermes' own profile dependency directory and
  *    prepended to Hermes' PATH;
  *  - Chrome for Testing, which `agent-browser install` manages under
  *    ~/.agent-browser/browsers/chrome-<version>/ (the CLI's own fixed
  *    layout — verified against the pinned version).
- * `resolveChromium()` is the one shared answer for "which browser binary":
- * Verso's own profile launcher uses it directly, and the supervisor exports
- * it to Hermes as AGENT_BROWSER_EXECUTABLE_PATH.
+ * `resolveChromium()` is the one shared answer for "which browser binary".
+ * Both the headed sign-in flow and Hermes receive it through
+ * AGENT_BROWSER_EXECUTABLE_PATH.
  */
 export class BrowserRuntime {
   private phase: BrowserRuntimePhase = { kind: 'idle', ready: false };
   private installPromise: Promise<void> | null = null;
 
   constructor(
-    private readonly root = process.env.VERSO_BROWSER_RUNTIME_DIR?.trim() || defaultRuntimeRoot(),
+    private root = process.env.VERSO_BROWSER_RUNTIME_DIR?.trim() || defaultRuntimeRoot(),
     private readonly agentBrowserHome = process.env.VERSO_AGENT_BROWSER_HOME?.trim() || defaultAgentBrowserHome(),
   ) {}
+
+  /** Share Hermes' native dependency directory instead of maintaining a
+   * second agent-browser installation tree. Must run before installation. */
+  configureInstallRoot(root: string): void {
+    if (this.installPromise) throw new Error('Cannot change browser runtime root during installation');
+    this.root = root;
+  }
 
   get binDir(): string {
     return path.join(this.root, 'node_modules', '.bin');
@@ -94,6 +102,18 @@ export class BrowserRuntime {
     return this.installPromise;
   }
 
+  /** Run the pinned CLI with the matching managed Chrome binary. */
+  async runCli(args: string[], timeoutMs = 30_000): Promise<string> {
+    await this.ensureInstalled();
+    const cli = this.cliPath();
+    const chromium = this.resolveChromium();
+    if (!cli || !chromium) throw new Error('Browser automation runtime is not ready');
+    return this.run(cli, args, timeoutMs, {
+      ...process.env,
+      AGENT_BROWSER_EXECUTABLE_PATH: chromium,
+    });
+  }
+
   private async install(): Promise<void> {
     mkdirSync(this.root, { recursive: true });
     try {
@@ -134,13 +154,22 @@ export class BrowserRuntime {
     return existsSync(sibling) ? sibling : 'npm';
   }
 
-  private run(command: string, args: string[], timeoutMs: number): Promise<void> {
+  private run(
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    env: NodeJS.ProcessEnv = { ...process.env },
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
-        env: { ...process.env },
+        env,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      let stdout = '';
       let stderr = '';
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdout = (stdout + chunk.toString()).slice(-100_000);
+      });
       child.stderr?.on('data', (chunk: Buffer) => {
         stderr = (stderr + chunk.toString()).slice(-2000);
       });
@@ -154,7 +183,7 @@ export class BrowserRuntime {
       });
       child.once('exit', (code) => {
         clearTimeout(timer);
-        if (code === 0) resolve();
+        if (code === 0) resolve(stdout.trim());
         else reject(new Error(`${path.basename(command)} ${args[0]} exited ${code}: ${stderr.trim().slice(-400)}`));
       });
     });

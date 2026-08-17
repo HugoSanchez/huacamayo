@@ -18,7 +18,7 @@ import {
 import { displayToolkitName } from './display-names';
 import { useIsSystemAsleep } from './useSystemSleep';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
-import { BrowserConnectCard } from './BrowserConnect';
+import { BrowserLoginCard } from './BrowserLogin';
 
 interface DraftOverlayItem {
   step: Extract<ActivityStep, { type: 'tool' }>;
@@ -555,19 +555,17 @@ function StepView({
     return <ThinkingStep text={step.text} />;
   }
 
-  // Connection cards are pulled out of `steps` upstream and rendered next to
-  // the assistant's response, not inside the activity collapsible. Anything
-  // still tagged with a connection here is unexpected — fall through to the
-  // generic ToolStep rather than rendering a card in the wrong place.
+  // Interactive cards are pulled out of `steps` upstream and rendered next
+  // to the assistant response rather than inside the activity collapsible.
 
   if (step.name === 'cronjob') {
     const card = parseCronToolStep(step);
     if (card) return <CronToolCard {...card} />;
   }
 
-  if (step.type === 'tool' && isBrowserConnectionRequestStep(step)) {
-    const card = parseBrowserConnectionStep(step);
-    if (card) return <BrowserConnectCard connectionId={card.connectionId} siteName={card.siteName} />;
+  if (step.type === 'tool' && isBrowserLoginRequestStep(step)) {
+    const card = parseBrowserLoginStep(step);
+    if (card) return <BrowserLoginCard setupId={card.setupId} siteName={card.siteName} />;
   }
 
   return <ToolStep step={step} toolkits={toolkits} />;
@@ -660,16 +658,16 @@ interface CronToolCardProps {
   scheduleDisplay: string | null;
 }
 
-// The verso MCP bridge tool that starts the website-connection setup flow.
+// The verso MCP bridge tool that starts authenticated browser setup.
 // Hermes has shipped both single- and double-underscore MCP tool prefixes,
 // so match the suffix rather than one exact wire name.
-function isBrowserConnectionRequestStep(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
-  return typeof step.name === 'string' && step.name.endsWith('request_browser_connection');
+function isBrowserLoginRequestStep(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
+  return typeof step.name === 'string' && step.name.endsWith('request_browser_login');
 }
 
-function parseBrowserConnectionStep(
+function parseBrowserLoginStep(
   step: Extract<ActivityStep, { type: 'tool' }>,
-): { connectionId: string; siteName: string | null } | null {
+): { setupId: string; siteName: string | null } | null {
   if (typeof step.result !== 'string' || step.result.length === 0) return null;
   let parsed: unknown;
   try {
@@ -704,13 +702,13 @@ function parseBrowserConnectionStep(
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;
-  if (obj.kind !== 'browser_connection_request' || obj.ok !== true) return null;
-  const connection = (obj.connection && typeof obj.connection === 'object')
-    ? obj.connection as Record<string, unknown>
+  if (obj.kind !== 'browser_login_request' || obj.ok !== true) return null;
+  const setup = (obj.setup && typeof obj.setup === 'object')
+    ? obj.setup as Record<string, unknown>
     : null;
-  if (!connection || typeof connection.id !== 'string') return null;
-  const name = typeof connection.name === 'string' && connection.name !== 'Website' ? connection.name : null;
-  return { connectionId: connection.id, siteName: name };
+  if (!setup || typeof setup.id !== 'string') return null;
+  const name = typeof setup.name === 'string' ? setup.name : null;
+  return { setupId: setup.id, siteName: name };
 }
 
 function parseCronToolStep(step: Extract<ActivityStep, { type: 'tool' }>): CronToolCardProps | null {

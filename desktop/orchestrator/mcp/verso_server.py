@@ -54,11 +54,10 @@ mcp = FastMCP(
         "Use search_toolkits only to resolve an ambiguous app name to a "
         "Composio toolkit slug, and get_connection_status to poll an "
         "in-flight connection request.\n\n"
-        "Routines that work inside a website via the browser_* tools require "
-        "a website connection: call request_browser_connection first (even "
-        "for public sites without login) and follow its instructions for "
-        "composing the routine. Never create a browser-based routine without "
-        "one — the routine would have no browser to drive."
+        "Hermes browser_* tools manage their own isolated browser sessions. "
+        "For public websites, create browser routines directly with the browser "
+        "toolset. Only call request_browser_login when the requested work needs "
+        "the user's authenticated website session."
     ),
 )
 
@@ -167,105 +166,34 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 
 
 @mcp.tool()
-def request_browser_connection(
+def request_browser_login(
     name: str | None = None,
-    url: str | None = None,
+    url: str = "",
 ) -> types.CallToolResult:
-    """Start the user-facing setup flow for automating a website in a browser.
+    """Open the user-facing sign-in flow for authenticated browser automation.
 
-    ALWAYS pass `url` when you know the target site (you almost always do):
-    the setup window opens directly on that page instead of a blank tab, so
-    the user only has to sign in (if needed) and confirm.
+    Call this only when a browser routine needs the user's logged-in website
+    state. Public websites need no setup: use Hermes' browser_* tools directly.
+    Prefer a connector/toolkit integration when one exists.
 
-    REQUIRED for EVERY routine that will interact with a website through the
-    browser_* tools — including public sites that need no sign-in. Routines
-    only get a browser through a website connection: Verso installs the
-    managed browser, launches it per run, and scopes it to the connected
-    site. A routine that calls browser_* tools without a connection has no
-    browser to drive. (Still prefer a connector/toolkit integration when one
-    exists — check search_toolkits first.)
-
-    Verso shows a setup card in chat: the user opens a dedicated browser
-    window, signs in if needed, navigates to the target page, and confirms.
-    Do not ask the user for URLs or credentials yourself — the card handles
-    everything.
-
-    After calling this, tell the user to use the setup card that appears.
-    When the connection completes, you will receive a follow-up message with
-    the connected site and a `browser-connection:<id>` token. Then create the
-    routine with the cronjob tool, and its prompt MUST:
-    - include the literal token `browser-connection:<id>` (Verso uses it to
-      link the routine to the saved sign-in),
-    - begin the work by calling browser_session_start with that connection id,
-    - end by calling browser_session_stop with the lease id and an outcome,
-    - state the safety rules: stay on the connected site, stop and report on
-      login pages / payment or destructive screens / anything unexpected,
-      skip items you are not confident about, and report an itemized summary.
-    If you set toolsets for the job, the list must include "browser" (plus
-    whatever else the task needs). Create the routine paused/disabled first
-    so the user can watch a supervised first run before enabling the
-    schedule.
+    Always pass the target site's http(s) URL. Verso opens that URL in a
+    dedicated headed browser and saves its cookies/local storage locally.
+    After the user confirms sign-in, a follow-up message arrives. Then create
+    the routine with the cronjob tool, include "browser" in toolsets, and
+    create it paused/disabled for a supervised first run. Its prompt should
+    tell the browser agent to stop and report on login, payment, destructive,
+    or unexpected screens and to provide an itemized summary.
     """
 
     payload = _request(
         "POST",
-        "/browser/connections/request",
+        "/browser/login/request",
         {
             "name": (name or "").strip() or None,
-            "url": (url or "").strip() or None,
+            "url": url.strip(),
         },
     )
-    return _structured_result({"kind": "browser_connection_request", **payload})
-
-
-@mcp.tool()
-def browser_session_start(connection_id: str) -> types.CallToolResult:
-    """Open the saved browser sign-in for a `browser-connection:<id>` routine.
-
-    Call this FIRST in a browser routine, before any browser_* tool. Verso
-    launches the website's dedicated browser profile (already signed in) and
-    connects the browser tools to it. Returns a lease_id you must keep.
-
-    If it returns browser_busy, report that this run was skipped and finish.
-    If it returns connection_not_ready, report that the user needs to
-    reconnect the website from the routine page, and finish. When you are
-    done — or blocked by a login page or anything unexpected — call
-    browser_session_stop.
-    """
-
-    payload = _request(
-        "POST",
-        "/browser/session/start",
-        {"connection_id": connection_id.strip()},
-    )
-    return _structured_result(payload)
-
-
-@mcp.tool()
-def browser_session_stop(
-    lease_id: str,
-    outcome: str = "done",
-    summary: str | None = None,
-) -> types.CallToolResult:
-    """Close the browser session opened by browser_session_start.
-
-    Always call this when the routine's browser work ends. outcome must be
-    one of: "done" (work finished, even partially), "needs_login" (the site
-    showed a login page — Verso pauses the routine and asks the user to sign
-    in again), or "error" (something else went wrong). summary is a short
-    human-readable report of what happened.
-    """
-
-    payload = _request(
-        "POST",
-        "/browser/session/stop",
-        {
-            "lease_id": lease_id.strip(),
-            "outcome": outcome.strip().lower(),
-            "summary": (summary or "").strip() or None,
-        },
-    )
-    return _structured_result(payload)
+    return _structured_result({"kind": "browser_login_request", **payload})
 
 
 @mcp.tool()

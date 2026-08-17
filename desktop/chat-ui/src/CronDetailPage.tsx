@@ -5,15 +5,12 @@ import {
   createChatSession,
   cronAction,
   generateCronDescription,
-  getBrowserConnection,
   getCronDetail,
   getCronRunOutput,
   getCronRunTranscript,
   patchCron,
   patchCronDescription,
-  type BrowserConnectionView,
 } from './chat';
-import { BrowserConnectFlow, useBrowserConnect } from './BrowserConnect';
 import { humanizeSchedule } from './scheduleHumanize';
 import { useToast } from './Toaster';
 import { useIsSystemAsleep } from './useSystemSleep';
@@ -426,8 +423,6 @@ export function CronDetailPage({ id, onBack, onTitleResolved }: Props) {
               </div>
             </div>
 
-            <ConnectedWebsiteSection prompt={detail.cron.prompt} />
-
             <div className="cron-detail-section">
               <div className="cron-detail-section-label">PROMPT</div>
               <textarea
@@ -785,65 +780,4 @@ function prettyJson(raw: string): string {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';
-}
-
-const BROWSER_CONNECTION_TOKEN = /browser-connection:([a-f0-9]{6,})/i;
-
-const BROWSER_STATUS_LABELS: Record<BrowserConnectionView['status'], string> = {
-  pending: 'Setup incomplete',
-  connected: 'Connected',
-  needs_login: 'Needs sign-in',
-  error: 'Error',
-};
-
-/**
- * Shown only for routines whose prompt carries a `browser-connection:<id>`
- * token: which website the routine drives, whether the saved sign-in is
- * healthy, and a Reconnect flow (same machinery as the chat setup card).
- * Completing a reconnect also resumes routines the orchestrator paused for
- * this connection.
- */
-function ConnectedWebsiteSection({ prompt }: { prompt: string }) {
-  const connectionId = prompt.match(BROWSER_CONNECTION_TOKEN)?.[1] ?? null;
-  const [connection, setConnection] = useState<BrowserConnectionView | null>(null);
-  const { phase, start, complete, cancel } = useBrowserConnect(connectionId ?? '', (updated) => {
-    setConnection(updated);
-  });
-
-  useEffect(() => {
-    if (!connectionId) return;
-    let cancelled = false;
-    void getBrowserConnection(connectionId)
-      .then((c) => { if (!cancelled) setConnection(c); })
-      .catch(() => { if (!cancelled) setConnection(null); });
-    return () => { cancelled = true; };
-  }, [connectionId]);
-
-  if (!connectionId || !connection) return null;
-
-  const showReconnect = phase.kind === 'idle' || phase.kind === 'connected';
-  return (
-    <div className="cron-detail-section">
-      <div className="cron-detail-section-label">CONNECTED WEBSITE</div>
-      <div className="cron-detail-browser-row">
-        <div className="cron-detail-schedule-meta">
-          {connection.domain ?? connection.name}
-          <span className={`browser-status-chip is-${connection.status}`}>
-            {BROWSER_STATUS_LABELS[connection.status]}
-          </span>
-        </div>
-        {showReconnect && (
-          <button type="button" className="settings-button" onClick={() => void start()}>
-            {connection.status === 'needs_login' ? 'Sign in again' : 'Reconnect'}
-          </button>
-        )}
-      </div>
-      {!showReconnect && (
-        <BrowserConnectFlow phase={phase} onComplete={complete} onCancel={cancel} />
-      )}
-      {connection.lastLease?.summary && (
-        <div className="cron-detail-browser-lastrun">Last session: {connection.lastLease.summary}</div>
-      )}
-    </div>
-  );
 }

@@ -180,7 +180,7 @@ echo "[smoke] PASS: MCP OAuth routes registered and dispatching"
 # error anywhere. Ask THIS bundle's own naming function what wire name each
 # core tool gets, and assert the orchestrator's pinned list contains it.
 echo "[smoke] checking pinned-tool naming contract against the bundle"
-CORE_TOOLS="request_connection search_toolkits list_connections get_connection_status propose_message_draft search_memory get_memory_page write_memory_page request_browser_connection browser_session_start browser_session_stop"
+CORE_TOOLS="request_connection search_toolkits list_connections get_connection_status propose_message_draft search_memory get_memory_page write_memory_page request_browser_login"
 
 expected_names="$(PYTHONPATH="${SITE_PACKAGES}" "${PYTHON_BIN}" - "${CORE_TOOLS}" <<'PYEOF'
 import sys
@@ -212,27 +212,6 @@ if [ -n "${missing}" ]; then
     exit 1
 fi
 echo "[smoke] PASS: all core pins match the bundle's MCP naming convention"
-
-# ── Browser domain guard (verso-browser-domain-guard.patch) ──────────────
-# The guard gates every browser command behind a per-lease allowlist file.
-# `patch --batch` at bundle time already fails hard on a mis-anchored hunk;
-# this asserts the guard actually landed in THIS bundle's browser_tool and
-# that the file still parses after patching.
-echo "[smoke] checking browser domain-guard runtime patch"
-PYTHONPATH="${SITE_PACKAGES}" "${PYTHON_BIN}" - "${SITE_PACKAGES}/tools/browser_tool.py" <<'PYEOF'
-import ast, sys
-
-source = open(sys.argv[1], "rt", encoding="utf-8").read()
-tree = ast.parse(source)
-names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-required = {"_verso_domain_guard_check", "_verso_domain_allowed", "_verso_guard_config"}
-missing = required - names
-if missing:
-    raise SystemExit(f"domain-guard patch did not land: missing {sorted(missing)}")
-if "guard_block = _verso_domain_guard_check(task_id, command, args)" not in source:
-    raise SystemExit("domain-guard patch landed but _run_browser_command does not call it")
-PYEOF
-echo "[smoke] PASS: browser domain guard present in bundled browser_tool"
 
 # Record the pass, keyed to the exact site-packages build we just validated.
 # The marker is a copy of the venv stage's .stamp; a rebuild wipes the arch

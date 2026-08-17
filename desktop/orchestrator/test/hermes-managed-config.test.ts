@@ -86,6 +86,24 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.toolsets).toEqual(['hermes-cli']);
   });
 
+  it('serializes cron runs that share the native browser restore state', () => {
+    writeFileSync(path.join(tempRoot, 'config.yaml'), [
+      'model:',
+      '  provider: openai-codex',
+      'cron:',
+      '  max_parallel_jobs: 8',
+      '  schedule_grace_seconds: 30',
+    ].join('\n'), 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      cron?: Record<string, unknown>;
+    };
+    expect(parsed.cron).toEqual({ max_parallel_jobs: 1, schedule_grace_seconds: 30 });
+  });
+
   it('replaces old managed auth.json with the template Hermes auth store', () => {
     writeFileSync(path.join(tempRoot, 'auth.json'), JSON.stringify({
       version: 2,

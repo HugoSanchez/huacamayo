@@ -699,27 +699,22 @@ export function App() {
     };
   }, [handleCloseCatalogs]);
 
-  // When the website-connection setup card completes, hand the agent the
-  // connected site + connection token so it can finish creating the routine
-  // with real data (the card completion happens outside the chat stream).
+  // Sign-in completion happens outside the chat stream. Hand the site back to
+  // the agent so it can finish the paused routine using Hermes' native browser.
   // handleSend is defined further down; the ref keeps this listener stable.
   const handleSendRef = useRef<((text: string) => void) | null>(null);
   useEffect(() => {
-    const handleBrowserConnected = (event: Event) => {
-      const detail = (event as CustomEvent<{ connectionId?: unknown; domain?: unknown; title?: unknown }>).detail;
-      const connectionId = typeof detail?.connectionId === 'string' ? detail.connectionId : null;
-      if (!connectionId) return;
+    const handleBrowserLoginReady = (event: Event) => {
+      const detail = (event as CustomEvent<{ domain?: unknown; title?: unknown }>).detail;
       const domain = typeof detail?.domain === 'string' ? detail.domain : 'the website';
       handleSendRef.current?.(
-        `I connected the website (${domain}, token browser-connection:${connectionId}). `
-        + 'Create the routine now. Its prompt must include that token, start by calling '
-        + 'browser_session_start with this connection id, and end with browser_session_stop. '
-        + 'Create it paused so I can watch a supervised first run before enabling it.',
+        `Browser sign-in is ready for ${domain}. Create the routine now using Hermes' native browser tools. `
+        + 'Include "browser" in its toolsets and create it paused so I can watch a supervised first run before enabling it.',
       );
     };
-    window.addEventListener('verso:browser-connected', handleBrowserConnected as EventListener);
+    window.addEventListener('verso:browser-login-ready', handleBrowserLoginReady as EventListener);
     return () => {
-      window.removeEventListener('verso:browser-connected', handleBrowserConnected as EventListener);
+      window.removeEventListener('verso:browser-login-ready', handleBrowserLoginReady as EventListener);
     };
   }, []);
 

@@ -1054,10 +1054,9 @@
   }
 }
 
-/* ——— Browser automation (website connections) ——— */
+/* ——— Browser sign-in ——— */
 
-/* Inline chat card shares .codex-connect-card's shell; these are the
-   browser-flow internals used both in chat and on the routine page. */
+/* The inline sign-in card shares .codex-connect-card's shell. */
 .browser-connect-status {
   font-size: 13px;
   color: var(--ink-2);
@@ -1089,46 +1088,4 @@
 .browser-connect-error {
   font-size: 12px;
   color: var(--danger-btn-text);
-}
-
-.browser-connect-connected {
-  font-size: 13px;
-  color: var(--success-text, var(--green));
-}
-
-.browser-status-chip {
-  margin-left: 8px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  border: 1px solid var(--line-soft);
-  color: var(--ink-dim);
-}
-
-.browser-status-chip.is-connected {
-  color: var(--status-connected);
-  border-color: var(--status-connected);
-}
-
-.browser-status-chip.is-needs_login,
-.browser-status-chip.is-pending {
-  color: var(--warn-text);
-  border-color: var(--warn-text);
-}
-
-.browser-status-chip.is-error {
-  color: var(--danger-btn-text);
-  border-color: var(--danger-btn-text);
-}
-
-.cron-detail-browser-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.cron-detail-browser-lastrun {
-  font-size: 12px;
-  color: var(--ink-dim);
 }

@@ -22,6 +22,7 @@ import { CustomConnectorsStore } from './custom-connectors-store.ts';
 import { CustomConnectorKeychain } from './keychain.ts';
 import { fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-toolsets.ts';
 import { browserRuntime } from './browser-runtime.ts';
+import { BROWSER_NAMESPACE, BROWSER_RESTORE_KEY } from './browser.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -651,6 +652,12 @@ export class HermesSupervisor {
       ...(browserRuntime.resolveChromium()
         ? { AGENT_BROWSER_EXECUTABLE_PATH: browserRuntime.resolveChromium() as string }
         : {}),
+      // Hermes already owns per-task browser startup/cleanup. A stable native
+      // restore key is enough to give those isolated sessions the sign-in the
+      // user established in Verso's headed setup window.
+      AGENT_BROWSER_NAMESPACE: BROWSER_NAMESPACE,
+      AGENT_BROWSER_RESTORE: BROWSER_RESTORE_KEY,
+      AGENT_BROWSER_RESTORE_SAVE: 'always',
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {
@@ -688,6 +695,7 @@ export class HermesSupervisor {
     seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
+    this.configureBrowserCronSafety();
     this.configureModelRoutes();
     this.restoreManagedModelConfigIfProxyOwned();
     this.seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed);
@@ -753,42 +761,6 @@ export class HermesSupervisor {
    * filter that hides these skills entirely so the user never sees
    * a (broken) toggle for them.
    */
-  /**
-   * Live-toggle `browser.cdp_url` in the managed config while a Verso
-   * browser-session lease is active. Hermes re-reads the config per browser
-   * call (mtime-cached), so setting it makes the browser tools attach to the
-   * Verso-launched Chromium, and clearing it restores normal local-headless
-   * behavior for interactive chat.
-   */
-  setBrowserCdpUrl(cdpUrl: string | null): void {
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    // Never create the config from here: an early write would make the
-    // seeding step think a user config already exists. Clearing a value from
-    // a missing config is also a no-op.
-    if (!existsSync(configPath) && !cdpUrl) return;
-    let config: Record<string, unknown> = {};
-    if (existsSync(configPath)) {
-      try {
-        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          config = parsed as Record<string, unknown>;
-        }
-      } catch {
-        config = {};
-      }
-    }
-    const browser = asRecord(config.browser) ?? {};
-    if ((browser.cdp_url ?? null) === (cdpUrl ?? null)) return;
-    if (cdpUrl) {
-      browser.cdp_url = cdpUrl;
-    } else {
-      delete browser.cdp_url;
-    }
-    config.browser = browser;
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, YAML.stringify(config), 'utf8');
-  }
-
   private enforceAlwaysDisabledSkills(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     let config: Record<string, unknown> = {};
@@ -898,6 +870,23 @@ export class HermesSupervisor {
    * aliases in the model catalog are touched; any hand-added route is
    * preserved.
    */
+  /**
+   * All browser routines share one agent-browser restore key. Hermes can run
+   * cron jobs concurrently by default, which would let two sessions race to
+   * save that state. Keep the managed profile serial using Hermes' native
+   * scheduler setting; no custom lease manager is needed.
+   */
+  private configureBrowserCronSafety(): void {
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    if (!existsSync(configPath)) return;
+    const config = readYamlRecord(configPath) ?? {};
+    const cron = asRecord(config.cron) ?? {};
+    if (cron.max_parallel_jobs === 1) return;
+    cron.max_parallel_jobs = 1;
+    config.cron = cron;
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
+  }
+
   private configureModelRoutes(): void {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     if (!existsSync(configPath)) return;

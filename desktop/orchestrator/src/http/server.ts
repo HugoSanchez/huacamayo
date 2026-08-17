@@ -33,8 +33,6 @@ import { PinnedSkillsStore } from './pinned-skills-store.ts';
 import { buildCronsRoutes } from './crons.ts';
 import { CronDescriptionsStore } from './cron-descriptions-store.ts';
 import { buildBrowserRoutes } from './browser.ts';
-import { BrowserConnectionsStore } from './browser-connections-store.ts';
-import { BrowserSessionManager } from './browser-sessions.ts';
 import { browserRuntime } from './browser-runtime.ts';
 import { LocalEmbedder, resolveEmbedderConfig } from './embedder.ts';
 import { isChatCaptureEnabled, LexicalMemoryProvider, resolveLexicalMemoryConfig } from './lexical-provider.ts';
@@ -108,6 +106,10 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const customConnectorsStore = new CustomConnectorsStore();
   const customConnectorKeychain = new CustomConnectorKeychain();
   const hermes = new HermesSupervisor({ runtimeMode, customConnectorsStore, customConnectorKeychain });
+  // Hermes' own lazy dependency bootstrap and the headed sign-in UI now use
+  // one agent-browser installation. This avoids the parallel app-support
+  // runtime tree that the original browser implementation introduced.
+  browserRuntime.configureInstallRoot(hermes.hermesHome);
   const hermesHistoryHomes = hermesHistoryHomeCandidates(hermes.hermesHome);
   // Hermes has the exact model for conversations it executed. Restore that
   // durable per-session state for databases created before Verso stored model
@@ -250,19 +252,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const skillsConfig = new HermesSkillsConfig(path.join(hermes.hermesHome, 'config.yaml'));
   const pinnedSkills = new PinnedSkillsStore();
   const cronDescriptions = new CronDescriptionsStore();
-  const browserConnections = new BrowserConnectionsStore();
-  const browserProfilesRoot = path.join(
-    process.env.HOME ?? '',
-    'Library', 'Application Support', 'verso', 'browser-profiles',
-  );
-  const browserSessions = new BrowserSessionManager(browserConnections, {
-    resolveChromium: () => browserRuntime.resolveChromium(),
-    onCdpChange: (cdpUrl) => hermes.setBrowserCdpUrl(cdpUrl),
-    guardFilePath: path.join(hermes.hermesHome, 'verso-browser-guard.json'),
-  });
-  // A previous orchestrator may have died mid-lease; clear the CDP override
-  // and guard file so interactive chat browsing isn't pointed at a dead port.
-  browserSessions.clearStaleState();
+  const browserLogin = buildBrowserRoutes(browserRuntime);
   const codexAuth = new CodexAuthService(hermes);
   const anthropicAuth = new AnthropicAuthService(
     hermes,
@@ -290,7 +280,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
-    ...buildBrowserRoutes(hermes, browserConnections, browserSessions, browserRuntime, browserProfilesRoot),
+    ...browserLogin.routes,
     ...buildModelAuthRoutes(codexAuth, anthropicAuth),
     ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction, async () => {
       const codex = await codexAuth.getStatus();
@@ -315,7 +305,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     dispatch(routes, req, res, { authSecret, allowUnauthenticated });
   });
   server.on('close', () => {
-    void browserSessions.shutdown();
+    void browserLogin.login.shutdown();
     void hermes.shutdown();
     memoryExtraction.stop();
     sourceIngestion.stop();
@@ -327,7 +317,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
-    await browserSessions.shutdown();
+    await browserLogin.login.shutdown();
     await hermes.shutdown();
     memoryExtraction.stop();
     sourceIngestion.stop();
