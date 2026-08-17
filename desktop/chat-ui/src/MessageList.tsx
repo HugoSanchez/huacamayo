@@ -689,6 +689,20 @@ function parseBrowserConnectionStep(
     }
   }
   if (!parsed || typeof parsed !== 'object') return null;
+  // Hermes wraps MCP tool results in an envelope:
+  //   {"result": "<payload as JSON string>", "structuredContent": {…payload…}}
+  // Prefer structuredContent; fall back to parsing the stringified result.
+  const envelope = parsed as Record<string, unknown>;
+  if (envelope.structuredContent && typeof envelope.structuredContent === 'object') {
+    parsed = envelope.structuredContent;
+  } else if (typeof envelope.result === 'string') {
+    try {
+      parsed = JSON.parse(envelope.result);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;
   if (obj.kind !== 'browser_connection_request' || obj.ok !== true) return null;
   const connection = (obj.connection && typeof obj.connection === 'object')
