@@ -8,7 +8,6 @@ export interface McpProbeResult {
   auth: CustomConnectorAuth;
   transport: CustomConnectorTransport;
   serverName: string | null;
-  logoUrl: string | null;
   iconPath: string | null;
   iconContentType: string | null;
 }
@@ -60,7 +59,6 @@ export async function probeMcpServer(rawUrl: string, opts: ProbeOptions = {}): P
       auth: 'oauth',
       transport: 'http',
       serverName: null,
-      logoUrl: null,
       iconPath: icon?.path ?? null,
       iconContentType: icon?.contentType ?? null,
     };
@@ -80,7 +78,6 @@ export async function probeMcpServer(rawUrl: string, opts: ProbeOptions = {}): P
         auth: opts.token ? 'bearer' : 'none',
         transport: legacyTransport,
         serverName: null,
-        logoUrl: null,
         iconPath: icon?.path ?? null,
         iconContentType: icon?.contentType ?? null,
       };
@@ -98,7 +95,6 @@ export async function probeMcpServer(rawUrl: string, opts: ProbeOptions = {}): P
     auth: opts.token ? 'bearer' : 'none',
     transport: 'http',
     serverName: typeof info?.name === 'string' ? info.name : null,
-    logoUrl: null,
     iconPath: icon?.path ?? null,
     iconContentType: icon?.contentType ?? null,
   };

@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 const port = parseInt(process.env.API_SERVER_PORT || process.env.PORT || '8642', 10);
 const host = process.env.API_SERVER_HOST || process.env.HOST || '127.0.0.1';
@@ -21,8 +23,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/v1/models') {
+    if (rejectUnauthorized(req, res)) return;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ object: 'list', data: [] }));
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname === '/v1/responses') {
     if (rejectUnauthorized(req, res)) return;
+    if (rejectFirstResponseAuthOnce(req, res)) return;
 
     let body = '';
     req.on('data', (chunk) => {
@@ -263,9 +273,30 @@ function rejectUnauthorized(req, res) {
   const auth = req.headers['authorization'] || '';
   if (auth === `Bearer ${expectedKey}`) return false;
 
-  res.writeHead(401, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'unauthorized' }));
+  writeInvalidApiKey(res);
   return true;
+}
+
+function rejectFirstResponseAuthOnce(_req, res) {
+  if (process.env.FAKE_HERMES_REJECT_FIRST_RESPONSE_AUTH_ONCE !== '1') return false;
+  const home = process.env.HERMES_HOME || process.cwd();
+  const marker = path.join(home, '.fake-hermes-rejected-response-auth');
+  if (existsSync(marker)) return false;
+  mkdirSync(home, { recursive: true });
+  writeFileSync(marker, 'rejected\n', 'utf8');
+  writeInvalidApiKey(res);
+  return true;
+}
+
+function writeInvalidApiKey(res) {
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: {
+      message: 'Invalid API key',
+      type: 'invalid_request_error',
+      code: 'invalid_api_key',
+    },
+  }));
 }
 
 function readJsonBody(req, cb) {

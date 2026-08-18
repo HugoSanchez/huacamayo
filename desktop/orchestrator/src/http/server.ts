@@ -177,6 +177,11 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
       hermesRestartChain = hermesRestartChain
         .then(() => hermes.restart())
         .catch((error: unknown) => {
+          // Keep identical refreshes coalesced while the restart is pending,
+          // but roll back on failure so the next refresh can retry it.
+          if (registeredManifestToolkits === current) {
+            registeredManifestToolkits = registered;
+          }
           console.error(
             '[composio-tools] Hermes restart after toolkit change failed:',
             error instanceof Error ? error.message : String(error),

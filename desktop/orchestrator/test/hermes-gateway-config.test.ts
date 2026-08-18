@@ -44,13 +44,26 @@ describe('Hermes gateway config', () => {
     expect(getHermesGatewayConfig().apiKey).toBeNull();
   });
 
-  it('uses an explicit Hermes API key override', () => {
+  it('keeps managed gateway credentials process-owned despite a generic ambient override', () => {
     process.env.API_SERVER_KEY = 'explicit-test-key';
+    delete process.env.VERSO_HERMES_API_SERVER_KEY;
+    delete process.env.VERSO_HERMES_MANAGED;
+
+    expect(getHermesGatewayConfig().apiKey).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('allows a Verso-specific managed key override for explicit deployments', () => {
     process.env.VERSO_HERMES_API_SERVER_KEY = 'verso-test-key';
+    delete process.env.VERSO_HERMES_MANAGED;
 
-    expect(getHermesGatewayConfig().apiKey).toBe('explicit-test-key');
+    expect(getHermesGatewayConfig().apiKey).toBe('verso-test-key');
+  });
 
-    delete process.env.API_SERVER_KEY;
+  it('uses the Verso-specific explicit key for a manually managed gateway', () => {
+    process.env.API_SERVER_KEY = 'generic-test-key';
+    process.env.VERSO_HERMES_API_SERVER_KEY = 'verso-test-key';
+    process.env.VERSO_HERMES_MANAGED = 'false';
+
     expect(getHermesGatewayConfig().apiKey).toBe('verso-test-key');
   });
 });

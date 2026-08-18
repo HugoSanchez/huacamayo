@@ -45,6 +45,9 @@ HOME_DIR="$(mktemp -d /tmp/verso-smoke-hermes-home.XXXXXX)"
 LOG_FILE="${HOME_DIR}/smoke-gateway.log"
 GATEWAY_PID=""
 
+# shellcheck source=lib/smoke-gateway-checks.sh
+source "${SCRIPT_DIR}/lib/smoke-gateway-checks.sh"
+
 cleanup() {
     if [ -n "${GATEWAY_PID}" ] && kill -0 "${GATEWAY_PID}" 2>/dev/null; then
         kill "${GATEWAY_PID}" 2>/dev/null || true
@@ -72,106 +75,13 @@ API_SERVER_KEY="${API_KEY}" \
     "${PYTHON_BIN}" "${HERMES_SCRIPT}" gateway run > "${LOG_FILE}" 2>&1 &
 GATEWAY_PID=$!
 
-deadline=$(( $(date +%s) + 90 ))
-until curl -sf -o /dev/null -H "Authorization: Bearer ${API_KEY}" "http://127.0.0.1:${PORT}/v1/models"; do
-    if ! kill -0 "${GATEWAY_PID}" 2>/dev/null; then
-        echo "[smoke] FAIL: gateway process died during startup; log tail:" >&2
-        tail -20 "${LOG_FILE}" >&2
-        exit 1
-    fi
-    if [ "$(date +%s)" -ge "${deadline}" ]; then
-        echo "[smoke] FAIL: gateway did not become ready within 90s; log tail:" >&2
-        tail -20 "${LOG_FILE}" >&2
-        exit 1
-    fi
-    sleep 2
-done
+SMOKE_PORT="${PORT}" SMOKE_API_KEY="${API_KEY}" SMOKE_PID="${GATEWAY_PID}"
+SMOKE_LOG="${LOG_FILE}" SMOKE_HOME="${HOME_DIR}" SMOKE_TMP="${HOME_DIR}"
+smoke_wait_for_gateway 90
 echo "[smoke] gateway ready; sending streaming /v1/responses request"
 
-# Mirror the orchestrator's buildHermesRequestBody, including the per-request
-# model/reasoning overrides so the verso-request-overrides code path runs.
-body='{"input":"smoke test","conversation":"smoke-test-1","truncation":"auto","stream":true,"store":true,"model":"gpt-5.5","reasoning":{"effort":"low"}}'
-response_file="${HOME_DIR}/smoke-response.txt"
-status="$(curl -s -N --max-time 60 -o "${response_file}" -w "%{http_code}" \
-    -X POST "http://127.0.0.1:${PORT}/v1/responses" \
-    -H "Authorization: Bearer ${API_KEY}" \
-    -H "Content-Type: application/json" \
-    -H "Accept: text/event-stream" \
-    -d "${body}")"
-
-if [ "${status}" != "200" ]; then
-    echo "[smoke] FAIL: /v1/responses returned HTTP ${status} (expected 200 + SSE)" >&2
-    echo "[smoke] response body:" >&2
-    head -5 "${response_file}" >&2
-    echo "[smoke] gateway errors:" >&2
-    tail -30 "${HOME_DIR}/logs/errors.log" 2>/dev/null >&2 || tail -20 "${LOG_FILE}" >&2
-    exit 1
-fi
-
-if ! grep -q "^event: " "${response_file}"; then
-    echo "[smoke] FAIL: HTTP 200 but no SSE events in response" >&2
-    head -5 "${response_file}" >&2
-    exit 1
-fi
-
-if ! grep -Eq "^event: response\.(completed|failed)" "${response_file}"; then
-    echo "[smoke] FAIL: SSE stream never reached a terminal event" >&2
-    grep "^event: " "${response_file}" >&2
-    exit 1
-fi
-
-terminal="$(grep -Eo "^event: response\.(completed|failed)" "${response_file}" | tail -1)"
-echo "[smoke] PASS: HTTP 200, SSE stream terminated with ${terminal#event: }"
-echo "[smoke] (response.failed is expected without model credentials — the handler is healthy either way)"
-
-# ── MCP OAuth routes (verso-gateway-mcp-oauth.patch) ─────────────────────
-# The patch adds three routes to the gateway. A mis-anchored or missing patch
-# means aiohttp's default 404 on all of them; a healthy patch is
-# distinguishable on each route without running a real OAuth flow:
-#   - flows/<id> unauthenticated  → 401 (route exists, auth enforced;
-#                                   missing route would 404)
-#   - callback/<name>             → 404 BUT with the handler's own
-#                                   "OAuth flow expired" body, not aiohttp's
-#                                   default "404: Not Found"
-#   - servers/<name>/auth (auth'd)→ handler JSON "Server ... not found"
-echo "[smoke] checking MCP OAuth routes from the runtime patch"
-
-flows_status="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/mcp/oauth/flows/smoke-nonexistent")"
-if [ "${flows_status}" != "401" ]; then
-    echo "[smoke] FAIL: GET /api/mcp/oauth/flows/… unauthenticated returned ${flows_status} (expected 401; 404 means verso-gateway-mcp-oauth.patch did not register its routes)" >&2
-    exit 1
-fi
-
-callback_body="${HOME_DIR}/smoke-oauth-callback.txt"
-curl -s -o "${callback_body}" "http://127.0.0.1:${PORT}/api/mcp/oauth/callback/smoke_nonexistent?state=abc"
-if ! grep -q "OAuth flow expired" "${callback_body}"; then
-    echo "[smoke] FAIL: OAuth callback route did not answer with the patch's handler; body:" >&2
-    head -3 "${callback_body}" >&2
-    exit 1
-fi
-
-auth_body="${HOME_DIR}/smoke-oauth-start.txt"
-auth_status="$(curl -s -o "${auth_body}" -w "%{http_code}" -X POST \
-    -H "Authorization: Bearer ${API_KEY}" \
-    "http://127.0.0.1:${PORT}/api/mcp/servers/smoke_nonexistent/auth")"
-if [ "${auth_status}" != "404" ] || ! grep -q "not found" "${auth_body}"; then
-    echo "[smoke] FAIL: POST /api/mcp/servers/…/auth returned ${auth_status}; body:" >&2
-    head -3 "${auth_body}" >&2
-    exit 1
-fi
-tools_status="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/mcp/tools")"
-if [ "${tools_status}" != "401" ]; then
-    echo "[smoke] FAIL: GET /api/mcp/tools unauthenticated returned ${tools_status} (expected 401; 404 means the registry route is missing — connector status will never show connected)" >&2
-    exit 1
-fi
-tools_body="${HOME_DIR}/smoke-mcp-tools.txt"
-curl -s -o "${tools_body}" -H "Authorization: Bearer ${API_KEY}" "http://127.0.0.1:${PORT}/api/mcp/tools"
-if ! grep -q '"servers"' "${tools_body}"; then
-    echo "[smoke] FAIL: /api/mcp/tools did not return a servers map; body:" >&2
-    head -3 "${tools_body}" >&2
-    exit 1
-fi
-echo "[smoke] PASS: MCP OAuth routes registered and dispatching"
+smoke_assert_streaming_responses "smoke-test-1"
+smoke_assert_mcp_oauth_routes
 
 # ── Pin-liveness contract ────────────────────────────────────────────────
 # Hermes silently ignores pinned tool names that match nothing registered,
@@ -194,7 +104,12 @@ for tool in sys.argv[1].split():
 PYEOF
 )"
 
-pinned_names="$(node --experimental-strip-types --no-warnings -e "
+NODE_BIN="${BUNDLE_DIR}/node/bin/node"
+if [ ! -x "${NODE_BIN}" ]; then
+    echo "[smoke] ERROR: missing ${NODE_BIN} — run ./scripts/build-runtime-bundles.sh first" >&2
+    exit 1
+fi
+pinned_names="$("${NODE_BIN}" --experimental-strip-types --no-warnings -e "
 import('${REPO_ROOT}/desktop/orchestrator/src/http/hermes-pinned-tools.ts').then((m) => {
   console.log(m.computePinnedToolNames('/nonexistent-manifest', { includeMemoryTools: true }).join('\n'));
 });")"

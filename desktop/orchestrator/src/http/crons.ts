@@ -2,7 +2,8 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { json, route, type Route } from './router.ts';
-import { HermesSupervisor, hermesGatewayAuthHeaders } from './hermes-supervisor.ts';
+import { HermesSupervisor } from './hermes-supervisor.ts';
+import { hermesOneShotText } from './hermes-gateway-client.ts';
 import {
   HermesCronsClient,
   HermesCronsError,
@@ -448,52 +449,13 @@ async function generateDescriptionViaHermes(
   job: HermesCronJob,
 ): Promise<string | null> {
   const config = await hermes.ensureReady();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), HERMES_DESCRIPTION_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${config.baseUrl}/v1/responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...hermesGatewayAuthHeaders(config) },
-      body: JSON.stringify({
-        input: DESCRIPTION_PROMPT(job.name, job.prompt),
-        truncation: 'auto',
-        stream: false,
-        store: false,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as Record<string, unknown>;
-    return sanitizeDescription(extractFinalText(data));
-  } finally {
-    clearTimeout(timeout);
-  }
+  const raw = await hermesOneShotText(config, DESCRIPTION_PROMPT(job.name, job.prompt), HERMES_DESCRIPTION_TIMEOUT_MS);
+  return sanitizeDescription(raw);
 }
 
 function truncateForPrompt(input: string, maxChars: number): string {
   if (input.length <= maxChars) return input;
   return `${input.slice(0, maxChars)}…`;
-}
-
-function extractFinalText(payload: Record<string, unknown>): string {
-  // Hermes' /v1/responses returns OpenAI-shaped output items. We pick the
-  // first message-output's text — mirrors how chat.ts handles titles.
-  const output = payload.output;
-  if (!Array.isArray(output)) return '';
-  for (const item of output) {
-    if (!item || typeof item !== 'object') continue;
-    const obj = item as Record<string, unknown>;
-    if (obj.type !== 'message') continue;
-    const content = obj.content;
-    if (!Array.isArray(content)) continue;
-    for (const block of content) {
-      if (block && typeof block === 'object') {
-        const blk = block as Record<string, unknown>;
-        if (typeof blk.text === 'string' && blk.text.length > 0) return blk.text;
-      }
-    }
-  }
-  return '';
 }
 
 function sanitizeDescription(raw: string): string | null {

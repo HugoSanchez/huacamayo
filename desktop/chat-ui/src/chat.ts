@@ -64,69 +64,73 @@ export function sidecarFetch(input: RequestInfo | URL, init: RequestInit = {}): 
   return fetch(input, { ...init, headers });
 }
 
-export async function createChatSession(title?: string, model?: ChatModel): Promise<ChatSessionSummary> {
-  const res = await sidecarFetch(`${baseURL()}/chat/sessions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(title ? { title } : {}), ...(model ? { model } : {}) }),
-  });
+// Shared wrapper for the non-streaming endpoints: hit the sidecar, convert a
+// non-OK response into an Error carrying the server's message (falling back
+// to `errorMsg`), then parse the JSON body. 204/no-content responses resolve
+// to `undefined` so body-less endpoints can share it.
+async function requestJson<T>(path: string, errorMsg: string, init?: RequestInit): Promise<T> {
+  const res = await sidecarFetch(`${baseURL()}${path}`, init);
   if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to create chat session'));
+    throw new Error(await readError(res, errorMsg));
   }
-  const body = await res.json() as { session: ChatSessionSummary };
+  if (res.status === 204) return undefined as T;
+  return await res.json() as T;
+}
+
+function jsonInit(method: string, payload: unknown): RequestInit {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  };
+}
+
+export async function createChatSession(title?: string, model?: ChatModel): Promise<ChatSessionSummary> {
+  const body = await requestJson<{ session: ChatSessionSummary }>(
+    '/chat/sessions',
+    'Failed to create chat session',
+    jsonInit('POST', { ...(title ? { title } : {}), ...(model ? { model } : {}) }),
+  );
   return body.session;
 }
 
 export async function updateChatSessionModel(sessionId: string, model: ChatModel): Promise<ChatSessionSummary> {
-  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/model`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to save chat model'));
-  }
-  const body = await res.json() as { session: ChatSessionSummary };
+  const body = await requestJson<{ session: ChatSessionSummary }>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/model`,
+    'Failed to save chat model',
+    jsonInit('POST', { model }),
+  );
   return body.session;
 }
 
 export async function getChatSessions(): Promise<ChatSessionSummary[]> {
-  const res = await sidecarFetch(`${baseURL()}/chat/sessions`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load chat sessions'));
-  }
-  const body = await res.json() as { sessions: ChatSessionSummary[] };
+  const body = await requestJson<{ sessions: ChatSessionSummary[] }>('/chat/sessions', 'Failed to load chat sessions');
   return Array.isArray(body.sessions) ? body.sessions : [];
 }
 
 export async function archiveChatSession(sessionId: string): Promise<ChatSessionSummary> {
-  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/archive`, {
-    method: 'POST',
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to archive chat session'));
-  }
-  const body = await res.json() as { session: ChatSessionSummary };
+  const body = await requestJson<{ session: ChatSessionSummary }>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/archive`,
+    'Failed to archive chat session',
+    { method: 'POST' },
+  );
   return body.session;
 }
 
 export async function unarchiveChatSession(sessionId: string): Promise<ChatSessionSummary> {
-  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/unarchive`, {
-    method: 'POST',
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to restore chat session'));
-  }
-  const body = await res.json() as { session: ChatSessionSummary };
+  const body = await requestJson<{ session: ChatSessionSummary }>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/unarchive`,
+    'Failed to restore chat session',
+    { method: 'POST' },
+  );
   return body.session;
 }
 
 export async function getChatMessages(sessionId: string): Promise<StoredChatMessage[]> {
-  const res = await sidecarFetch(`${baseURL()}/chat/sessions/${encodeURIComponent(sessionId)}/messages`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load chat messages'));
-  }
-  const body = await res.json() as { messages: StoredChatMessage[] };
+  const body = await requestJson<{ messages: StoredChatMessage[] }>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+    'Failed to load chat messages',
+  );
   return body.messages;
 }
 
@@ -217,18 +221,6 @@ export async function cancelChatRequest(sessionId: string): Promise<void> {
   });
 }
 
-export async function getChatStatus(): Promise<{
-  status: string;
-  provider: string;
-  hasActiveRequest: boolean;
-}> {
-  const res = await sidecarFetch(`${baseURL()}/chat/status`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load chat status'));
-  }
-  return res.json();
-}
-
 export async function getConnections(opts: { fast?: boolean } = {}): Promise<{
   available: boolean;
   configured: boolean;
@@ -236,51 +228,43 @@ export async function getConnections(opts: { fast?: boolean } = {}): Promise<{
 }> {
   // fast: bound the sidecar's remote sync so boot paints from the local
   // cache when Composio is slow; callers follow up with a full fetch.
-  const url = opts.fast ? `${baseURL()}/connections?wait=1200` : `${baseURL()}/connections`;
-  const res = await sidecarFetch(url);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load connections'));
-  }
-  return res.json();
+  const path = opts.fast ? '/connections?wait=1200' : '/connections';
+  return requestJson(path, 'Failed to load connections');
 }
 
 export async function getCustomConnectors(): Promise<CustomConnectorView[]> {
-  const res = await sidecarFetch(`${baseURL()}/connectors/custom`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load custom connectors'));
-  }
-  const body = await res.json() as { connectors?: CustomConnectorView[] };
+  const body = await requestJson<{ connectors?: CustomConnectorView[] }>(
+    '/connectors/custom',
+    'Failed to load custom connectors',
+  );
   return Array.isArray(body.connectors) ? body.connectors : [];
 }
 
 export async function addCustomConnector(input: { name: string; url: string; token?: string }): Promise<CustomConnectorView> {
-  const res = await sidecarFetch(`${baseURL()}/connectors/custom`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to add custom connector'));
-  }
-  const body = await res.json() as { connector: CustomConnectorView };
+  const body = await requestJson<{ connector: CustomConnectorView }>(
+    '/connectors/custom',
+    'Failed to add custom connector',
+    jsonInit('POST', input),
+  );
   notifyConnectionsChanged();
   return body.connector;
 }
 
 export async function disconnectCustomConnector(id: string): Promise<void> {
-  const res = await sidecarFetch(`${baseURL()}/connectors/custom/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to disconnect custom connector'));
-  }
+  await requestJson<void>(
+    `/connectors/custom/${encodeURIComponent(id)}`,
+    'Failed to disconnect custom connector',
+    { method: 'DELETE' },
+  );
   notifyConnectionsChanged();
 }
 
 export async function retryCustomConnector(id: string): Promise<CustomConnectorView> {
-  const res = await sidecarFetch(`${baseURL()}/connectors/custom/${encodeURIComponent(id)}/retry`, { method: 'POST' });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to retry custom connector'));
-  }
-  const body = await res.json() as { connector: CustomConnectorView };
+  const body = await requestJson<{ connector: CustomConnectorView }>(
+    `/connectors/custom/${encodeURIComponent(id)}/retry`,
+    'Failed to retry custom connector',
+    { method: 'POST' },
+  );
   notifyConnectionsChanged();
   return body.connector;
 }
@@ -297,14 +281,11 @@ export async function getToolkits(opts: {
   if (opts.query) params.set('query', opts.query);
   if (opts.cursor) params.set('cursor', opts.cursor);
   if (typeof opts.limit === 'number') params.set('limit', String(opts.limit));
-  const url = params.toString().length > 0
-    ? `${baseURL()}/connections/toolkits?${params.toString()}`
-    : `${baseURL()}/connections/toolkits`;
-  const res = await sidecarFetch(url);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load toolkits'));
-  }
-  const body = await res.json() as { toolkits: ToolkitView[]; nextCursor?: string | null };
+  const suffix = params.toString().length > 0 ? `?${params.toString()}` : '';
+  const body = await requestJson<{ toolkits: ToolkitView[]; nextCursor?: string | null }>(
+    `/connections/toolkits${suffix}`,
+    'Failed to load toolkits',
+  );
   return {
     toolkits: body.toolkits ?? [],
     nextCursor: body.nextCursor ?? null,
@@ -312,20 +293,15 @@ export async function getToolkits(opts: {
 }
 
 export async function getSkills(): Promise<SkillSummaryView[]> {
-  const res = await sidecarFetch(`${baseURL()}/skills`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load skills'));
-  }
-  const body = await res.json() as { skills: SkillSummaryView[] };
+  const body = await requestJson<{ skills: SkillSummaryView[] }>('/skills', 'Failed to load skills');
   return Array.isArray(body.skills) ? body.skills : [];
 }
 
 export async function getSkill(slug: string): Promise<SkillDetailView> {
-  const res = await sidecarFetch(`${baseURL()}/skills/${encodeURIComponent(slug)}`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load skill'));
-  }
-  const body = await res.json() as { skill: SkillDetailView };
+  const body = await requestJson<{ skill: SkillDetailView }>(
+    `/skills/${encodeURIComponent(slug)}`,
+    'Failed to load skill',
+  );
   return body.skill;
 }
 
@@ -343,15 +319,11 @@ export async function getHubSkills(opts: {
   if (opts.source) params.set('source', opts.source);
   if (typeof opts.limit === 'number') params.set('limit', String(opts.limit));
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  const res = await sidecarFetch(`${baseURL()}/skills/hub${suffix}`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load Skills Hub'));
-  }
-  const body = await res.json() as {
+  const body = await requestJson<{
     skills?: HubSkillSummaryView[];
     sourceCounts?: Record<string, number>;
     timedOutSources?: string[];
-  };
+  }>(`/skills/hub${suffix}`, 'Failed to load Skills Hub');
   return {
     skills: Array.isArray(body.skills) ? body.skills : [],
     sourceCounts: body.sourceCounts ?? {},
@@ -360,36 +332,29 @@ export async function getHubSkills(opts: {
 }
 
 export async function getHubSkill(identifier: string): Promise<HubSkillDetailView> {
-  const res = await sidecarFetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load hub skill'));
-  }
-  const body = await res.json() as { skill: HubSkillDetailView };
+  const body = await requestJson<{ skill: HubSkillDetailView }>(
+    `/skills/hub/${encodeURIComponent(identifier)}`,
+    'Failed to load hub skill',
+  );
   return body.skill;
 }
 
 export async function installHubSkill(identifier: string): Promise<HubSkillInstallView> {
-  const res = await sidecarFetch(`${baseURL()}/skills/hub/${encodeURIComponent(identifier)}/install`, {
-    method: 'POST',
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to install hub skill'));
-  }
-  const body = await res.json() as HubSkillInstallView;
+  const body = await requestJson<HubSkillInstallView>(
+    `/skills/hub/${encodeURIComponent(identifier)}/install`,
+    'Failed to install hub skill',
+    { method: 'POST' },
+  );
   notifyHost('skillsChanged');
   return body;
 }
 
 export async function toggleSkill(slug: string, enabled: boolean): Promise<SkillSummaryView> {
-  const res = await sidecarFetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to toggle skill'));
-  }
-  const body = await res.json() as { skill: SkillSummaryView };
+  const body = await requestJson<{ skill: SkillSummaryView }>(
+    `/skills/${encodeURIComponent(slug)}/toggle`,
+    'Failed to toggle skill',
+    jsonInit('POST', { enabled }),
+  );
   notifyHost('skillsChanged');
   return body.skill;
 }
@@ -409,67 +374,49 @@ export interface IngestionSourceView {
 }
 
 export async function getIngestionSources(): Promise<IngestionSourceView[]> {
-  const res = await sidecarFetch(`${baseURL()}/ingestion/sources`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load ingestion sources'));
-  }
-  const body = await res.json() as { sources: IngestionSourceView[] };
+  const body = await requestJson<{ sources: IngestionSourceView[] }>(
+    '/ingestion/sources',
+    'Failed to load ingestion sources',
+  );
   return body.sources;
 }
 
 export async function toggleIngestionSource(slug: string, enabled: boolean): Promise<IngestionSourceView> {
-  const res = await sidecarFetch(`${baseURL()}/ingestion/sources/${encodeURIComponent(slug)}/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to toggle ingestion source'));
-  }
-  const body = await res.json() as { source: IngestionSourceView };
+  const body = await requestJson<{ source: IngestionSourceView }>(
+    `/ingestion/sources/${encodeURIComponent(slug)}/toggle`,
+    'Failed to toggle ingestion source',
+    jsonInit('POST', { enabled }),
+  );
   return body.source;
 }
 
 export async function getCronDetail(id: string): Promise<import('./types').CronDetailView> {
-  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load cron job'));
-  }
-  return res.json() as Promise<import('./types').CronDetailView>;
+  return requestJson(`/crons/${encodeURIComponent(id)}`, 'Failed to load cron job');
 }
 
 export async function getCronRunOutput(id: string, filename: string): Promise<string> {
-  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load run output'));
-  }
-  const body = await res.json() as { content: string };
+  const body = await requestJson<{ content: string }>(
+    `/crons/${encodeURIComponent(id)}/runs/${encodeURIComponent(filename)}`,
+    'Failed to load run output',
+  );
   return body.content;
 }
 
 export async function generateCronDescription(id: string, force = false): Promise<import('./types').CronDescriptionView | null> {
-  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ force }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to generate description'));
-  }
-  const body = await res.json() as { description: import('./types').CronDescriptionView | null };
+  const body = await requestJson<{ description: import('./types').CronDescriptionView | null }>(
+    `/crons/${encodeURIComponent(id)}/description/generate`,
+    'Failed to generate description',
+    jsonInit('POST', { force }),
+  );
   return body.description;
 }
 
 export async function patchCronDescription(id: string, description: string): Promise<import('./types').CronDescriptionView | null> {
-  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/description`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to update description'));
-  }
-  const body = await res.json() as { description: import('./types').CronDescriptionView | null };
+  const body = await requestJson<{ description: import('./types').CronDescriptionView | null }>(
+    `/crons/${encodeURIComponent(id)}/description`,
+    'Failed to update description',
+    jsonInit('PATCH', { description }),
+  );
   return body.description;
 }
 
@@ -489,70 +436,54 @@ export async function patchCron(id: string, payload: Partial<{
   deliver: string;
   skills: string[];
 }>): Promise<import('./types').CronJobView> {
-  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to update cron job'));
-  }
-  const body = await res.json() as { cron: import('./types').CronJobView };
+  const body = await requestJson<{ cron: import('./types').CronJobView }>(
+    `/crons/${encodeURIComponent(id)}`,
+    'Failed to update cron job',
+    jsonInit('PATCH', payload),
+  );
   notifyHost('cronsChanged');
   return body.cron;
 }
 
 export async function deleteCron(id: string): Promise<void> {
-  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to delete cron job'));
-  }
+  await requestJson<void>(`/crons/${encodeURIComponent(id)}`, 'Failed to delete cron job', { method: 'DELETE' });
   notifyHost('cronsChanged');
 }
 
 export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Promise<import('./types').CronJobView> {
-  const res = await sidecarFetch(`${baseURL()}/crons/${encodeURIComponent(id)}/${op}`, { method: 'POST' });
-  if (!res.ok) {
-    throw new Error(await readError(res, `Failed to ${op} cron job`));
-  }
-  const body = await res.json() as { cron: import('./types').CronJobView };
+  const body = await requestJson<{ cron: import('./types').CronJobView }>(
+    `/crons/${encodeURIComponent(id)}/${op}`,
+    `Failed to ${op} cron job`,
+    { method: 'POST' },
+  );
   notifyHost('cronsChanged');
   return body.cron;
 }
 
 export async function pinSkill(slug: string, pinned: boolean): Promise<SkillSummaryView> {
-  const res = await sidecarFetch(`${baseURL()}/skills/${encodeURIComponent(slug)}/pin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pinned }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to pin skill'));
-  }
-  const body = await res.json() as { skill: SkillSummaryView };
+  const body = await requestJson<{ skill: SkillSummaryView }>(
+    `/skills/${encodeURIComponent(slug)}/pin`,
+    'Failed to pin skill',
+    jsonInit('POST', { pinned }),
+  );
   notifyHost('skillsChanged');
   return body.skill;
 }
 
 export async function getConnectionRequest(requestId: string): Promise<ConnectionRequestView> {
-  const res = await sidecarFetch(`${baseURL()}/connections/requests/${encodeURIComponent(requestId)}`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load connection request'));
-  }
-  const body = await res.json() as { request: ConnectionRequestView };
+  const body = await requestJson<{ request: ConnectionRequestView }>(
+    `/connections/requests/${encodeURIComponent(requestId)}`,
+    'Failed to load connection request',
+  );
   return body.request;
 }
 
 export async function createConnectionRequest(toolkit: string): Promise<ConnectionRequestView> {
-  const res = await sidecarFetch(`${baseURL()}/connections/request`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ toolkit }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to create connection request'));
-  }
-  const body = await res.json() as { request: ConnectionRequestView };
+  const body = await requestJson<{ request: ConnectionRequestView }>(
+    '/connections/request',
+    'Failed to create connection request',
+    jsonInit('POST', { toolkit }),
+  );
   return body.request;
 }
 
@@ -580,19 +511,11 @@ export interface CodexStatus {
 }
 
 export async function getCodexStatus(): Promise<CodexStatus> {
-  const res = await sidecarFetch(`${baseURL()}/model-auth/codex/status`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load Codex status'));
-  }
-  return await res.json() as CodexStatus;
+  return requestJson('/model-auth/codex/status', 'Failed to load Codex status');
 }
 
 export async function disconnectCodex(): Promise<{ removed: number }> {
-  const res = await sidecarFetch(`${baseURL()}/model-auth/codex/disconnect`, { method: 'POST' });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to disconnect Codex'));
-  }
-  return await res.json() as { removed: number };
+  return requestJson('/model-auth/codex/disconnect', 'Failed to disconnect Codex', { method: 'POST' });
 }
 
 export function codexConnectUrl(): string {
@@ -604,32 +527,18 @@ export interface AnthropicStatus {
 }
 
 export async function getAnthropicStatus(): Promise<AnthropicStatus> {
-  const res = await sidecarFetch(`${baseURL()}/model-auth/anthropic/status`);
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to load Anthropic status'));
-  }
-  return await res.json() as AnthropicStatus;
+  return requestJson('/model-auth/anthropic/status', 'Failed to load Anthropic status');
 }
 
 // Validates the key against the Anthropic API before storing, so this can
 // take a few seconds; a rejected key surfaces as a thrown error with the
 // orchestrator's message ("Anthropic rejected this API key…").
 export async function connectAnthropic(apiKey: string): Promise<void> {
-  const res = await sidecarFetch(`${baseURL()}/model-auth/anthropic/connect`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey }),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to connect Anthropic'));
-  }
+  await requestJson<void>('/model-auth/anthropic/connect', 'Failed to connect Anthropic', jsonInit('POST', { apiKey }));
 }
 
 export async function disconnectAnthropic(): Promise<void> {
-  const res = await sidecarFetch(`${baseURL()}/model-auth/anthropic/disconnect`, { method: 'POST' });
-  if (!res.ok) {
-    throw new Error(await readError(res, 'Failed to disconnect Anthropic'));
-  }
+  await requestJson<void>('/model-auth/anthropic/disconnect', 'Failed to disconnect Anthropic', { method: 'POST' });
 }
 
 // Generic draft channel — the agent picks whatever toolkit slug it wants
@@ -652,6 +561,10 @@ export interface DraftApproveInput {
   threadId?: string;
   wasEdited: boolean;
 }
+
+// The draft endpoints stay on raw `sidecarFetch`: their fallback error
+// message embeds the live HTTP status, which `requestJson`'s static message
+// can't express.
 
 // Native-channel send: dispatches directly, no held draft. The model already
 // ended its turn after proposing, so this is a pure UI → orchestrator action.

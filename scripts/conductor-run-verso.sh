@@ -14,7 +14,9 @@ export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 # environment, silently pointing Debug builds at an old Release bundle in
 # Xcode DerivedData — the perennial "hermes fails to load after every
 # build". Scrub every inherited override before installing this run's known
-# good product-like configuration.
+# good product-like configuration. Dropping VERSO_SKIP_MANAGED_SESSION_KEYCHAIN
+# also keeps sign-ins persistent in Keychain across rebuilds (macOS may ask
+# once to approve Keychain access after an ad-hoc build).
 unset VERSO_BUNDLED_PYTHON_DIR VERSO_BUNDLED_SITE_PACKAGES_DIR \
       VERSO_BUNDLED_DEFAULTS VERSO_BUNDLE_VERSION VERSO_PYTHON_CACHE_DIR \
       VERSO_BACKEND_URL VERSO_FRONTEND_URL VERSO_HERMES_HOME \
@@ -93,11 +95,6 @@ fi
 export VERSO_HERMES_HOME="${CONDUCTOR_HERMES_HOME}"
 export VERSO_MEMORY_DB_PATH="${HOME}/Library/Application Support/Verso/memory/verso-memory.db"
 echo "[conductor-run] using persistent Conductor Hermes profile: ${VERSO_HERMES_HOME}"
-
-# Persist the managed session in Keychain. Conductor can inherit
-# VERSO_SKIP_MANAGED_SESSION_KEYCHAIN=1 from an earlier debugging session;
-# leaving it in place makes every successful sign-in disappear on the next
-# rebuild. macOS may ask once to approve Keychain access after an ad-hoc build.
 
 if [ ! -d "${DEVELOPER_DIR}" ]; then
     echo "[conductor-run] ERROR: Xcode not found at ${DEVELOPER_DIR}" >&2

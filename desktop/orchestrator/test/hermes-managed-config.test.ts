@@ -86,6 +86,45 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.toolsets).toEqual(['hermes-cli']);
   });
 
+  it('removes persisted gateway transport and auth overrides from upgraded profiles', () => {
+    mkdirSync(managedHome, { recursive: true });
+    writeFileSync(path.join(managedHome, 'config.yaml'), YAML.stringify({
+      model: {
+        provider: 'openai-codex',
+        default: 'gpt-5.5',
+      },
+      platforms: {
+        api_server: {
+          enabled: true,
+          extra: {
+            host: '127.0.0.1',
+            port: 8642,
+            key: 'stale-key-from-an-older-launch',
+            cors_origins: ['http://127.0.0.1'],
+            model_routes: {
+              'custom-model': { model: 'custom-model', provider: 'custom' },
+            },
+          },
+        },
+      },
+    }), 'utf8');
+
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as {
+      platforms?: { api_server?: { extra?: Record<string, unknown> } };
+    };
+    const extra = parsed.platforms?.api_server?.extra ?? {};
+    expect(extra.host).toBeUndefined();
+    expect(extra.port).toBeUndefined();
+    expect(extra.key).toBeUndefined();
+    expect(extra.cors_origins).toEqual(['http://127.0.0.1']);
+    expect(extra.model_routes).toEqual({
+      'custom-model': { model: 'custom-model', provider: 'custom' },
+    });
+  });
+
   it('pauses pre-release browser routines without changing other cron jobs', () => {
     const cronDir = path.join(managedHome, 'cron');
     mkdirSync(cronDir, { recursive: true });

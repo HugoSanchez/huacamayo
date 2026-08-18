@@ -19,6 +19,7 @@ const sandbox = mkdtempSync(path.join(os.tmpdir(), 'verso-test-home-'));
 process.env.HOME = sandbox;
 
 for (const key of [
+  'API_SERVER_KEY',
   'HERMES_HOME',
   'VERSO_BUNDLED_DEFAULTS',
   'VERSO_BUNDLED_PYTHON_DIR',
@@ -30,6 +31,7 @@ for (const key of [
   'VERSO_HERMES_GATEWAY_URL',
   'VERSO_HERMES_HOME',
   'VERSO_HERMES_MANAGED',
+  'VERSO_HERMES_API_SERVER_KEY',
 ]) {
   delete process.env[key];
 }

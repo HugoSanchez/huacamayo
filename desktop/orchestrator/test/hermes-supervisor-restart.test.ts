@@ -56,6 +56,7 @@ describe('HermesSupervisor restart', () => {
   it('coalesces concurrent restarts and reuses the stable gateway port', async () => {
     const first = await supervisor!.ensureReady();
     const portBefore = new URL(first.baseUrl).port;
+    expect(portBefore).not.toBe('8642');
 
     // Slow the next boots down so the second restart() reliably arrives while
     // the first is mid-health-wait — the window where, pre-fix, its shutdown
