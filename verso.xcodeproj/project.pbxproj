@@ -18,6 +18,7 @@
 		A1000001000000000000000C /* chat-ui in Resources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000D /* chat-ui */; };
 		A10000010000000000000021 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000021 /* Fonts */; };
 		A1000001000000000000000D /* ManagedSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000E /* ManagedSessionStore.swift */; };
+		A1000001000000000000000E /* ManagedSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000E /* ManagedSessionStore.swift */; };
 		A1000001000000000000000F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000010 /* SignInView.swift */; };
 		A10000010000000000000011 /* UpdateToastUserDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000011 /* UpdateToastUserDriver.swift */; };
 		A10000010000000000000020 /* Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000020 /* Telemetry.swift */; };
@@ -357,6 +358,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000001000000000000000E /* ManagedSessionStore.swift in Sources */,
 				B10000010000000000000006 /* SidecarRuntimeResolver.swift in Sources */,
 				B10000010000000000000007 /* SidecarStartupProtocol.swift in Sources */,
 				B10000010000000000000003 /* SidecarStartupProtocolTests.swift in Sources */,

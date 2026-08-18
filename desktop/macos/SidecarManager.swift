@@ -109,13 +109,11 @@ final class SidecarManager: ObservableObject {
                 restartAttempts = 0
                 logger.info("Sidecar running on port \(detectedPort)")
 
-                // Keychain restoration is intentionally asynchronous so it
-                // can never block app launch. If it completes while the
-                // sidecar is starting, make sure that launch is not allowed
-                // to keep running under the previous account identity. A
-                // same-user token refresh can be applied live; an identity
-                // change requires a serialized process restart so all local
-                // state is re-isolated for the new user.
+                // A callback, token refresh, or sign-out can still arrive
+                // while the process is starting. Do not let that launch keep
+                // running under an obsolete identity. A same-user token
+                // refresh can be applied live; an identity change requires a
+                // serialized restart so all local state remains isolated.
                 if SidecarManagedSessionPolicy.requiresRestart(
                     previousUserId: launchManagedSession?.userId,
                     nextUserId: managedSession?.userId

@@ -74,11 +74,36 @@ private struct RootView: View {
     @ObservedObject var managedSessionStore: ManagedSessionStore
 
     var body: some View {
-        if let session = managedSessionStore.currentSession, !session.isExpired {
+        if managedSessionStore.isRestoringPersistedSession {
+            ManagedSessionRestoringView()
+        } else if let session = managedSessionStore.currentSession, !session.isExpired {
             ContentView(sidecar: sidecar, managedSessionStore: managedSessionStore)
         } else {
             SignInView(managedSessionStore: managedSessionStore)
         }
+    }
+}
+
+private struct ManagedSessionRestoringView: View {
+    @AppStorage("isDarkMode") private var isDarkMode = true
+
+    private var theme: ConductorThemePalette {
+        isDarkMode ? ConductorThemes.dark : ConductorThemes.light
+    }
+
+    var body: some View {
+        ZStack {
+            theme.mainCanvas.ignoresSafeArea()
+            VStack(spacing: 14) {
+                Text("verso.")
+                    .font(.custom("IBM Plex Sans SemiBold", size: 13))
+                    .foregroundStyle(theme.ink)
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(theme.inkDim)
+            }
+        }
+        .preferredColorScheme(isDarkMode ? .dark : .light)
     }
 }
 
@@ -147,7 +172,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStateObservers()
         createMainWindow()
-        sidecar.start()
+        // ManagedSessionStore is the sole startup trigger. Its publisher emits
+        // the restored session after the non-interactive Keychain lookup, so
+        // the sidecar launches once with the correct account identity instead
+        // of launching signed out and immediately restarting.
         scheduleLaunchUpdateCheckIfReady()
     }
 

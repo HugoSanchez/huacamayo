@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 import SwiftUI
 
@@ -44,20 +45,37 @@ struct ManagedSessionEvent: Equatable {
 
 @MainActor
 final class ManagedSessionStore: ObservableObject {
-    private static let keychainService = "com.verso.managed-session"
-    private static let keychainAccount = "current"
+    struct Persistence {
+        let load: () async -> ManagedAppSession?
+        let write: (Data) -> Void
+        let delete: () -> Void
+
+        static var keychain: Persistence {
+            Persistence(
+                load: { await ManagedSessionStore.loadFromKeychainAsync() },
+                write: { ManagedSessionStore.writeToKeychainAsync(data: $0) },
+                delete: { ManagedSessionStore.deleteFromKeychainAsync() }
+            )
+        }
+    }
+
+    nonisolated private static let keychainService = "com.verso.managed-session"
+    nonisolated private static let keychainAccount = "current"
     // Tests may explicitly opt out of Keychain access. Normal Debug and
     // Conductor launches retain their managed session, but never synchronously
     // block application startup on a Keychain interaction.
-    private static let keychainDisabled =
+    nonisolated private static let keychainDisabled =
         ProcessInfo.processInfo.environment["VERSO_SKIP_MANAGED_SESSION_KEYCHAIN"] == "1"
     private static let supportedCallbackSchemes: Set<String> = ["verso", "verso-dev"]
 
     @Published private(set) var currentSession: ManagedAppSession?
     @Published private(set) var latestEvent: ManagedSessionEvent?
+    @Published private(set) var isRestoringPersistedSession = true
     private var sessionLoadGeneration = 0
+    private let persistence: Persistence
 
-    init() {
+    init(persistence: Persistence = .keychain) {
+        self.persistence = persistence
         self.currentSession = nil
         restorePersistedSession()
     }
@@ -88,6 +106,7 @@ final class ManagedSessionStore: ObservableObject {
 
         sessionLoadGeneration += 1
         currentSession = session
+        completeInitialRestoration()
         persist(session)
         latestEvent = ManagedSessionEvent(id: UUID(), message: "Signed in as \(session.identityLabel).", isError: false)
     }
@@ -95,7 +114,8 @@ final class ManagedSessionStore: ObservableObject {
     func clearSession(notify: Bool = true) {
         sessionLoadGeneration += 1
         currentSession = nil
-        Self.deleteFromKeychainAsync()
+        completeInitialRestoration()
+        persistence.delete()
         if notify {
             latestEvent = ManagedSessionEvent(id: UUID(), message: "Signed out.", isError: false)
         }
@@ -103,22 +123,33 @@ final class ManagedSessionStore: ObservableObject {
 
     private func persist(_ session: ManagedAppSession) {
         guard let data = try? JSONEncoder().encode(session) else { return }
-        Self.writeToKeychainAsync(data: data)
+        persistence.write(data)
     }
 
     private func restorePersistedSession() {
         let generation = sessionLoadGeneration
+        let persistence = persistence
         Task { [weak self] in
-            let restored = await Self.loadFromKeychainAsync()
+            let restored = await persistence.load()
             guard let self, self.sessionLoadGeneration == generation else { return }
-            self.currentSession = restored
-            if restored?.isExpired == true {
-                self.clearSession(notify: false)
+            if let restored, restored.isExpired {
+                // Never publish an expired identity: doing so would start the
+                // sidecar and immediately force a second account-bound launch.
+                persistence.delete()
+                self.currentSession = nil
+            } else {
+                self.currentSession = restored
             }
+            self.completeInitialRestoration()
         }
     }
 
-    private static func baseQuery() -> [String: Any] {
+    private func completeInitialRestoration() {
+        guard isRestoringPersistedSession else { return }
+        isRestoringPersistedSession = false
+    }
+
+    nonisolated private static func baseQuery() -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -126,7 +157,7 @@ final class ManagedSessionStore: ObservableObject {
         ]
     }
 
-    private static func loadFromKeychain() -> ManagedAppSession? {
+    nonisolated private static func loadFromKeychain() -> ManagedAppSession? {
         guard !keychainDisabled else { return nil }
         var query = baseQuery()
         query[kSecReturnData as String] = true
@@ -134,7 +165,9 @@ final class ManagedSessionStore: ObservableObject {
         // A stale Debug signing identity can require an interactive Keychain
         // prompt. Never present or wait for that prompt while restoring a
         // session; the app remains usable and can show sign-in immediately.
-        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        let authenticationContext = LAContext()
+        authenticationContext.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = authenticationContext
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -144,7 +177,7 @@ final class ManagedSessionStore: ObservableObject {
         return try? JSONDecoder().decode(ManagedAppSession.self, from: data)
     }
 
-    private static func loadFromKeychainAsync() async -> ManagedAppSession? {
+    nonisolated private static func loadFromKeychainAsync() async -> ManagedAppSession? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 continuation.resume(returning: loadFromKeychain())
@@ -152,19 +185,19 @@ final class ManagedSessionStore: ObservableObject {
         }
     }
 
-    private static func writeToKeychainAsync(data: Data) {
+    nonisolated private static func writeToKeychainAsync(data: Data) {
         DispatchQueue.global(qos: .utility).async {
             writeToKeychain(data: data)
         }
     }
 
-    private static func deleteFromKeychainAsync() {
+    nonisolated private static func deleteFromKeychainAsync() {
         DispatchQueue.global(qos: .utility).async {
             deleteFromKeychain()
         }
     }
 
-    private static func writeToKeychain(data: Data) {
+    nonisolated private static func writeToKeychain(data: Data) {
         guard !keychainDisabled else { return }
         let query = baseQuery()
         let attributes: [String: Any] = [
@@ -181,7 +214,7 @@ final class ManagedSessionStore: ObservableObject {
         }
     }
 
-    private static func deleteFromKeychain() {
+    nonisolated private static func deleteFromKeychain() {
         guard !keychainDisabled else { return }
         SecItemDelete(baseQuery() as CFDictionary)
     }

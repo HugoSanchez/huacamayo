@@ -340,10 +340,14 @@ struct ContentView: View {
     private func loadInitialSidebarData() async {
         guard sidecar.baseURL != nil else { return }
 
-        await refreshSessions()
-        await refreshConnections()
-        await refreshSkills()
-        await refreshCrons()
+        // These sections are independent. Starting them together lets the
+        // sidebar paint at the speed of its slowest local endpoint instead of
+        // accumulating four request latencies during every launch.
+        async let sessionsLoad: Void = refreshSessions()
+        async let connectionsLoad: Void = refreshConnections()
+        async let skillsLoad: Void = refreshSkills()
+        async let cronsLoad: Void = refreshCrons()
+        _ = await (sessionsLoad, connectionsLoad, skillsLoad, cronsLoad)
 
         guard !Task.isCancelled else { return }
         hasLoadedInitialSidebarData = true
