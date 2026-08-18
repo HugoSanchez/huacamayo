@@ -70,6 +70,14 @@ export function useCodexConnect({ onConnected }: UseCodexConnectOptions = {}): U
       buffer += decoder.decode();
       const finalFrame = buffer.trim();
       if (finalFrame) handleSseFrame(finalFrame);
+      if (sourceRef.current === controller) {
+        closeStream();
+        setPhase((current) => (
+          current.kind === 'starting' || current.kind === 'waiting'
+            ? { kind: 'error', message: 'The local sidecar closed the login stream before sign-in completed.' }
+            : current
+        ));
+      }
     } catch (error) {
       if (controller.signal.aborted || sourceRef.current !== controller) return;
       closeStream();
@@ -115,12 +123,7 @@ export function useCodexConnect({ onConnected }: UseCodexConnectOptions = {}): U
     setPhase({ kind: 'idle' });
   }
 
-  function reset() {
-    closeStream();
-    setPhase({ kind: 'idle' });
-  }
-
-  return { phase, start, cancel, reset };
+  return { phase, start, cancel, reset: cancel };
 }
 
 function splitSseFrames(buffer: string): { frames: string[]; remainder: string } {

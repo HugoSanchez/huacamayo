@@ -530,13 +530,10 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("chat/sessions")
-            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarChatSessionsResponse.self, from: data)
+            let decoded = try await decodeSidecarResponse(
+                SidebarChatSessionsResponse.self,
+                from: sidecarRequest(url: url)
+            )
             let nextSessions = sortSessions(decoded.sessions)
             sessions = nextSessions
 
@@ -555,10 +552,36 @@ struct ContentView: View {
         isLoadingSessions = false
     }
 
-    private func sidecarRequest(url: URL) -> URLRequest {
+    private func sidecarRequest(
+        url: URL,
+        method: String = "GET",
+        body: Data? = nil
+    ) -> URLRequest {
         var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         applySidecarAuthHeader(&request)
         return request
+    }
+
+    private func sidecarData(for request: URLRequest) async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let response = response as? HTTPURLResponse,
+              (200..<300).contains(response.statusCode) else {
+            throw SidebarRequestError.invalidResponse
+        }
+        return data
+    }
+
+    private func decodeSidecarResponse<T: Decodable>(
+        _ type: T.Type,
+        from request: URLRequest
+    ) async throws -> T {
+        let data = try await sidecarData(for: request)
+        return try JSONDecoder().decode(type, from: data)
     }
 
     private func applySidecarAuthHeader(_ request: inout URLRequest) {
@@ -573,13 +596,10 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("connections")
-            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                return
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarConnectionsResponse.self, from: data)
+            let decoded = try await decodeSidecarResponse(
+                SidebarConnectionsResponse.self,
+                from: sidecarRequest(url: url)
+            )
             connections = decoded.connections
         } catch {
             // Keep the last known list when refresh fails.
@@ -587,13 +607,10 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("connectors/custom")
-            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                return
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarCustomConnectorsResponse.self, from: data)
+            let decoded = try await decodeSidecarResponse(
+                SidebarCustomConnectorsResponse.self,
+                from: sidecarRequest(url: url)
+            )
             customConnectors = decoded.connectors.map { connector in
                 var connector = connector
                 if let logoUrl = connector.logoUrl,
@@ -618,14 +635,11 @@ struct ContentView: View {
         // the canonical state on success.
         connections.removeAll { $0.connectedAccountId == connectedAccountId }
         do {
-            var request = URLRequest(url: baseURL.appendingPathComponent("connections/\(connectedAccountId)"))
-            request.httpMethod = "DELETE"
-            applySidecarAuthHeader(&request)
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("connections/\(connectedAccountId)"),
+                method: "DELETE"
+            )
+            _ = try await sidecarData(for: request)
         } catch {
             connections = original
         }
@@ -636,16 +650,11 @@ struct ContentView: View {
     private func retryCustomConnector(_ connectorId: String) async {
         guard let baseURL = sidecar.baseURL else { return }
         do {
-            var request = URLRequest(url: baseURL.appendingPathComponent("connectors/custom/\(connectorId)/retry"))
-            request.httpMethod = "POST"
-            applySidecarAuthHeader(&request)
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarCustomConnectorResponse.self, from: data)
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("connectors/custom/\(connectorId)/retry"),
+                method: "POST"
+            )
+            let decoded = try await decodeSidecarResponse(SidebarCustomConnectorResponse.self, from: request)
             if decoded.connector.status.state == "pending_auth" {
                 NSWorkspace.shared.open(baseURL.appendingPathComponent("connectors/custom/\(connectorId)/open"))
             }
@@ -661,14 +670,11 @@ struct ContentView: View {
         let original = customConnectors
         customConnectors.removeAll { $0.id == connectorId }
         do {
-            var request = URLRequest(url: baseURL.appendingPathComponent("connectors/custom/\(connectorId)"))
-            request.httpMethod = "DELETE"
-            applySidecarAuthHeader(&request)
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("connectors/custom/\(connectorId)"),
+                method: "DELETE"
+            )
+            _ = try await sidecarData(for: request)
         } catch {
             customConnectors = original
         }
@@ -683,14 +689,11 @@ struct ContentView: View {
         // feels instant. If the server rejects, restore on next refresh.
         crons.removeAll { $0.id == id }
         do {
-            var request = URLRequest(url: baseURL.appendingPathComponent("crons/\(id)"))
-            request.httpMethod = "DELETE"
-            applySidecarAuthHeader(&request)
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("crons/\(id)"),
+                method: "DELETE"
+            )
+            _ = try await sidecarData(for: request)
         } catch {
             // Roll back the optimistic removal and let the periodic refresh
             // re-sync the canonical state.
@@ -705,13 +708,10 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("crons")
-            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                return
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarCronsResponse.self, from: data)
+            let decoded = try await decodeSidecarResponse(
+                SidebarCronsResponse.self,
+                from: sidecarRequest(url: url)
+            )
             crons = decoded.crons
         } catch {
             // Keep the last known list when refresh fails.
@@ -724,13 +724,10 @@ struct ContentView: View {
 
         do {
             let url = baseURL.appendingPathComponent("skills")
-            let (data, response) = try await URLSession.shared.data(for: sidecarRequest(url: url))
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                return
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarSkillsResponse.self, from: data)
+            let decoded = try await decodeSidecarResponse(
+                SidebarSkillsResponse.self,
+                from: sidecarRequest(url: url)
+            )
             skills = decoded.skills
         } catch {
             // Keep the last known list when refresh fails.
@@ -741,14 +738,12 @@ struct ContentView: View {
     private func toggleSkill(_ slug: String, enabled: Bool) async {
         guard let baseURL = sidecar.baseURL else { return }
         do {
-            var request = URLRequest(
-                url: baseURL.appendingPathComponent("skills/\(slug)/toggle")
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("skills/\(slug)/toggle"),
+                method: "POST",
+                body: try JSONEncoder().encode(SidebarSkillToggleRequest(enabled: enabled))
             )
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            applySidecarAuthHeader(&request)
-            request.httpBody = try JSONEncoder().encode(SidebarSkillToggleRequest(enabled: enabled))
-            _ = try await URLSession.shared.data(for: request)
+            _ = try await sidecarData(for: request)
             await refreshSkills()
         } catch {
             // Best-effort; fall back to next refresh tick.
@@ -760,19 +755,12 @@ struct ContentView: View {
         guard let baseURL = sidecar.baseURL else { return }
 
         do {
-            var request = URLRequest(url: baseURL.appendingPathComponent("chat/sessions"))
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            applySidecarAuthHeader(&request)
-            request.httpBody = Data("{}".utf8)
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("chat/sessions"),
+                method: "POST",
+                body: Data("{}".utf8)
+            )
+            let decoded = try await decodeSidecarResponse(SidebarChatSessionEnvelope.self, from: request)
             sessions = sortSessions(replacing(decoded.session, in: sessions))
             setSelectedSession(decoded.session.id)
             sessionError = nil
@@ -787,19 +775,11 @@ struct ContentView: View {
         guard let baseURL = sidecar.baseURL else { return }
 
         do {
-            var request = URLRequest(
-                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/archive")
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/archive"),
+                method: "POST"
             )
-            request.httpMethod = "POST"
-            applySidecarAuthHeader(&request)
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            let decoded = try await decodeSidecarResponse(SidebarChatSessionEnvelope.self, from: request)
             let nextSessions = sortSessions(replacing(decoded.session, in: sessions))
             sessions = nextSessions
             if selectedSessionId == decoded.session.id {
@@ -818,21 +798,12 @@ struct ContentView: View {
         guard let baseURL = sidecar.baseURL else { return }
 
         do {
-            var request = URLRequest(
-                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/rename")
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/rename"),
+                method: "POST",
+                body: try JSONEncoder().encode(SidebarRenameSessionRequest(title: title))
             )
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            applySidecarAuthHeader(&request)
-            request.httpBody = try JSONEncoder().encode(SidebarRenameSessionRequest(title: title))
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            let decoded = try await decodeSidecarResponse(SidebarChatSessionEnvelope.self, from: request)
             sessions = sortSessions(replacing(decoded.session, in: sessions))
             if selectedSessionId == decoded.session.id {
                 setSelectedSession(decoded.session.id)
@@ -849,19 +820,11 @@ struct ContentView: View {
         guard let baseURL = sidecar.baseURL else { return }
 
         do {
-            var request = URLRequest(
-                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/unarchive")
+            let request = sidecarRequest(
+                url: baseURL.appendingPathComponent("chat/sessions/\(sessionId)/unarchive"),
+                method: "POST"
             )
-            request.httpMethod = "POST"
-            applySidecarAuthHeader(&request)
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                throw SidebarRequestError.invalidResponse
-            }
-
-            let decoded = try JSONDecoder().decode(SidebarChatSessionEnvelope.self, from: data)
+            let decoded = try await decodeSidecarResponse(SidebarChatSessionEnvelope.self, from: request)
             sessions = sortSessions(replacing(decoded.session, in: sessions))
             setSelectedSession(decoded.session.id)
             sessionError = nil
