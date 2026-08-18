@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { json, route, type Route } from './router.ts';
 import { ConnectionsService, HttpError } from '../integrations/composio.ts';
+
+let callbackFont: Buffer | null | undefined;
 
 export function buildConnectionsRoutes(connections: ConnectionsService): Route[] {
   return [
@@ -100,6 +105,22 @@ export function buildConnectionsRoutes(connections: ConnectionsService): Route[]
         : 'You can return to verso now. The app will update automatically.';
       sendHtml(res, 200, renderCallbackPage(title, message));
     }),
+
+    route('GET', '/connections/callback/font', async (_req, res) => {
+      const font = loadCallbackFont();
+      if (!font) {
+        json(res, 404, { error: 'not_found', message: 'Callback font is unavailable' });
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'font/ttf',
+        'Content-Length': font.byteLength,
+        'Cache-Control': 'public, max-age=86400',
+        // Hermes owns the OAuth callback on a second loopback port.
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(font);
+    }),
   ];
 }
 
@@ -119,13 +140,20 @@ export function renderCallbackPage(title: string, message: string): string {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
     <style>
+      @font-face {
+        font-family: "IBM Plex Sans";
+        src: url("/connections/callback/font") format("truetype");
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+      }
       :root { color-scheme: light; }
       html, body { height: 100%; }
       body {
         margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-        background: #F3F5F7;
-        color: rgba(0, 0, 0, 0.85);
+        font-family: "IBM Plex Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #F5F2EA;
+        color: #34332D;
         display: flex;
         flex-direction: column;
         min-height: 100vh;
@@ -137,7 +165,7 @@ export function renderCallbackPage(title: string, message: string): string {
         justify-content: center;
         font-size: 12px;
         font-weight: 600;
-        color: rgba(0, 0, 0, 0.85);
+        color: #34332D;
       }
       main {
         flex: 1;
@@ -152,7 +180,7 @@ export function renderCallbackPage(title: string, message: string): string {
         font-size: 35px;
         font-weight: 600;
         letter-spacing: -0.01em;
-        color: rgba(0, 0, 0, 0.85);
+        color: #34332D;
       }
       p {
         margin: 0;
@@ -160,7 +188,7 @@ export function renderCallbackPage(title: string, message: string): string {
         text-align: center;
         font-size: 13px;
         line-height: 1.55;
-        color: rgba(0, 0, 0, 0.55);
+        color: #55534A;
       }
     </style>
   </head>
@@ -180,6 +208,19 @@ export function sendHtml(res: ServerResponse, status: number, html: string): voi
     'Content-Length': Buffer.byteLength(html),
   });
   res.end(html);
+}
+
+function loadCallbackFont(): Buffer | null {
+  if (callbackFont !== undefined) return callbackFont;
+
+  const bundledDefaults = process.env.VERSO_BUNDLED_DEFAULTS?.trim();
+  const candidates = [
+    ...(bundledDefaults ? [join(dirname(bundledDefaults), 'Fonts', 'IBMPlexSans-Regular.ttf')] : []),
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../../macos/Fonts/IBMPlexSans-Regular.ttf'),
+  ];
+  const fontPath = candidates.find((candidate) => existsSync(candidate));
+  callbackFont = fontPath ? readFileSync(fontPath) : null;
+  return callbackFont;
 }
 
 function handleHttpError(res: ServerResponse, error: unknown): void {

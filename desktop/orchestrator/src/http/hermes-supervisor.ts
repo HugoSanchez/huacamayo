@@ -1,32 +1,44 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import net from 'node:net';
-import os from 'node:os';
-import { delimiter, dirname, join, sep } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import YAML from 'yaml';
 import type { RuntimeMode } from '../integrations/runtime-mode.ts';
 import {
   getBundledHermesInvocation,
-  getBundledPython,
   isBundledRuntime,
   seedHermesHomeFromBundle,
 } from './runtime-bootstrap.ts';
 import { isMemoryEnabled } from './lexical-provider.ts';
-import { applyMemorySoulSection } from './memory-soul.ts';
-import { computePinnedToolNames, findInertCorePins } from './hermes-pinned-tools.ts';
-import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS } from './model-catalog.ts';
-import { readAnthropicKeyFromEnvFile } from './model-auth.ts';
+import { findInertCorePins } from './hermes-pinned-tools.ts';
 import { CustomConnectorsStore } from './custom-connectors-store.ts';
 import { CustomConnectorKeychain } from './keychain.ts';
 import { fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-gateway-client.ts';
-
-export interface HermesGatewayConfig {
-  baseUrl: string;
-  startupTimeoutMs: number;
-  apiKey: string | null;
-}
+import {
+  HermesManagedProfile,
+  getManagedHermesHome,
+  getTemplateHermesHome,
+} from './hermes-managed-profile.ts';
+import {
+  HERMES_DEFAULT_HOST as DEFAULT_HOST,
+  bundledPythonEnv,
+  createManagedApiServerKey,
+  getHermesGatewayConfig,
+  getHermesLaunchConfig,
+  isHermesManagedDisabled as isManagedDisabled,
+  normalizeHermesBaseUrl as normalizeBaseUrl,
+  type HermesGatewayConfig,
+  type HermesLaunchConfig,
+} from './hermes-runtime-config.ts';
+import {
+  abortable,
+  allocatePort,
+  canBind,
+  delay,
+  hasExited,
+  terminateChild,
+} from './hermes-process-utils.ts';
+export { ALWAYS_DISABLED_HERMES_SKILLS } from './hermes-managed-profile.ts';
+export { getHermesGatewayConfig } from './hermes-runtime-config.ts';
+export type { HermesGatewayConfig } from './hermes-runtime-config.ts';
 
 type HermesRuntimeState = 'idle' | 'starting' | 'ready' | 'error' | 'unavailable';
 type HermesRuntimeSource = 'none' | 'managed' | 'manual';
@@ -37,15 +49,6 @@ class HermesGatewayAuthMismatchError extends Error {
     super(`Hermes at ${baseUrl} rejected Verso's managed gateway credential.`);
     this.name = 'HermesGatewayAuthMismatchError';
   }
-}
-
-const LEGACY_DEFAULT_SOUL_MD = '# Verso\n\nYou are a helpful research assistant running inside the Verso macOS app.\n';
-
-interface HermesLaunchConfig {
-  command: string | null;
-  args: string[];
-  cwd: string | null;
-  startupTimeoutMs: number;
 }
 
 export interface HermesRuntimeSnapshot {
@@ -65,136 +68,6 @@ export interface HermesRuntimeSnapshot {
   inertCorePins: string[] | null;
 }
 
-const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_PORT = 8642;
-// Cold starts have to load the local embedding model and register the MCP
-// bridge before the authenticated API surface is ready. Allow enough time on
-// a busy machine so the UI never reports a false startup failure.
-const DEFAULT_STARTUP_TIMEOUT_MS = 90_000;
-export function getHermesGatewayConfig(): HermesGatewayConfig {
-  const baseUrl = normalizeBaseUrl(
-    process.env.VERSO_HERMES_GATEWAY_URL?.trim() || `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
-  );
-  return {
-    baseUrl,
-    startupTimeoutMs: getHermesStartupTimeoutMs(),
-    apiKey: getHermesApiServerKey(),
-  };
-}
-
-function getHermesStartupTimeoutMs(): number {
-  const rawStartupTimeout = parseInt(
-    process.env.VERSO_HERMES_STARTUP_TIMEOUT_MS || String(DEFAULT_STARTUP_TIMEOUT_MS),
-    10,
-  );
-  return Number.isFinite(rawStartupTimeout) && rawStartupTimeout > 0
-    ? rawStartupTimeout
-    : DEFAULT_STARTUP_TIMEOUT_MS;
-}
-
-function normalizeBaseUrl(rawBaseUrl: string): string {
-  return rawBaseUrl.replace(/\/+$/, '');
-}
-
-function getHermesApiServerKey(): string | null {
-  const versoOverride = process.env.VERSO_HERMES_API_SERVER_KEY?.trim() || null;
-  if (!isManagedDisabled()) return versoOverride || createManagedApiServerKey();
-  return versoOverride || process.env.API_SERVER_KEY?.trim() || null;
-}
-
-function createManagedApiServerKey(): string {
-  return randomBytes(32).toString('hex');
-}
-
-function getHermesLaunchConfig(): HermesLaunchConfig {
-  const startupTimeoutMs = getHermesStartupTimeoutMs();
-  const cwd = process.env.VERSO_HERMES_CWD?.trim() || null;
-  if (isManagedDisabled()) {
-    return {
-      command: null,
-      args: [],
-      cwd,
-      startupTimeoutMs,
-    };
-  }
-
-  // Release builds: spawn the bundled Python on the bundled hermes
-  // console-script, with PYTHONPATH wired up in spawnManagedProcess.
-  const bundled = getBundledHermesInvocation();
-  if (bundled) {
-    return {
-      command: bundled.python,
-      args: [bundled.hermesScript, 'gateway', 'run', '--replace'],
-      cwd,
-      startupTimeoutMs,
-    };
-  }
-
-  // Debug builds / manual override: use the developer's installed Hermes.
-  const command = process.env.VERSO_HERMES_COMMAND?.trim() || detectInstalledHermesCommand();
-
-  return {
-    command,
-    args: command === process.env.VERSO_HERMES_COMMAND?.trim()
-      ? parseLaunchArgs(process.env.VERSO_HERMES_ARGS)
-      : ['gateway', 'run', '--replace'],
-    cwd,
-    startupTimeoutMs,
-  };
-}
-
-function isManagedDisabled(): boolean {
-  const managed = process.env.VERSO_HERMES_MANAGED?.trim().toLowerCase();
-  return managed === '0' || managed === 'false' || managed === 'no';
-}
-
-function parseLaunchArgs(raw: string | undefined): string[] {
-  if (!raw || raw.trim().length === 0) return [];
-  const trimmed = raw.trim();
-
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')) {
-      return parsed;
-    }
-  } catch {
-    // Fall through to a simple whitespace split for convenience.
-  }
-
-  return trimmed.split(/\s+/).filter(Boolean);
-}
-
-function detectInstalledHermesCommand(): string | null {
-  // Used only as the Debug-build fallback — Release builds resolve Hermes
-  // via getBundledHermesInvocation() in getHermesLaunchConfig and never
-  // reach this branch.
-  const home = process.env.HOME?.trim();
-  const candidates = [
-    home ? join(home, '.local', 'bin', 'hermes') : null,
-    home ? join(home, '.hermes', 'hermes-agent', 'venv', 'bin', 'hermes') : null,
-    findExecutableOnPath('hermes'),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-function findExecutableOnPath(name: string): string | null {
-  const pathValue = process.env.PATH ?? '';
-  for (const entry of pathValue.split(delimiter).filter(Boolean)) {
-    const candidate = join(entry, name);
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 export interface HermesSupervisorOptions {
   config?: HermesGatewayConfig;
   launch?: HermesLaunchConfig;
@@ -203,35 +76,6 @@ export interface HermesSupervisorOptions {
   customConnectorsStore?: CustomConnectorsStore;
   customConnectorKeychain?: CustomConnectorKeychain;
 }
-
-// Skills the user must never be able to enable. They overlap with — and
-// would conflict with — the verso/Composio bridge or shell out to local
-// CLIs in ways we don't support. Hidden from the UI and force-added to
-// `skills.disabled` on every launch.
-export const ALWAYS_DISABLED_HERMES_SKILLS: readonly string[] = [
-  'google-workspace',
-  'himalaya',
-];
-
-// First-party Hermes skills that teach use of shell CLIs or direct provider
-// SDKs (gh, notion, etc.). We disable them so all third-party access flows
-// through the verso/Composio bridge. Unlike ALWAYS_DISABLED, these are seeded
-// once per profile migration — users can re-enable them via the UI.
-// Self-authored skills that already use the verso bridge (e.g.
-// granola-meeting-notes) are intentionally NOT in this list — they encode
-// learned tool slugs and let the model skip the discovery ritual.
-const DEFAULT_DISABLED_HERMES_SKILLS = [
-  ...ALWAYS_DISABLED_HERMES_SKILLS,
-  'notion',
-  'linear',
-  'github-auth',
-  'github-repo-management',
-  'github-pr-workflow',
-  'github-code-review',
-  'github-issues',
-];
-const DEFAULT_DISABLED_SKILLS_MARKER = '.verso-default-disabled-skills-v1';
-const PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER = '.verso-paused-pre-release-browser-crons-v1';
 
 export class HermesSupervisor {
   private readonly launch: HermesLaunchConfig;
@@ -243,6 +87,7 @@ export class HermesSupervisor {
   private readonly memoryToolsMode: 'full' | 'none';
   private readonly customConnectorsStore: CustomConnectorsStore;
   private readonly customConnectorKeychain: CustomConnectorKeychain;
+  private readonly managedProfile: HermesManagedProfile;
 
   private config: HermesGatewayConfig;
   private managedEndpointSelected: boolean;
@@ -274,6 +119,13 @@ export class HermesSupervisor {
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
+    this.managedProfile = new HermesManagedProfile({
+      templateHome: this.templateHermesHome,
+      managedHome: this.managedHermesHome,
+      runtimeMode: this.runtimeMode,
+      memoryToolsMode: this.memoryToolsMode,
+      customConnectorsStore: this.customConnectorsStore,
+    });
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
 
@@ -285,7 +137,9 @@ export class HermesSupervisor {
   }
 
   get composioToolsManifestPath(): string {
-    return join(this.hermesHome, 'verso-composio-tools.json');
+    return this.manualMode
+      ? join(this.hermesHome, 'verso-composio-tools.json')
+      : this.managedProfile.composioToolsManifestPath;
   }
 
   get gatewayConfig(): HermesGatewayConfig {
@@ -473,7 +327,7 @@ export class HermesSupervisor {
       await this.shutdown();
       this.config = {
         ...this.config,
-        baseUrl: `http://${DEFAULT_HOST}:${await allocatePort()}`,
+        baseUrl: `http://${DEFAULT_HOST}:${await allocatePort(DEFAULT_HOST)}`,
         apiKey: createManagedApiServerKey(),
       };
       console.warn(
@@ -589,7 +443,7 @@ export class HermesSupervisor {
     return promise;
   }
 
-  private async startManagedInner(allowAuthRecovery = true): Promise<void> {
+  private async startManagedInner(allowStartupRecovery = true): Promise<void> {
     if (this.isChildRunning()) {
       if (await this.ping(500)) {
         this.noteReady();
@@ -639,11 +493,25 @@ export class HermesSupervisor {
       await terminateChild(child);
       if (this.child === child) this.child = null;
 
-      if (error instanceof HermesGatewayAuthMismatchError && allowAuthRecovery && !this.hasExplicitBaseUrl) {
+      if (allowStartupRecovery && !this.hasExplicitBaseUrl && isPortConflictError(error)) {
         const previousBaseUrl = this.config.baseUrl;
         this.config = {
           ...this.config,
-          baseUrl: `http://${DEFAULT_HOST}:${await allocatePort()}`,
+          baseUrl: `http://${DEFAULT_HOST}:${await allocatePort(DEFAULT_HOST)}`,
+        };
+        this.managedEndpointSelected = true;
+        console.warn(
+          `[hermes-supervisor] startup port conflict at ${previousBaseUrl}; `
+          + `retrying once on ${this.config.baseUrl}`,
+        );
+        return this.startManagedInner(false);
+      }
+
+      if (error instanceof HermesGatewayAuthMismatchError && allowStartupRecovery && !this.hasExplicitBaseUrl) {
+        const previousBaseUrl = this.config.baseUrl;
+        this.config = {
+          ...this.config,
+          baseUrl: `http://${DEFAULT_HOST}:${await allocatePort(DEFAULT_HOST)}`,
           apiKey: createManagedApiServerKey(),
         };
         console.warn(
@@ -668,7 +536,7 @@ export class HermesSupervisor {
     if (!this.hasExplicitBaseUrl && !this.managedEndpointSelected) {
       this.config = {
         ...this.config,
-        baseUrl: `http://${DEFAULT_HOST}:${await allocatePort()}`,
+        baseUrl: `http://${DEFAULT_HOST}:${await allocatePort(DEFAULT_HOST)}`,
       };
       this.managedEndpointSelected = true;
       return;
@@ -679,7 +547,7 @@ export class HermesSupervisor {
     }
 
     if (!this.hasExplicitBaseUrl) {
-      const port = await allocatePort();
+      const port = await allocatePort(DEFAULT_HOST);
       this.config = { ...this.config, baseUrl: `http://${DEFAULT_HOST}:${port}` };
       this.managedEndpointSelected = true;
       return;
@@ -746,437 +614,7 @@ export class HermesSupervisor {
   }
 
   private ensureManagedHermesHome(): void {
-    this.migrateLegacyVervoProfile();
-    mkdirSync(this.managedHermesHome, { recursive: true });
-    const configExistedBeforeSeed = existsSync(join(this.managedHermesHome, 'config.yaml'));
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'auth.json');
-    this.syncManagedAuthStore();
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'SOUL.md');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
-    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
-    this.syncVersoSkill();
-    this.configureManagedMcpServers();
-    this.pausePreReleaseBrowserCrons();
-    this.configureModelRoutes();
-    this.restoreManagedModelConfigIfProxyOwned();
-    this.seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed);
-    this.enforceAlwaysDisabledSkills();
-  }
-
-  /**
-   * Copy our shipped verso-composio skill into the managed profile's skill
-   * tree so Hermes picks it up alongside its built-in skills. Re-copies on
-   * every launch when the source is newer than the destination, so iterating
-   * on the SKILL.md propagates without manual file moves.
-   */
-  private syncVersoSkill(): void {
-    const targetPath = join(this.managedHermesHome, 'skills', 'verso', 'verso-composio', 'SKILL.md');
-    if (process.env.VERSO_ENABLE_COMPOSIO_SKILL?.trim() !== '1') {
-      rmSync(targetPath, { force: true });
-      return;
-    }
-
-    const sourceDir = resolveVersoSkillSourceDir();
-    if (!sourceDir) return;
-    const sourcePath = join(sourceDir, 'SKILL.md');
-    if (!existsSync(sourcePath)) return;
-    if (existsSync(targetPath)) {
-      try {
-        const srcMtime = statSync(sourcePath).mtimeMs;
-        const dstMtime = statSync(targetPath).mtimeMs;
-        if (dstMtime >= srcMtime) return;
-      } catch {
-        // fall through to re-copy
-      }
-    }
-    mkdirSync(dirname(targetPath), { recursive: true });
-    copyFileSync(sourcePath, targetPath);
-  }
-
-  /**
-   * Pre-release builds briefly allowed the agent to create browser-backed
-   * cron jobs. That path proved unreliable and was removed before release,
-   * but jobs already written to a test profile would otherwise resume when
-   * Hermes starts. Preserve the jobs and their history while pausing active
-   * ones exactly once; users can still inspect or delete them in the UI.
-   */
-  private pausePreReleaseBrowserCrons(): void {
-    const markerPath = join(this.managedHermesHome, PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER);
-    if (existsSync(markerPath)) return;
-
-    const jobsPath = join(this.managedHermesHome, 'cron', 'jobs.json');
-    let pausedCount = 0;
-    if (existsSync(jobsPath)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(jobsPath, 'utf8'));
-      } catch (error) {
-        console.warn(
-          `[cron-cleanup] could not read ${jobsPath}; browser routines were not changed:`,
-          error instanceof Error ? error.message : String(error),
-        );
-        return;
-      }
-
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
-      const jobs = (parsed as Record<string, unknown>).jobs;
-      if (Array.isArray(jobs)) {
-        const pausedAt = new Date().toISOString();
-        for (const rawJob of jobs) {
-          if (!rawJob || typeof rawJob !== 'object' || Array.isArray(rawJob)) continue;
-          const job = rawJob as Record<string, unknown>;
-          if (!Array.isArray(job.enabled_toolsets) || !job.enabled_toolsets.includes('browser')) continue;
-          if (job.enabled === false && job.state === 'paused') continue;
-          job.enabled = false;
-          job.state = 'paused';
-          job.paused_at = pausedAt;
-          job.paused_reason = 'Browser routines are disabled in this Verso release.';
-          pausedCount += 1;
-        }
-      }
-
-      if (pausedCount > 0) {
-        const tempPath = `${jobsPath}.verso-cleanup-${process.pid}.tmp`;
-        writeFileSync(tempPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
-        renameSync(tempPath, jobsPath);
-      }
-    }
-
-    writeFileSync(markerPath, 'Browser cron cleanup v1 completed.\n', 'utf8');
-    if (pausedCount > 0) {
-      console.warn(`[cron-cleanup] paused ${pausedCount} pre-release browser routine(s)`);
-    }
-  }
-
-  private syncManagedAuthStore(): void {
-    const sourcePath = join(this.templateHermesHome, 'auth.json');
-    const targetPath = join(this.managedHermesHome, 'auth.json');
-    if (sourcePath === targetPath || !existsSync(sourcePath)) return;
-
-    const sourceAuth = readJsonRecord(sourcePath);
-    if (!isModernHermesAuthStore(sourceAuth)) return;
-
-    const targetAuth = readJsonRecord(targetPath);
-    const targetIsModern = isModernHermesAuthStore(targetAuth);
-    if (targetIsModern) {
-      try {
-        if (statSync(targetPath).mtimeMs >= statSync(sourcePath).mtimeMs) return;
-      } catch {
-        return;
-      }
-    }
-
-    mkdirSync(dirname(targetPath), { recursive: true });
-    copyFileSync(sourcePath, targetPath);
-  }
-
-  /**
-   * Force-add `ALWAYS_DISABLED_HERMES_SKILLS` to the profile's
-   * `skills.disabled` list on every launch. Non-destructive — leaves
-   * anything else the user disabled in place. Pairs with the UI-side
-   * filter that hides these skills entirely so the user never sees
-   * a (broken) toggle for them.
-   */
-  private enforceAlwaysDisabledSkills(): void {
-    this.mergeDisabledSkills(ALWAYS_DISABLED_HERMES_SKILLS);
-  }
-
-  /**
-   * Union `names` into the profile's `skills.disabled` list (sorted).
-   * Non-destructive — leaves anything else the user disabled in place —
-   * and skips the write when every name is already present.
-   */
-  private mergeDisabledSkills(names: readonly string[]): void {
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    const config = readYamlRecord(configPath) ?? {};
-    const skills = asRecord(config.skills) ?? {};
-    const existing = Array.isArray(skills.disabled)
-      ? skills.disabled.filter((item): item is string => typeof item === 'string')
-      : [];
-    const existingSet = new Set(existing);
-    if (names.every((name) => existingSet.has(name))) return;
-
-    skills.disabled = [...new Set([...existing, ...names])].sort();
-    config.skills = skills;
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, YAML.stringify(config), 'utf8');
-  }
-
-  private seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed: boolean): void {
-    const markerPath = join(this.managedHermesHome, DEFAULT_DISABLED_SKILLS_MARKER);
-    if (configExistedBeforeSeed && existsSync(markerPath)) {
-      return;
-    }
-
-    this.seedDefaultDisabledSkills();
-    writeFileSync(markerPath, new Date().toISOString() + '\n', 'utf8');
-  }
-
-  /**
-   * Run once per profile migration: union our default-disabled list with
-   * whatever the template carried over. After the marker is written, the UI
-   * is the only writer — we never overwrite a user's choices on later launches.
-   */
-  private seedDefaultDisabledSkills(): void {
-    this.mergeDisabledSkills(DEFAULT_DISABLED_HERMES_SKILLS);
-  }
-
-  // One-shot rename of the pre-rename ~/.hermes/profiles/vervo profile to
-  // ~/.hermes/profiles/verso. Idempotent: only moves when the new profile
-  // doesn't exist yet, so it's safe to leave in place indefinitely. Skipped
-  // entirely when VERSO_HERMES_HOME is overridden — that user knows what
-  // their layout looks like.
-  private migrateLegacyVervoProfile(): void {
-    if (process.env.VERSO_HERMES_HOME?.trim()) return;
-    if (existsSync(this.managedHermesHome)) return;
-    const legacy = join(this.managedHermesHome, '..', 'vervo');
-    if (!existsSync(legacy)) return;
-    try {
-      renameSync(legacy, this.managedHermesHome);
-    } catch {
-      // Cross-volume or permission failure — fall through and let the
-      // following mkdir create a fresh profile.
-    }
-  }
-
-  /**
-   * Reconcile api_server model_routes with the credentials that actually
-   * exist, so the chat-input model selector can switch providers per
-   * request. A routed alias makes the gateway re-resolve provider
-   * credentials for that request (gateway/platforms/api_server.py route
-   * handling) — without a route, the verso-request-overrides patch swaps
-   * only the model string and the request would go to the default
-   * provider's endpoint with the wrong model name.
-   *
-   * Runs on every managed start, so routes appear/disappear as keys are
-   * connected/disconnected (both flows restart the child). Only the
-   * aliases in the model catalog are touched; any hand-added route is
-   * preserved.
-   */
-  private configureModelRoutes(): void {
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    if (!existsSync(configPath)) return;
-
-    const config = readYamlRecord(configPath) ?? {};
-
-    const hasAnthropic = readAnthropicKeyFromEnvFile(this.managedHermesHome) !== null;
-    const hasCodex = this.hasCodexPoolCredentials();
-
-    const platforms = asRecord(config.platforms) ?? {};
-    const apiServer = asRecord(platforms.api_server) ?? {};
-    const extra = asRecord(apiServer.extra) ?? {};
-    const routes = asRecord(extra.model_routes) ?? {};
-
-    // Verso owns the managed gateway transport and authentication through the
-    // child environment. Hermes gives these persisted fields precedence over
-    // API_SERVER_{HOST,PORT,KEY}; leaving an old value here can make a new
-    // sidecar talk to a previous process and fail every request with 401.
-    const removedManagedGatewayOverrides = ['host', 'port', 'key']
-      .filter((field) => Object.hasOwn(extra, field));
-    for (const field of removedManagedGatewayOverrides) delete extra[field];
-    if (removedManagedGatewayOverrides.length > 0) {
-      console.warn(
-        `[hermes-supervisor] removed persisted managed gateway override(s): `
-        + removedManagedGatewayOverrides.join(', '),
-      );
-    }
-
-    for (const model of CODEX_CHAT_MODELS) {
-      if (hasCodex) {
-        routes[model] = { model, provider: 'openai-codex' };
-      } else {
-        delete routes[model];
-      }
-    }
-    for (const model of ANTHROPIC_CHAT_MODELS) {
-      if (hasAnthropic) {
-        routes[model] = { model, provider: 'anthropic' };
-      } else {
-        delete routes[model];
-      }
-    }
-
-    if (Object.keys(routes).length > 0) {
-      extra.model_routes = routes;
-    } else {
-      delete extra.model_routes;
-    }
-    apiServer.extra = extra;
-    platforms.api_server = apiServer;
-    config.platforms = platforms;
-
-    // Chat requests always carry an explicit model, but cron runs (and any
-    // session without one) fall back to the top-level `model.default`. A
-    // claude-* default paired with the Codex backend 400s every such run
-    // ("model not supported when using Codex with a ChatGPT account"), so
-    // repair that known-broken pairing whenever Codex credentials exist.
-    const modelCfg = asRecord(config.model);
-    if (modelCfg && hasCodex) {
-      const defaultModel = typeof modelCfg.default === 'string' ? modelCfg.default : '';
-      const provider = typeof modelCfg.provider === 'string' ? modelCfg.provider : '';
-      const baseUrl = typeof modelCfg.base_url === 'string' ? modelCfg.base_url : '';
-      const codexBackend = provider === 'openai-codex' || baseUrl.includes('chatgpt.com');
-      if (codexBackend && defaultModel.startsWith('claude-')) {
-        modelCfg.default = CODEX_CHAT_MODELS[0];
-        config.model = modelCfg;
-      }
-    }
-
-    writeFileSync(configPath, YAML.stringify(config), 'utf8');
-  }
-
-  private hasCodexPoolCredentials(): boolean {
-    try {
-      const raw = readFileSync(join(this.managedHermesHome, 'auth.json'), 'utf8');
-      const parsed = JSON.parse(raw) as { credential_pool?: Record<string, unknown[]> };
-      const pool = parsed?.credential_pool?.['openai-codex'];
-      return Array.isArray(pool) && pool.length > 0;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Earlier managed-profile experiments pointed Hermes at verso's local
-   * `/llm/v1` proxy. That proxy is no longer part of the product path; Hermes
-   * should preserve the user's own Codex/OpenAI auth and model config. If we
-   * find the exact old proxy-owned model config, restore the template model
-   * section. Other model configs are left untouched.
-   */
-  private restoreManagedModelConfigIfProxyOwned(): void {
-    if (this.runtimeMode !== 'managed') return;
-
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    if (!existsSync(configPath)) return;
-
-    const config = readYamlRecord(configPath) ?? {};
-
-    const currentModel = asRecord(config.model);
-    const baseUrl = typeof currentModel?.base_url === 'string' ? currentModel.base_url : '';
-    const provider = typeof currentModel?.provider === 'string' ? currentModel.provider : '';
-    if (provider !== 'custom' || !baseUrl.endsWith('/llm/v1')) return;
-
-    const templateModel = asRecord(readYamlRecord(join(this.templateHermesHome, 'config.yaml'))?.model);
-    if (templateModel) {
-      config.model = templateModel;
-    } else {
-      delete config.model;
-    }
-    writeFileSync(configPath, YAML.stringify(config), 'utf8');
-  }
-
-  private configureManagedMcpServers(): void {
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    if (!existsSync(configPath)) return;
-
-    const config = readYamlRecord(configPath) ?? {};
-
-    const mcpServers = asRecord(config.mcp_servers) ?? {};
-    delete mcpServers.vervo;
-    for (const key of Object.keys(mcpServers)) {
-      if (key.startsWith('custom_')) delete mcpServers[key];
-    }
-
-    const memoryToolsActive = isMemoryEnabled() && this.memoryToolsMode !== 'none';
-
-    if (this.orchestratorBaseUrl) {
-      const pythonPath = resolveHermesPython(this.templateHermesHome);
-      const serverPath = resolveversoMcpServerPath();
-      if (pythonPath && serverPath) {
-        // In Release the bundled CPython has no site-packages of its own —
-        // we ship one separately and wire it up via PYTHONPATH. Without
-        // this, `import mcp` in verso_server.py fails on first connect and
-        // Hermes gives up after a few retries. Debug builds (no bundled
-        // invocation) skip this; their python already sees its own venv.
-        const bundled = getBundledHermesInvocation();
-        const env: Record<string, string> = {
-          VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl,
-          VERSO_COMPOSIO_TOOLS_MANIFEST: this.composioToolsManifestPath,
-        };
-        // The native app protects every sidecar endpoint with a fresh token
-        // for each launch. Hermes starts MCP servers from this explicit env
-        // map (rather than inheriting its parent environment), so forward the
-        // token to the verso bridge or memory/tool calls will fail with 401.
-        const sidecarAuthSecret = process.env.VERSO_SIDECAR_AUTH_SECRET?.trim();
-        if (sidecarAuthSecret) {
-          env.VERSO_SIDECAR_AUTH_SECRET = sidecarAuthSecret;
-        }
-        if (bundled) {
-          env.PYTHONPATH = bundled.sitePackages;
-        }
-        // Memory tools are part of the verso bridge: the orchestrator owns
-        // the in-process memory store and the bridge proxies to it.
-        if (memoryToolsActive) {
-          env.VERSO_MEMORY_TOOLS = 'full';
-        }
-        mcpServers.verso = {
-          command: pythonPath,
-          args: [serverPath],
-          env,
-          timeout: 120,
-          connect_timeout: 60,
-        };
-      }
-    }
-
-    // Composio is reached through verso's backend-backed MCP bridge.
-    // Do not register Composio's hosted MCP server directly with Hermes; raw
-    // provider tool schemas are too unstable for the primary product path.
-    delete mcpServers.composio;
-
-    for (const connector of this.customConnectorsStore.list()) {
-      const entry: Record<string, unknown> = {
-        url: connector.url,
-        timeout: 120,
-        connect_timeout: 30,
-      };
-      if (connector.transport === 'sse') entry.transport = 'sse';
-      if (connector.auth === 'oauth') entry.auth = 'oauth';
-      if (connector.auth === 'bearer') {
-        entry.headers = {
-          Authorization: `Bearer \${VERSO_CC_${connector.id}_TOKEN}`,
-        };
-      }
-      mcpServers[`custom_${connector.slug}`] = entry;
-    }
-
-    const tools = asRecord(config.tools) ?? {};
-    const toolSearch = asRecord(tools.tool_search) ?? {};
-    tools.tool_search = {
-      ...toolSearch,
-      enabled: 'on',
-      // Hot set that skips the tool_search bridge. Honored by the
-      // verso-tool-search-pinned runtime patch; older unpatched Hermes
-      // builds ignore the unknown key.
-      pinned: computePinnedToolNames(this.composioToolsManifestPath, {
-        includeMemoryTools: memoryToolsActive,
-      }),
-    };
-
-    // Teach the visible agent that the memory tools ARE its memory —
-    // without this it pattern-matches "what do you know about X" to web
-    // search. Managed via marker comments so user SOUL edits survive, and
-    // removed again when the feature is off.
-    this.syncMemorySoulSection(memoryToolsActive);
-
-    config.mcp_servers = mcpServers;
-    config.tools = tools;
-    writeFileSync(configPath, YAML.stringify(config), 'utf8');
-  }
-
-  private syncMemorySoulSection(enabled: boolean): void {
-    const soulPath = join(this.managedHermesHome, 'SOUL.md');
-    try {
-      const current = existsSync(soulPath) ? readFileSync(soulPath, 'utf8') : '';
-      const next = applyMemorySoulSection(current, enabled);
-      if (next !== current) {
-        writeFileSync(soulPath, next, 'utf8');
-      }
-    } catch (error: unknown) {
-      console.warn(`[memory] SOUL.md memory section sync failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    this.managedProfile.prepare(this.orchestratorBaseUrl);
   }
 
   private captureLog(stream: 'stdout' | 'stderr', chunk: string): void {
@@ -1266,250 +704,11 @@ export class HermesSupervisor {
   }
 }
 
-function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  if (signal.aborted) {
-    return Promise.reject(abortError());
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener('abort', onAbort);
-      reject(abortError());
-    };
-
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
-function abortError(): Error {
-  const error = new Error('Aborted');
-  error.name = 'AbortError';
-  return error;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Env for running bundled Hermes: Python needs PYTHONPATH to find the
-// pre-installed packages — without it, `from hermes_cli.main import main`
-// fails immediately. Debug builds (no bundle) leave PYTHONPATH untouched so
-// the developer's venv-resolved imports keep working.
-function bundledPythonEnv(bundled: { sitePackages: string }): Record<string, string> {
-  return {
-    ...getBundledPythonBytecodeEnv(),
-    PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':'),
-  };
-}
-
-function hasExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function childExitPromise(child: ChildProcess): Promise<void> {
-  return new Promise((resolve) => {
-    const onExit = () => resolve();
-    child.once('exit', onExit);
-    // Cover the narrow race where the process exits between the caller's
-    // initial state check and registration of the exit listener.
-    if (hasExited(child)) {
-      child.off('exit', onExit);
-      resolve();
-    }
-  });
-}
-
-async function terminateChild(child: ChildProcess): Promise<void> {
-  if (hasExited(child)) return;
-  const exited = childExitPromise(child);
-  child.kill('SIGTERM');
-  let didExit = await waitForExit(exited, 2_000);
-  if (!didExit && !hasExited(child)) {
-    child.kill('SIGKILL');
-    didExit = await waitForExit(exited, 1_000);
-  }
-  if (!didExit && !hasExited(child)) {
-    throw new Error(`Hermes gateway process ${child.pid ?? 'unknown'} did not exit after SIGKILL.`);
-  }
-}
-
-async function waitForExit(exited: Promise<void>, timeoutMs: number): Promise<boolean> {
-  return Promise.race([
-    exited.then(() => true),
-    delay(timeoutMs).then(() => false),
-  ]);
-}
-
-async function allocatePort(): Promise<number> {
-  const server = net.createServer();
-  server.unref();
-
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, DEFAULT_HOST, () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        server.close(() => reject(new Error('Failed to allocate Hermes port.')));
-        return;
-      }
-
-      const { port } = address;
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-async function canBind(host: string, port: number): Promise<boolean> {
-  const server = net.createServer();
-  server.unref();
-  return new Promise((resolve) => {
-    server.once('error', () => resolve(false));
-    server.listen(port, host, () => {
-      server.close((error) => resolve(!error));
-    });
-  });
-}
-
-function getTemplateHermesHome(): string {
-  // In Release the seed-defaults live next to the app bundle, not under ~/.hermes.
-  return process.env.VERSO_BUNDLED_DEFAULTS?.trim()
-    || process.env.HERMES_HOME?.trim()
-    || join(os.homedir(), '.hermes');
-}
-
-function getManagedHermesHome(templateHome: string): string {
-  const override = process.env.VERSO_HERMES_HOME?.trim();
-  if (override) return override;
-  return join(resolveHermesRoot(templateHome), 'profiles', 'verso');
-}
-
-function resolveHermesRoot(home: string): string {
-  const profilesMarker = `${sep}profiles${sep}`;
-  const index = home.lastIndexOf(profilesMarker);
-  return index >= 0 ? home.slice(0, index) : home;
-}
-
-function resolveHermesPython(templateHome: string): string | null {
-  // In Release the bundled CPython owns Python; prefer it.
-  const bundledPython = getBundledPython();
-  if (bundledPython && existsSync(bundledPython)) return bundledPython;
-
-  const candidate = join(resolveHermesRoot(templateHome), 'hermes-agent', 'venv', 'bin', 'python');
-  return existsSync(candidate) ? candidate : null;
-}
-
-function resolveversoMcpServerPath(): string | null {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidate = join(currentDir, '..', '..', 'mcp', 'verso_server.py');
-  return existsSync(candidate) ? candidate : null;
-}
-
-function resolveVersoSkillSourceDir(): string | null {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidate = join(currentDir, '..', '..', 'skills', 'verso-composio');
-  return existsSync(candidate) ? candidate : null;
-}
-
-function getBundledPythonBytecodeEnv(): Record<string, string> {
-  const cachePrefix = process.env.VERSO_PYTHON_CACHE_DIR?.trim()
-    || join(os.homedir(), 'Library', 'Caches', 'Verso', 'python-bytecode');
-  try {
-    mkdirSync(cachePrefix, { recursive: true });
-  } catch {
-    // Python can still run without bytecode caches; preserving app-bundle
-    // integrity matters more than surfacing a cache-directory warning here.
-  }
-  return {
-    PYTHONDONTWRITEBYTECODE: '1',
-    PYTHONPYCACHEPREFIX: cachePrefix,
-  };
-}
-
-function seedHermesHomeFile(sourceHome: string, targetHome: string, fileName: string): void {
-  const sourcePath = join(sourceHome, fileName);
-  const targetPath = join(targetHome, fileName);
-  if (!existsSync(sourcePath)) return;
-  if (existsSync(targetPath) && !shouldRefreshManagedFile(sourcePath, targetPath, fileName)) return;
-  mkdirSync(dirname(targetPath), { recursive: true });
-  copyFileSync(sourcePath, targetPath);
-}
-
-function shouldRefreshManagedFile(sourcePath: string, targetPath: string, fileName: string): boolean {
-  if (fileName === 'SOUL.md') {
-    return shouldRefreshDefaultSoul(sourcePath, targetPath);
-  }
-
-  if (fileName !== 'auth.json') return false;
-
-  try {
-    return statSync(sourcePath).mtimeMs > statSync(targetPath).mtimeMs;
-  } catch {
-    return false;
-  }
-}
-
-function shouldRefreshDefaultSoul(sourcePath: string, targetPath: string): boolean {
-  try {
-    const source = readFileSync(sourcePath, 'utf8');
-    const target = readFileSync(targetPath, 'utf8');
-    return target.trim() === LEGACY_DEFAULT_SOUL_MD.trim() && source.trim() !== target.trim();
-  } catch {
-    return false;
-  }
-}
-
-function readYamlRecord(path: string): Record<string, unknown> | null {
-  if (!existsSync(path)) return null;
-  try {
-    const parsed = YAML.parse(readFileSync(path, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function readJsonRecord(path: string): Record<string, unknown> | null {
-  if (!existsSync(path)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function isModernHermesAuthStore(value: Record<string, unknown> | null): boolean {
-  return Boolean(
-    value
-    && typeof value.active_provider === 'string'
-    && asRecord(value.providers)
-    && asRecord(value.credential_pool),
-  );
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+function isPortConflictError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes('eaddrinuse')
+    || message.includes('address already in use')
+    || message.includes('port already in use')
+    || /port\s+\d+\s+already\s+in\s+use/.test(message)
+    || message.includes('startup conflict');
 }

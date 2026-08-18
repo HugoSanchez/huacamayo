@@ -19,7 +19,7 @@
      # ------------------------------------------------------------------
 --- a/gateway/platforms/verso_mcp_oauth.py	1970-01-01 01:00:00
 +++ b/gateway/platforms/verso_mcp_oauth.py	2026-08-17 11:25:21
-@@ -0,0 +1,407 @@
+@@ -0,0 +1,428 @@
 +"""Verso runtime patch: MCP OAuth flow endpoints on the gateway API server.
 +
 +Mirrors the dashboard-mediated MCP OAuth flow from ``hermes_cli/web_server.py``
@@ -54,6 +54,7 @@
 +
 +import asyncio
 +import logging
++import os
 +import secrets
 +import threading
 +import time
@@ -398,23 +399,43 @@
 +
 +
 +def _html(body: str, status: int = 200) -> "web.Response":
-+    # Match Verso's editorial look (paper/ink palette) so the OAuth hand-off
-+    # pages feel like part of the product rather than a bare debug page.
-+    page = (
-+        "<!doctype html><html><head><meta charset=\"utf-8\">"
-+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-+        "<title>Verso</title><style>"
-+        "body{margin:0;min-height:100vh;display:flex;align-items:center;"
-+        "justify-content:center;background:#f4f1e9;color:#1f1d1a;"
-+        "font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif}"
-+        "main{max-width:26rem;padding:2.5rem;text-align:center}"
-+        "h1{font-size:1.5rem;font-weight:600;letter-spacing:-0.01em;margin:0 0 0.75rem}"
-+        "p{font-size:0.95rem;line-height:1.5;color:#5c574d;margin:0}"
-+        "main::before{content:\"Verso\";display:block;margin-bottom:2rem;"
-+        "font-size:0.8rem;letter-spacing:0.18em;text-transform:uppercase;color:#8a8478}"
-+        "</style></head><body><main>" + body + "</main></body></html>"
++    nonce = secrets.token_urlsafe(18)
++    sidecar_base = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
++    if not sidecar_base.startswith(("http://127.0.0.1:", "http://localhost:")):
++        sidecar_base = ""
++    font_face = (
++        "@font-face{font-family:'IBM Plex Sans';"
++        f"src:url('{sidecar_base}/connections/callback/font') format('truetype');"
++        "font-style:normal;font-weight:400;font-display:swap}"
++        if sidecar_base
++        else ""
 +    )
-+    return web.Response(text=page, status=status, content_type="text/html")
++    page = (
++        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
++        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
++        f"<title>Verso</title><style nonce=\"{nonce}\">" + font_face +
++        ":root{color-scheme:light}html,body{height:100%}"
++        "body{margin:0;min-height:100vh;display:flex;flex-direction:column;"
++        "background:#F5F2EA;color:#34332D;font-family:'IBM Plex Sans',"
++        "ui-sans-serif,-apple-system,BlinkMacSystemFont,sans-serif}"
++        "header{height:38px;display:flex;align-items:center;justify-content:center;"
++        "font-size:12px;font-weight:600}"
++        "main{flex:1;display:flex;flex-direction:column;align-items:center;"
++        "justify-content:center;padding:24px;text-align:center}"
++        "h1{margin:0 0 16px;font-size:35px;font-weight:600;letter-spacing:-0.01em}"
++        "p{margin:0;max-width:300px;font-size:13px;line-height:1.55;color:#55534A}"
++        "</style></head><body><header>verso.</header><main>" + body +
++        "</main></body></html>"
++    )
++    csp = f"default-src 'none'; style-src 'nonce-{nonce}'; frame-ancestors 'none'"
++    if sidecar_base:
++        csp += f"; font-src {sidecar_base}"
++    return web.Response(
++        text=page,
++        status=status,
++        content_type="text/html",
++        headers={"Content-Security-Policy": csp},
++    )
 +
 +
 +def route_table(adapter) -> list:

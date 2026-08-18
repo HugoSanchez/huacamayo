@@ -21,6 +21,19 @@
 		A1000001000000000000000F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000010 /* SignInView.swift */; };
 		A10000010000000000000011 /* UpdateToastUserDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000011 /* UpdateToastUserDriver.swift */; };
 		A10000010000000000000020 /* Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000020 /* Telemetry.swift */; };
+		B10000010000000000000001 /* SidecarRuntimeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000020000000000000001 /* SidecarRuntimeResolver.swift */; };
+		B10000010000000000000002 /* SidecarStartupProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000020000000000000002 /* SidecarStartupProtocol.swift */; };
+		B10000010000000000000003 /* SidecarStartupProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000020000000000000003 /* SidecarStartupProtocolTests.swift */; };
+		B10000010000000000000004 /* SidecarRuntimeResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000020000000000000004 /* SidecarRuntimeResolverTests.swift */; };
+		B10000010000000000000005 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10000020000000000000006 /* XCTest.framework */; };
+		B10000010000000000000006 /* SidecarRuntimeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000020000000000000001 /* SidecarRuntimeResolver.swift */; };
+		B10000010000000000000007 /* SidecarStartupProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000020000000000000002 /* SidecarStartupProtocol.swift */; };
+		C10000010000000000000001 /* NativeShellTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000020000000000000001 /* NativeShellTheme.swift */; };
+		C10000010000000000000002 /* SessionSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000020000000000000002 /* SessionSidebar.swift */; };
+		C10000010000000000000003 /* NativeWindowChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000020000000000000003 /* NativeWindowChrome.swift */; };
+		D10000010000000000000001 /* ShellProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000001 /* ShellProtocol.swift */; };
+		D10000010000000000000002 /* ShellProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000001 /* ShellProtocol.swift */; };
+		D10000010000000000000003 /* ShellProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000002 /* ShellProtocolTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +52,17 @@
 		A10000020000000000000011 /* UpdateToastUserDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateToastUserDriver.swift; sourceTree = "<group>"; };
 		A10000020000000000000020 /* Telemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Telemetry.swift; sourceTree = "<group>"; };
 		A10000030000000000000001 /* verso.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = verso.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000020000000000000001 /* SidecarRuntimeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarRuntimeResolver.swift; sourceTree = "<group>"; };
+		B10000020000000000000002 /* SidecarStartupProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarStartupProtocol.swift; sourceTree = "<group>"; };
+		B10000020000000000000003 /* SidecarStartupProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarStartupProtocolTests.swift; sourceTree = "<group>"; };
+		B10000020000000000000004 /* SidecarRuntimeResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarRuntimeResolverTests.swift; sourceTree = "<group>"; };
+		B10000020000000000000005 /* versoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = versoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000020000000000000006 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		C10000020000000000000001 /* NativeShellTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShellTheme.swift; sourceTree = "<group>"; };
+		C10000020000000000000002 /* SessionSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSidebar.swift; sourceTree = "<group>"; };
+		C10000020000000000000003 /* NativeWindowChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeWindowChrome.swift; sourceTree = "<group>"; };
+		D10000020000000000000001 /* ShellProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellProtocol.swift; sourceTree = "<group>"; };
+		D10000020000000000000002 /* ShellProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellProtocolTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -48,6 +72,14 @@
 			files = (
 				5D76BBBF2FB9BF9400132604 /* Sparkle in Frameworks */,
 				5D5F57772FCDA93800F950C8 /* Sentry in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000040000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000010000000000000005 /* XCTest.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +97,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000050000000000000002 /* desktop/macos */,
+				B10000050000000000000001 /* desktop/macosTests */,
 				5D5F57752FCDA93800F950C8 /* Frameworks */,
 				A10000050000000000000003 /* Products */,
 			);
@@ -75,7 +108,13 @@
 			children = (
 				A10000020000000000000001 /* versoApp.swift */,
 				A10000020000000000000002 /* ContentView.swift */,
+				C10000020000000000000001 /* NativeShellTheme.swift */,
+				C10000020000000000000002 /* SessionSidebar.swift */,
+				C10000020000000000000003 /* NativeWindowChrome.swift */,
 				A10000020000000000000006 /* SidecarManager.swift */,
+				B10000020000000000000001 /* SidecarRuntimeResolver.swift */,
+				B10000020000000000000002 /* SidecarStartupProtocol.swift */,
+				D10000020000000000000001 /* ShellProtocol.swift */,
 				A1000002000000000000000C /* ChatWebView.swift */,
 				A1000002000000000000000E /* ManagedSessionStore.swift */,
 				A10000020000000000000010 /* SignInView.swift */,
@@ -95,8 +134,19 @@
 			isa = PBXGroup;
 			children = (
 				A10000030000000000000001 /* verso.app */,
+				B10000020000000000000005 /* versoTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B10000050000000000000001 /* desktop/macosTests */ = {
+			isa = PBXGroup;
+			children = (
+				B10000020000000000000003 /* SidecarStartupProtocolTests.swift */,
+				B10000020000000000000004 /* SidecarRuntimeResolverTests.swift */,
+				D10000020000000000000002 /* ShellProtocolTests.swift */,
+			);
+			path = desktop/macosTests;
 			sourceTree = "<group>";
 		};
 		A10000050000000000000004 /* Preview Content */ = {
@@ -130,6 +180,22 @@
 			productReference = A10000030000000000000001 /* verso.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B10000060000000000000001 /* versoTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000080000000000000001 /* Build configuration list for PBXNativeTarget "versoTests" */;
+			buildPhases = (
+				B10000070000000000000001 /* Sources */,
+				B10000040000000000000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = versoTests;
+			productName = versoTests;
+			productReference = B10000020000000000000005 /* versoTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -141,6 +207,9 @@
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					A10000060000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					B10000060000000000000001 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
@@ -163,6 +232,7 @@
 			projectRoot = "";
 			targets = (
 				A10000060000000000000001 /* verso */,
+				B10000060000000000000001 /* versoTests */,
 			);
 		};
 /* End PBXProject section */
@@ -195,7 +265,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "export PATH=\"/usr/local/bin:/opt/homebrew/bin:$PATH\"\ncd \"$SRCROOT/desktop/chat-ui\"\nif [ ! -d node_modules ]; then\n  npm install\nfi\nnpm run build\nrm -rf \"$SRCROOT/desktop/macos/chat-ui\"\ncp -r dist \"$SRCROOT/desktop/macos/chat-ui\"\n";
+			shellScript = "\"$SRCROOT/scripts/build-chat-ui.sh\"\n";
 		};
 		A100000B0000000000000002 /* Bundle Runtime Components */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -235,6 +305,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000010000000000000002 /* ContentView.swift in Sources */,
+				C10000010000000000000001 /* NativeShellTheme.swift in Sources */,
+				C10000010000000000000002 /* SessionSidebar.swift in Sources */,
+				C10000010000000000000003 /* NativeWindowChrome.swift in Sources */,
 				A10000010000000000000001 /* versoApp.swift in Sources */,
 				A10000010000000000000005 /* SidecarManager.swift in Sources */,
 				A1000001000000000000000B /* ChatWebView.swift in Sources */,
@@ -242,6 +315,22 @@
 				A1000001000000000000000F /* SignInView.swift in Sources */,
 				A10000010000000000000011 /* UpdateToastUserDriver.swift in Sources */,
 				A10000010000000000000020 /* Telemetry.swift in Sources */,
+				B10000010000000000000001 /* SidecarRuntimeResolver.swift in Sources */,
+				B10000010000000000000002 /* SidecarStartupProtocol.swift in Sources */,
+				D10000010000000000000001 /* ShellProtocol.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000070000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000010000000000000006 /* SidecarRuntimeResolver.swift in Sources */,
+				B10000010000000000000007 /* SidecarStartupProtocol.swift in Sources */,
+				B10000010000000000000003 /* SidecarStartupProtocolTests.swift in Sources */,
+				B10000010000000000000004 /* SidecarRuntimeResolverTests.swift in Sources */,
+				D10000010000000000000002 /* ShellProtocol.swift in Sources */,
+				D10000010000000000000003 /* ShellProtocolTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -422,6 +511,30 @@
 			};
 			name = Release;
 		};
+		B100000A0000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = xyz.itsverso.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B100000A0000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = xyz.itsverso.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -439,6 +552,15 @@
 			buildConfigurations = (
 				A100000A0000000000000001 /* Debug */,
 				A100000A0000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000080000000000000001 /* Build configuration list for PBXNativeTarget "versoTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B100000A0000000000000001 /* Debug */,
+				B100000A0000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readJsonFileOr, writeJsonFileAtomic } from './atomic-json-file.ts';
 
 export type ConnectionRequestStatus = 'pending' | 'connected' | 'failed' | 'expired';
 export type ConnectionStatus = 'active' | 'inactive';
@@ -170,46 +171,40 @@ export class ConnectionsStore {
   }
 
   private load(): ConnectionsStoreShape {
-    if (!existsSync(this.storePath)) {
-      return {
+    return readJsonFileOr(
+      this.storePath,
+      (value) => {
+        const parsed = isObject(value) ? value as Partial<ConnectionsStoreShape> : {};
+        return {
+          versoUserId: typeof parsed.versoUserId === 'string' ? parsed.versoUserId : null,
+          requests: Array.isArray(parsed.requests)
+            ? parsed.requests.filter(isValidRequestRecord)
+            : [],
+          connections: Array.isArray(parsed.connections)
+            ? parsed.connections.filter(isValidConnectionRecord)
+            : [],
+        };
+      },
+      () => ({
         versoUserId: null,
         requests: [],
         connections: [],
-      };
-    }
-
-    try {
-      const raw = readFileSync(this.storePath, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<ConnectionsStoreShape>;
-      return {
-        versoUserId: typeof parsed.versoUserId === 'string' ? parsed.versoUserId : null,
-        requests: Array.isArray(parsed.requests)
-          ? parsed.requests.filter(isValidRequestRecord)
-          : [],
-        connections: Array.isArray(parsed.connections)
-          ? parsed.connections.filter(isValidConnectionRecord)
-          : [],
-      };
-    } catch {
-      return {
-        versoUserId: null,
-        requests: [],
-        connections: [],
-      };
-    }
+      }),
+    );
   }
 
   private save(): void {
-    mkdirSync(path.dirname(this.storePath), { recursive: true });
-    const tmpPath = `${this.storePath}.${process.pid}.tmp`;
-    writeFileSync(tmpPath, `${JSON.stringify(this.state, null, 2)}\n`, 'utf8');
-    renameSync(tmpPath, this.storePath);
+    writeJsonFileAtomic(this.storePath, this.state);
   }
 
   private touchToolsRefreshMarker(): void {
     mkdirSync(path.dirname(this.toolsRefreshMarkerPath), { recursive: true });
     writeFileSync(this.toolsRefreshMarkerPath, `${Date.now()}\n`, 'utf8');
   }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function isValidRequestRecord(value: unknown): value is ConnectionRequestRecord {

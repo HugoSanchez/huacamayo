@@ -24,7 +24,7 @@
 # Run this whenever:
 #   • First clone of the repo
 #   • You change desktop/orchestrator/package.json (deps changed)
-#   • You bump NODE_VERSION, PYTHON_TAG, or HERMES_REF below
+#   • You bump NODE_VERSION, PBS_TAG, or HERMES_REF in runtime-config.sh
 #   • Hermes upstream releases a new commit you want to ship
 #
 # Idempotent: each stage no-ops if the right artifact is already present.
@@ -33,39 +33,14 @@
 
 set -euo pipefail
 
-NODE_VERSION="24.15.0"
-
-# python-build-standalone release tag (https://github.com/astral-sh/python-build-standalone/releases).
-# We pin both the tag and the CPython version it ships so reproducible.
-PBS_TAG="20260510"
-PYTHON_VERSION="3.11.15"
-
-# NousResearch/hermes-agent commit to snapshot. Pin to a specific SHA so
-# Release builds don't drift with upstream main. Bump intentionally, and
-# regenerate desktop/runtime-patches/hermes-agent/*.patch against the new
-# ref in the same change — the install step aborts if any patch fails.
-# 3ef6bbd2 = v0.19.0 (2026-07-20).
-HERMES_REPO="https://github.com/NousResearch/hermes-agent.git"
-HERMES_REF="3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
-
-# Optional extras to install with Hermes. Keep lean — voice/messaging are huge
-# and not needed for the macOS UI flow.
-HERMES_EXTRAS="mcp,cli,cron"
-
-# Extra packages we install alongside Hermes. aiohttp is required by Hermes'
-# api_server adapter — the orchestrator talks to Hermes over the HTTP API
-# (API_SERVER_ENABLED=true), so without aiohttp the gateway boots in
-# cron-only mode and the orchestrator can't reach it. Not in mcp/cli/cron
-# extras (only listed under messaging/homeassistant/sms), so we pin it
-# directly. Without this, hermes logs "API Server: aiohttp not installed".
-HERMES_EXTRA_PINS=("aiohttp==3.13.3")
-
 # Target architecture(s) we ship. arm64-only for v1 — add "x86_64" back here
 # (and to the per-arch loops below) when we have Intel-Mac friends to support.
 SUPPORTED_ARCHES=("arm64")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=runtime-config.sh
+source "${SCRIPT_DIR}/runtime-config.sh"
 DESKTOP_ROOT="${REPO_ROOT}/desktop"
 BUNDLE_DIR="${DESKTOP_ROOT}/runtime-bundles"
 NODE_DIR="${BUNDLE_DIR}/node"
@@ -222,8 +197,8 @@ done
 # ── Hermes source snapshot ──────────────────────────────────────────────────
 
 needs_hermes_clone=true
-if [ -d "${HERMES_BUNDLE}/.git" ]; then
-    current_ref="$(git -C "${HERMES_BUNDLE}" rev-parse HEAD 2>/dev/null || echo "")"
+if [ -f "${HERMES_BUNDLE}/.verso-hermes-ref" ]; then
+    current_ref="$(cat "${HERMES_BUNDLE}/.verso-hermes-ref")"
     if [ "${current_ref}" = "${HERMES_REF}" ]; then
         echo "[bundle] hermes-agent already at ${HERMES_REF:0:9}"
         needs_hermes_clone=false
@@ -248,6 +223,7 @@ fi
 # Drop the .git dir from the snapshot so the bundle is smaller and unambiguous
 # (the .git/index we'd ship wouldn't match the user's filesystem anyway).
 rm -rf "${HERMES_BUNDLE}/.git"
+printf '%s\n' "${HERMES_REF}" > "${HERMES_BUNDLE}/.verso-hermes-ref"
 
 # ── Pre-installed Hermes + deps (per-arch site-packages) ────────────────────
 # Instead of shipping raw wheels and pip-installing on first launch, we
@@ -293,12 +269,11 @@ fi
 # an install.
 hermes_runtime_patch_stamp="none"
 if [ -d "${HERMES_RUNTIME_PATCHES_DIR}" ]; then
+    "${SCRIPT_DIR}/apply-hermes-patches.sh" --check
     hermes_runtime_patch_stamp="$(
-        find "${HERMES_RUNTIME_PATCHES_DIR}" -type f -name '*.patch' -print \
-            | LC_ALL=C sort \
-            | while IFS= read -r patch_file; do shasum -a 256 "${patch_file}"; done \
-            | shasum -a 256 \
-            | awk '{print $1}'
+        for patch_name in "${HERMES_PATCHES[@]}"; do
+            shasum -a 256 "${HERMES_RUNTIME_PATCHES_DIR}/${patch_name}"
+        done | shasum -a 256 | awk '{print $1}'
     )"
 fi
 expected_stamp="${HERMES_REF}|${HERMES_EXTRAS}|${HERMES_EXTRA_PINS[*]}|${PYTHON_VERSION}|patches:${hermes_runtime_patch_stamp}"
@@ -364,11 +339,7 @@ for arch in "${SUPPORTED_ARCHES[@]}"; do
     rsync -a --delete "${venv_site}/" "${target}/site-packages/"
 
     if [ -d "${HERMES_RUNTIME_PATCHES_DIR}" ]; then
-        while IFS= read -r patch_file; do
-            [ -n "${patch_file}" ] || continue
-            echo "[bundle] applying Hermes runtime patch: $(basename "${patch_file}")"
-            patch -d "${target}/site-packages" -p1 --batch < "${patch_file}" >/dev/null
-        done < <(find "${HERMES_RUNTIME_PATCHES_DIR}" -type f -name '*.patch' -print | LC_ALL=C sort)
+        "${SCRIPT_DIR}/apply-hermes-patches.sh" "${target}/site-packages"
     fi
 
     # Drop __pycache__ — Python regenerates these at runtime and Apple gets

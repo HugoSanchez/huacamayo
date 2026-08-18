@@ -4,7 +4,7 @@
 #
 # The redesign funnels every color through semantic design tokens: CSS custom
 # properties defined in ONE place (chat-ui/src/styles/tokens.css) and the Swift
-# ConductorThemePalette / ConductorThemes region in ContentView.swift. This
+# ConductorThemePalette / ConductorThemes region in NativeShellTheme.swift. This
 # script fails CI if a raw color literal leaks in anywhere else, so the palette
 # stays the single source of truth for both light and dark.
 #
@@ -15,7 +15,7 @@
 #      presentation attributes — fill=/stroke=/stop-color — are inline vector
 #      art, not theme surfaces, and are allowlisted);
 #   3. a `Color(red:` / `Color.white.opacity(` / `Color.black.opacity(` literal
-#      appears in ContentView.swift OUTSIDE the palette definition region.
+#      appears in the native shell OUTSIDE NativeShellTheme's palette region.
 #      Allowlisted: the traffic-light classic fills (WindowControlButton(color:))
 #      and AppKit `NSColor(red:` bridging. SignInView.swift and
 #      UpdateToastUserDriver.swift are exempt files (documented mode-independent
@@ -29,11 +29,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 CHAT_UI="desktop/chat-ui/src"
-CONTENT_VIEW="desktop/macos/ContentView.swift"
+THEME_FILE="desktop/macos/NativeShellTheme.swift"
+MACOS_SOURCES="desktop/macos"
 
 # Guard against silently scanning nothing if these paths ever move.
 [ -d "$CHAT_UI/styles" ] || { echo "style-guard: missing $CHAT_UI/styles" >&2; exit 1; }
-[ -f "$CONTENT_VIEW" ] || { echo "style-guard: missing $CONTENT_VIEW" >&2; exit 1; }
+[ -f "$THEME_FILE" ] || { echo "style-guard: missing $THEME_FILE" >&2; exit 1; }
 
 # A color literal: #hex (3/4/6/8 digits), rgb(, rgba(, or hsl(/hsla(.
 COLOR_RE='#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\('
@@ -79,21 +80,30 @@ fi
 # ---- 3. Swift outside the palette region -----------------------------------
 # The palette region spans the ConductorThemePalette struct through the end of
 # the ConductorThemes enum (i.e. up to the next declaration, ConductorType).
-echo "== Swift color literals outside the palette region ($CONTENT_VIEW) =="
-swift_hits="$(awk '
-  /private struct ConductorThemePalette \{/ { inpal=1 }
-  /private enum ConductorType \{/           { inpal=0 }
-  {
-    if (!inpal) {
-      # traffic-light classic fills are exempt
-      if ($0 ~ /WindowControlButton\(color: Color\(red:/) next
-      # Color(red: but NOT NSColor(red: (AppKit bridging is out of scope)
-      if ($0 ~ /(^|[^A-Za-z])Color\(red:/ || $0 ~ /Color\.white\.opacity\(/ || $0 ~ /Color\.black\.opacity\(/) {
-        printf "    %s:%d: %s\n", FILENAME, NR, $0
+echo "== Swift color literals outside the palette region ($THEME_FILE) =="
+swift_hits=""
+for swift_file in "$MACOS_SOURCES"/*.swift; do
+  case "$(basename "$swift_file")" in
+    SignInView.swift|UpdateToastUserDriver.swift) continue ;;
+  esac
+  hits="$(awk '
+    /struct ConductorThemePalette \{/ { inpal=1 }
+    /enum ConductorType \{/           { inpal=0 }
+    {
+      if (!inpal) {
+        # traffic-light classic fills are exempt
+        if ($0 ~ /WindowControlButton\(color: Color\(red:/) next
+        # Color(red: but NOT NSColor(red: (AppKit bridging is out of scope)
+        if ($0 ~ /(^|[^A-Za-z])Color\(red:/ || $0 ~ /Color\.white\.opacity\(/ || $0 ~ /Color\.black\.opacity\(/) {
+          printf "    %s:%d: %s\n", FILENAME, NR, $0
+        }
       }
     }
-  }
-' "$CONTENT_VIEW")"
+' "$swift_file")"
+  if [ -n "$hits" ]; then
+    swift_hits="$swift_hits"$'\n'"$hits"
+  fi
+done
 if [ -n "$swift_hits" ]; then
   fail=1
   note "FAIL — theme colors must come from ConductorThemePalette / ConductorThemes:"

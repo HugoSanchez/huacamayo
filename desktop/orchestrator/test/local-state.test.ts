@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -77,6 +77,34 @@ describe('local state isolation', () => {
         claimedAt: '2026-06-08T10:00:00.000Z',
       });
       expect(existsSync(path.join(fixture.legacyHermesHome, 'home'))).toBe(false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('atomically replaces a corrupt legacy owner marker when ownership is reclaimed', () => {
+    const fixture = makeFixture();
+    try {
+      mkdirSync(fixture.root, { recursive: true });
+      writeFileSync(fixture.legacyChatStore, '', 'utf8');
+      writeFileSync(fixture.ownerMarker, '{truncated', 'utf8');
+      const env: NodeJS.ProcessEnv = {
+        VERSO_LOCAL_STATE_ROOT: fixture.root,
+        VERSO_MANAGED_USER_ID: 'usr_owner',
+      };
+
+      const snapshot = applyLocalStateIsolation(env, {
+        homeDir: fixture.home,
+        now: new Date('2026-06-08T10:00:00.000Z'),
+      });
+
+      expect(snapshot.mode).toBe('legacy_owned');
+      expect(JSON.parse(readFileSync(fixture.ownerMarker, 'utf8'))).toEqual({
+        version: 1,
+        ownerHash: hash('usr_owner'),
+        claimedAt: '2026-06-08T10:00:00.000Z',
+      });
+      expect(readdirSync(fixture.root).filter((name) => name.endsWith('.tmp'))).toEqual([]);
     } finally {
       fixture.cleanup();
     }

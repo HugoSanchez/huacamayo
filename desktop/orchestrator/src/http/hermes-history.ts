@@ -345,31 +345,119 @@ function mergeWithLocalMessageSkeleton(
 
   for (const localMessage of localMessages) {
     if (localMessage.role === 'user') {
+      // If Hermes completed a response that Verso did not persist (for
+      // example, the app exited between the gateway finishing and the local
+      // write), restore it before the next user turn instead of moving it to
+      // the end of the transcript.
+      const userStartedAt = isoToMs(localMessage.createdAt);
+      const recovered = takeAssistantFragmentsThrough(
+        hermesAssistantMessages,
+        assistantCursor,
+        userStartedAt,
+        false,
+      );
+      if (recovered.fragments.length > 0) {
+        merged.push(coalesceAssistantFragments(recovered.fragments));
+        assistantCursor = recovered.nextCursor;
+      }
+
       lastUserStartedAt = isoToMs(localMessage.createdAt);
       merged.push(localMessage);
       continue;
     }
 
-    const hermesMessage = hermesAssistantMessages[assistantCursor] ?? null;
-    if (hermesMessage) assistantCursor += 1;
+    const localEndedAt = isoToMs(localMessage.createdAt);
+    let matched = takeAssistantFragmentsThrough(
+      hermesAssistantMessages,
+      assistantCursor,
+      localEndedAt,
+    );
 
-    const endedAt = isoToMs(localMessage.createdAt) ?? hermesMessage?.endedAt;
-    const startedAt = lastUserStartedAt ?? hermesMessage?.startedAt;
+    // Invalid legacy timestamps cannot be compared safely. Preserve the old
+    // sequential fallback for those records, but only consume one fragment.
+    if (matched.fragments.length === 0 && localEndedAt === undefined) {
+      const fallback = hermesAssistantMessages[assistantCursor];
+      if (fallback) {
+        matched = { fragments: [fallback], nextCursor: assistantCursor + 1 };
+      }
+    }
+    assistantCursor = matched.nextCursor;
+    const hermesTurn = matched.fragments.length > 0
+      ? coalesceAssistantFragments(matched.fragments)
+      : null;
+
+    const endedAt = localEndedAt ?? hermesTurn?.endedAt;
+    const startedAt = lastUserStartedAt ?? hermesTurn?.startedAt;
     merged.push({
       ...localMessage,
-      content: localMessage.content || hermesMessage?.content || '',
-      reasoning: hermesMessage?.reasoning ?? localMessage.reasoning,
-      steps: hermesMessage?.steps,
+      content: localMessage.content || hermesTurn?.content || '',
+      reasoning: hermesTurn?.reasoning ?? localMessage.reasoning,
+      steps: hermesTurn?.steps ?? localMessage.steps,
       startedAt,
       endedAt,
     });
   }
 
-  for (const remaining of hermesAssistantMessages.slice(assistantCursor)) {
-    merged.push(remaining);
+  const remaining = hermesAssistantMessages.slice(assistantCursor);
+  if (remaining.length > 0) {
+    // A single Verso turn can contain many Hermes assistant rows (interim
+    // text, tool calls, tool results, final text). Keep them one visible turn
+    // even when recovering a response with no local assistant skeleton.
+    merged.push(coalesceAssistantFragments(remaining));
   }
 
   return merged;
+}
+
+function takeAssistantFragmentsThrough(
+  messages: ChatMessageRecord[],
+  cursor: number,
+  deadline: number | undefined,
+  inclusive = true,
+): { fragments: ChatMessageRecord[]; nextCursor: number } {
+  if (deadline === undefined) return { fragments: [], nextCursor: cursor };
+
+  const fragments: ChatMessageRecord[] = [];
+  let nextCursor = cursor;
+  while (nextCursor < messages.length) {
+    const message = messages[nextCursor];
+    const timestamp = message.endedAt ?? isoToMs(message.createdAt);
+    if (timestamp === undefined || (inclusive ? timestamp > deadline : timestamp >= deadline)) break;
+    fragments.push(message);
+    nextCursor += 1;
+  }
+  return { fragments, nextCursor };
+}
+
+function coalesceAssistantFragments(fragments: ChatMessageRecord[]): ChatMessageRecord {
+  const first = fragments[0];
+  const last = fragments.at(-1) ?? first;
+  const content = fragments
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  const reasoning = fragments.reduce<string | undefined>(
+    (current, message) => appendReasoning(current, normalizedText(message.reasoning)),
+    undefined,
+  );
+  const steps = fragments.flatMap((message) => message.steps ?? []);
+  const startedAt = fragments
+    .map((message) => message.startedAt)
+    .find((value): value is number => value !== undefined);
+  const endedAt = [...fragments]
+    .reverse()
+    .map((message) => message.endedAt)
+    .find((value): value is number => value !== undefined);
+
+  return {
+    ...first,
+    content,
+    createdAt: last.createdAt,
+    reasoning,
+    steps: steps.length > 0 ? steps : undefined,
+    startedAt,
+    endedAt,
+  };
 }
 
 function tableColumns(db: DatabaseSync, tableName: string): Set<string> {

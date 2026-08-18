@@ -63,7 +63,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: null,
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962400,
+        timestamp: 1780308000,
       },
       {
         id: 2,
@@ -81,7 +81,7 @@ describe('Hermes history mapper', () => {
           },
         }]),
         tool_name: null,
-        timestamp: 1779962401,
+        timestamp: 1780308001,
       },
       {
         id: 3,
@@ -91,7 +91,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: 'call_1',
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962402,
+        timestamp: 1780308002,
       },
       {
         id: 4,
@@ -102,7 +102,7 @@ describe('Hermes history mapper', () => {
         tool_calls: null,
         tool_name: null,
         reasoning: 'I should search the contract first, then update the document.',
-        timestamp: 1779962403,
+        timestamp: 1780308003,
       },
       {
         id: 5,
@@ -112,7 +112,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: null,
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962404,
+        timestamp: 1780308004,
       },
     ], {
       hermesSessionId: 'hermes-session',
@@ -190,7 +190,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: null,
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962400,
+        timestamp: 1780308000,
       },
       {
         id: 2,
@@ -203,7 +203,7 @@ describe('Hermes history mapper', () => {
           function: { name: 'mcp_verso_propose_message_draft', arguments: '{}' },
         }]),
         tool_name: null,
-        timestamp: 1779962401,
+        timestamp: 1780308001,
       },
       {
         id: 3,
@@ -213,7 +213,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: 'call_draft',
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962402,
+        timestamp: 1780308002,
       },
       {
         id: 4,
@@ -223,7 +223,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: null,
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962403,
+        timestamp: 1780308003,
       },
       {
         id: 5,
@@ -236,7 +236,7 @@ describe('Hermes history mapper', () => {
           function: { name: 'mcp_verso_gmail_send_email', arguments: '{}' },
         }]),
         tool_name: null,
-        timestamp: 1779962410,
+        timestamp: 1780308010,
       },
       {
         id: 6,
@@ -246,7 +246,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: 'call_send',
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962415,
+        timestamp: 1780308015,
       },
       {
         id: 7,
@@ -256,7 +256,7 @@ describe('Hermes history mapper', () => {
         tool_call_id: null,
         tool_calls: null,
         tool_name: null,
-        timestamp: 1779962420,
+        timestamp: 1780308020,
       },
     ], {
       hermesSessionId: 'hermes-session',
@@ -282,5 +282,124 @@ describe('Hermes history mapper', () => {
       startedAt: Date.parse('2026-06-01T10:00:10.000Z'),
       endedAt: Date.parse('2026-06-01T10:00:20.000Z'),
     });
+  });
+
+  it('coalesces many Hermes assistant fragments into one saved assistant turn', () => {
+    const localMessages: ChatMessageRecord[] = [
+      {
+        id: 'local-user',
+        sessionId: 'verso-session',
+        role: 'user',
+        content: 'Research the account',
+        createdAt: '2026-06-01T10:00:00.000Z',
+      },
+      {
+        id: 'local-assistant',
+        sessionId: 'verso-session',
+        role: 'assistant',
+        content: 'Research complete.',
+        createdAt: '2026-06-01T10:00:10.000Z',
+      },
+    ];
+
+    const messages = mapHermesRowsToChatMessages([
+      {
+        id: 1,
+        session_id: 'hermes-session',
+        role: 'user',
+        content: 'Research the account',
+        tool_call_id: null,
+        tool_calls: null,
+        tool_name: null,
+        timestamp: 1780308000,
+      },
+      {
+        id: 2,
+        session_id: 'hermes-session',
+        role: 'assistant',
+        content: 'I will research this.',
+        tool_call_id: null,
+        tool_calls: null,
+        tool_name: null,
+        timestamp: 1780308001,
+      },
+      {
+        id: 3,
+        session_id: 'hermes-session',
+        role: 'assistant',
+        content: '',
+        tool_call_id: null,
+        tool_calls: JSON.stringify([{
+          call_id: 'search_call',
+          function: { name: 'search_contacts', arguments: '{}' },
+        }]),
+        tool_name: null,
+        timestamp: 1780308002,
+      },
+      {
+        id: 4,
+        session_id: 'hermes-session',
+        role: 'tool',
+        content: JSON.stringify({ found: true }),
+        tool_call_id: 'search_call',
+        tool_calls: null,
+        tool_name: null,
+        timestamp: 1780308003,
+      },
+      {
+        id: 5,
+        session_id: 'hermes-session',
+        role: 'assistant',
+        content: 'I found the contact.',
+        tool_call_id: null,
+        tool_calls: null,
+        tool_name: null,
+        timestamp: 1780308004,
+      },
+      {
+        id: 6,
+        session_id: 'hermes-session',
+        role: 'assistant',
+        content: '',
+        tool_call_id: null,
+        tool_calls: JSON.stringify([{
+          call_id: 'wallet_call',
+          function: { name: 'lookup_wallet', arguments: '{}' },
+        }]),
+        tool_name: null,
+        timestamp: 1780308005,
+      },
+      {
+        id: 7,
+        session_id: 'hermes-session',
+        role: 'tool',
+        content: JSON.stringify({ wallet: 'available' }),
+        tool_call_id: 'wallet_call',
+        tool_calls: null,
+        tool_name: null,
+        timestamp: 1780308006,
+      },
+      {
+        id: 8,
+        session_id: 'hermes-session',
+        role: 'assistant',
+        content: 'Research complete.',
+        tool_call_id: null,
+        tool_calls: null,
+        tool_name: null,
+        timestamp: 1780308007,
+      },
+    ], {
+      hermesSessionId: 'hermes-session',
+      versoSessionId: 'verso-session',
+      localMessages,
+    });
+
+    expect(messages.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'Research the account'],
+      ['assistant', 'Research complete.'],
+    ]);
+    expect(messages[1].steps?.filter((step) => step.type === 'tool').map((step) => step.name))
+      .toEqual(['search_contacts', 'lookup_wallet']);
   });
 });

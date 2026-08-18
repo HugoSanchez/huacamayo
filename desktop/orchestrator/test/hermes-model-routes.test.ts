@@ -3,16 +3,16 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
-import { HermesSupervisor } from '../src/http/hermes-supervisor.ts';
+import { HermesManagedProfile } from '../src/http/hermes-managed-profile.ts';
+import { CustomConnectorsStore } from '../src/http/custom-connectors-store.ts';
 import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS } from '../src/http/model-catalog.ts';
 
 /**
- * configureModelRoutes reconciles api_server model_routes with the
- * credentials on disk so per-request model switching re-resolves the right
- * provider. Same harness style as hermes-managed-config.test.ts: point
- * HERMES_HOME at a temp template and drive ensureManagedHermesHome.
+ * The managed-profile transaction reconciles api_server model_routes with
+ * the credentials on disk so per-request model switching re-resolves the
+ * right provider. It is tested directly, without process-supervisor setup.
  */
-describe('HermesSupervisor: model_routes reconciliation', () => {
+describe('HermesManagedProfile: model_routes reconciliation', () => {
   let tempRoot = '';
   let managedHome = '';
   let envSnapshot: Record<string, string | undefined> = {};
@@ -23,11 +23,9 @@ describe('HermesSupervisor: model_routes reconciliation', () => {
     envSnapshot = {
       HERMES_HOME: process.env.HERMES_HOME,
       VERSO_HERMES_GATEWAY_URL: process.env.VERSO_HERMES_GATEWAY_URL,
-      VERSO_HERMES_COMMAND: process.env.VERSO_HERMES_COMMAND,
       VERSO_MEMORY_ENABLED: process.env.VERSO_MEMORY_ENABLED,
     };
     process.env.HERMES_HOME = tempRoot;
-    process.env.VERSO_HERMES_COMMAND = '/bin/true';
     delete process.env.VERSO_HERMES_GATEWAY_URL;
     delete process.env.VERSO_MEMORY_ENABLED;
 
@@ -53,9 +51,14 @@ describe('HermesSupervisor: model_routes reconciliation', () => {
   });
 
   function seed(): void {
-    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
-    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
-    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+    const profile = new HermesManagedProfile({
+      templateHome: tempRoot,
+      managedHome,
+      runtimeMode: 'managed',
+      memoryToolsMode: 'full',
+      customConnectorsStore: new CustomConnectorsStore(path.join(tempRoot, 'custom-connectors.json')),
+    });
+    profile.prepare('http://127.0.0.1:62000');
   }
 
   function managedRoutes(): Record<string, unknown> | undefined {

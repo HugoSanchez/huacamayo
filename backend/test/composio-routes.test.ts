@@ -33,7 +33,9 @@ class StubVerifier implements PrivyAuthVerifier {
 class StubComposioService extends ComposioService {
   capturedUserId: string | null = null;
   capturedDeletedConnectionId: string | null = null;
+  capturedRequestId: string | null = null;
   capturedCallbackUrl: string | null = null;
+  requestOwnerUserId = 'did:privy:composio-test';
   constructor() { super('test-key'); }
 
   override get configured(): boolean { return true; }
@@ -72,6 +74,24 @@ class StubComposioService extends ComposioService {
   override async deleteConnection(userId: string, connectedAccountId: string): Promise<void> {
     this.capturedUserId = userId;
     this.capturedDeletedConnectionId = connectedAccountId;
+  }
+
+  override async getRequest(userId: string, requestId: string) {
+    this.capturedUserId = userId;
+    this.capturedRequestId = requestId;
+    if (userId !== this.requestOwnerUserId) {
+      throw new ComposioServiceError(404, `Connection request "${requestId}" not found.`);
+    }
+    return {
+      id: requestId,
+      toolkitSlug: 'gmail',
+      toolkitName: 'Gmail',
+      logoUrl: null,
+      status: 'pending' as const,
+      redirectUrl: null,
+      connectedAccountId: null,
+      errorMessage: null,
+    };
   }
 
   override async searchTools(userId: string, query: string, _toolkits?: string[]): Promise<BridgeSearchToolResult[]> {
@@ -241,6 +261,36 @@ describe('Composio routes', () => {
     expect(res.statusCode).toBe(201);
     expect(capturedToolkit).toBe('gmail');
     expect(composio.capturedUserId).toBe(s.userId);
+  });
+
+  test('GET connection request passes the authenticated user and returns their request', async () => {
+    s = await setup();
+    s.composio.requestOwnerUserId = s.userId;
+    const res = await s.app.inject({
+      method: 'GET',
+      url: '/v1/composio/connections/requests/req_owned',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().request.id).toBe('req_owned');
+    expect(s.composio.capturedUserId).toBe(s.userId);
+    expect(s.composio.capturedRequestId).toBe('req_owned');
+  });
+
+  test('GET connection request returns non-enumerating 404 for another user request', async () => {
+    s = await setup();
+    s.composio.requestOwnerUserId = 'did:privy:another-user';
+    const res = await s.app.inject({
+      method: 'GET',
+      url: '/v1/composio/connections/requests/req_foreign',
+      headers: { authorization: `Bearer ${s.sessionToken}` },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({
+      error: 'composio_error',
+      message: 'Connection request "req_foreign" not found.',
+    });
+    expect(s.composio.capturedUserId).toBe(s.userId);
   });
 
   test('POST /v1/composio/connections/request validates callbackUrl at the backend boundary', async () => {

@@ -61,9 +61,9 @@ export async function registerComposioRoutes(app: FastifyInstance, deps: Composi
 
   app.get('/v1/composio/connections/requests/:id', async (request, reply) => {
     try {
-      await deps.authService.authenticateAppSession(extractBearerToken(request));
+      const auth = await deps.authService.authenticateAppSession(extractBearerToken(request));
       const { id } = request.params as { id: string };
-      const result = await deps.composioService.getRequest(id);
+      const result = await deps.composioService.getRequest(auth.user.id, id);
       return reply.code(200).send({ request: result });
     } catch (error) {
       return handleError(reply, error);

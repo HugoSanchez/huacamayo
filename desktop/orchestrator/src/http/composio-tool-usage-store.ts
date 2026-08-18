@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { writeJsonFileAtomic } from './atomic-json-file.ts';
 
 export interface ComposioToolUsageInput {
   slug: string;
@@ -161,7 +162,7 @@ export class ComposioToolUsageStore {
       tools,
     };
 
-    writeJsonAtomic(manifestPath, manifest);
+    writeJsonFileAtomic(manifestPath, manifest);
     return manifest;
   }
 }
@@ -260,15 +261,5 @@ function parseJsonRecord(value: string): Record<string, unknown> | null {
       : null;
   } catch {
     return null;
-  }
-}
-
-function writeJsonAtomic(filePath: string, value: unknown): void {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.tmp`;
-  writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  renameSync(tmpPath, filePath);
-  if (existsSync(tmpPath)) {
-    rmSync(tmpPath, { force: true });
   }
 }

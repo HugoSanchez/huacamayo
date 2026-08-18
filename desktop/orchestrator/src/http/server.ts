@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import http from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
 import { ChatStore } from './chat-store.ts';
@@ -44,6 +43,10 @@ import { buildManagedAccountRoutes } from './managed-account.ts';
 import { AnthropicAuthService, CodexAuthService, buildModelAuthRoutes } from './model-auth.ts';
 import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS, VALID_CHAT_MODELS } from './model-catalog.ts';
 import { applyLocalStateIsolation, type LocalStateSnapshot } from './local-state.ts';
+import {
+  ComposioManifestCoordinator,
+  readComposioManifestSummary,
+} from './composio-manifest.ts';
 
 // Upper bound on how long Hermes' warm-up waits for the first native manifest
 // refresh. Applies only when apps are connected but the on-disk manifest is
@@ -143,70 +146,16 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     manifestPath: hermes.composioToolsManifestPath,
     getActiveToolkitSlugs: () => activeToolkitSlugs(connectionsStore),
   });
-  // The MCP bridge registers connected-app tools exactly once, when Hermes
-  // spawns it, from the manifest file as it exists at that instant. There is
-  // no generic search/execute fallback: a tool absent from that snapshot is
-  // unreachable — connections still show "active", so nothing else surfaces
-  // the breakage. Track which toolkits the bridge registered at spawn; when a
-  // successful refresh changes that set (app connected or disconnected, or a
-  // broken manifest recovering), restart Hermes so the bridge re-registers.
-  // Restarts are chained so overlapping refreshes can't race shutdown/spawn.
-  let registeredManifestToolkits: Set<string> | null = null;
-  let hermesRestartChain: Promise<void> = Promise.resolve();
-  const refreshComposioToolsManifest = (): Promise<void> => composioBridge
-    .refreshNativeToolManifest(activeToolkitSlugs(connectionsStore))
-    .then(() => {
-      const summary = readComposioManifestSummary(hermes.composioToolsManifestPath);
-      const activeCount = activeToolkitSlugs(connectionsStore).length;
-      if (summary.nonVersoToolCount === 0 && activeCount > 0) {
-        console.error(
-          `[composio-tools] manifest refresh succeeded but ${hermes.composioToolsManifestPath} has no connected-app tools while ${activeCount} toolkit(s) are active — the model's connected-app tool surface is broken`,
-        );
-        return;
-      }
-      if (registeredManifestToolkits === null) return; // Hermes not spawned yet; it will read this file
-      const current = new Set(summary.toolkitSlugs);
-      const registered = registeredManifestToolkits;
-      const changed = current.size !== registered.size
-        || [...current].some((slug) => !registered.has(slug));
-      if (!changed) return;
-      registeredManifestToolkits = current;
-      console.warn(
-        `[composio-tools] connected-app toolkits changed (now: ${[...current].sort().join(', ') || 'none'}); restarting Hermes so the MCP bridge re-registers native tools`,
-      );
-      hermesRestartChain = hermesRestartChain
-        .then(() => hermes.restart())
-        .catch((error: unknown) => {
-          // Keep identical refreshes coalesced while the restart is pending,
-          // but roll back on failure so the next refresh can retry it.
-          if (registeredManifestToolkits === current) {
-            registeredManifestToolkits = registered;
-          }
-          console.error(
-            '[composio-tools] Hermes restart after toolkit change failed:',
-            error instanceof Error ? error.message : String(error),
-          );
-        });
-    })
-    .catch((error) => {
-      console.warn(
-        '[composio-tools] native manifest refresh failed; writing learned-tools fallback:',
-        error instanceof Error ? error.message : String(error),
-      );
-      if (hasUsableComposioManifest(hermes.composioToolsManifestPath)) {
-        return;
-      }
-      composioToolUsage.writeManifest(
-        hermes.composioToolsManifestPath,
-        activeToolkitSlugs(connectionsStore),
-      );
-      const activeCount = activeToolkitSlugs(connectionsStore).length;
-      if (activeCount > 0 && !hasUsableComposioManifest(hermes.composioToolsManifestPath)) {
-        console.error(
-          `[composio-tools] manifest at ${hermes.composioToolsManifestPath} has no connected-app tools while ${activeCount} toolkit(s) are active — the model's connected-app tool surface is broken until a refresh succeeds`,
-        );
-      }
-    });
+  const composioManifest = new ComposioManifestCoordinator({
+    manifestPath: hermes.composioToolsManifestPath,
+    getActiveToolkitSlugs: () => activeToolkitSlugs(connectionsStore),
+    refreshNativeToolManifest: (toolkits) => composioBridge.refreshNativeToolManifest(toolkits),
+    writeFallbackManifest: (manifestPath, toolkits) => {
+      composioToolUsage.writeManifest(manifestPath, toolkits);
+    },
+    restartHermes: () => hermes.restart(),
+  });
+  const refreshComposioToolsManifest = () => composioManifest.refresh();
   const initialManifestRefresh = refreshComposioToolsManifest();
   const connections = new ConnectionsService(managedBackend, connectionsStore, refreshComposioToolsManifest);
   // Automated source ingestion (Gmail, Granola, Slack). Runs whenever memory
@@ -343,18 +292,13 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
       // arriving before the hold expires starts Hermes via ensureReady() and
       // is covered by the same path.
       void (async () => {
-        const needsManifestBeforeStart =
-          activeToolkitSlugs(connectionsStore).length > 0
-          && !hasUsableComposioManifest(hermes.composioToolsManifestPath);
-        if (needsManifestBeforeStart) {
+        if (composioManifest.needsManifestBeforeHermesStart()) {
           await Promise.race([
             initialManifestRefresh,
             new Promise((resolve) => setTimeout(resolve, STARTUP_MANIFEST_REFRESH_WAIT_MS)),
           ]);
         }
-        registeredManifestToolkits = new Set(
-          readComposioManifestSummary(hermes.composioToolsManifestPath).toolkitSlugs,
-        );
+        composioManifest.captureRegisteredManifest();
         hermes.prepare();
       })();
       // Warm the Codex status cache off the critical path: the first UI
@@ -384,66 +328,6 @@ function activeToolkitSlugs(store: ConnectionsStore): string[] {
   return store.listConnections()
     .filter((connection) => connection.status === 'active')
     .map((connection) => connection.toolkitSlug);
-}
-
-export interface ComposioManifestSummary {
-  exists: boolean;
-  valid: boolean;
-  toolCount: number;
-  nonVersoToolCount: number;
-  /** Distinct non-Verso toolkit slugs (lowercased, sorted). */
-  toolkitSlugs: string[];
-  generatedAt: string | null;
-}
-
-export function readComposioManifestSummary(manifestPath: string): ComposioManifestSummary {
-  const summary: ComposioManifestSummary = {
-    exists: false,
-    valid: false,
-    toolCount: 0,
-    nonVersoToolCount: 0,
-    toolkitSlugs: [],
-    generatedAt: null,
-  };
-  if (!existsSync(manifestPath)) return summary;
-  summary.exists = true;
-
-  try {
-    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-      version?: unknown;
-      generatedAt?: unknown;
-      tools?: unknown;
-    };
-    if (parsed.version !== 1 || !Array.isArray(parsed.tools)) return summary;
-    summary.valid = true;
-    summary.generatedAt = typeof parsed.generatedAt === 'string' ? parsed.generatedAt : null;
-    summary.toolCount = parsed.tools.length;
-    const toolkits = new Set<string>();
-    for (const tool of parsed.tools) {
-      if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue;
-      const toolkitSlug = (tool as Record<string, unknown>).toolkitSlug;
-      if (typeof toolkitSlug !== 'string') continue;
-      const normalized = toolkitSlug.trim().toLowerCase();
-      if (!normalized || normalized === 'verso') continue;
-      summary.nonVersoToolCount += 1;
-      toolkits.add(normalized);
-    }
-    summary.toolkitSlugs = [...toolkits].sort();
-    return summary;
-  } catch {
-    return summary;
-  }
-}
-
-/**
- * A manifest counts as usable only when it exposes at least one real
- * connected-app tool. Verso's own synthetic entries (propose_message_draft)
- * don't count: a draft-only manifest is exactly the degraded state a failed
- * refresh used to leave behind, and must never shadow a good manifest.
- */
-export function hasUsableComposioManifest(manifestPath: string): boolean {
-  const summary = readComposioManifestSummary(manifestPath);
-  return summary.valid && summary.nonVersoToolCount > 0;
 }
 
 /**
