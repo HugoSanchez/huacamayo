@@ -2,6 +2,7 @@ import 'dotenv/config';
 import http from 'node:http';
 import path from 'node:path';
 import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
+import { ChatRequestRegistry } from './chat-request-registry.ts';
 import { ChatStore } from './chat-store.ts';
 import { buildComposioBridgeRoutes } from './composio-bridge.ts';
 import { buildDraftsRoutes } from './drafts.ts';
@@ -57,6 +58,7 @@ const STARTUP_MANIFEST_REFRESH_WAIT_MS = 20_000;
 
 function buildRoutes(
   store: ChatStore,
+  chatRequests: ChatRequestRegistry,
   hermes: HermesSupervisor,
   memoryExtraction: MemoryExtractionScheduler,
   managedBackend: ManagedBackendClient,
@@ -79,7 +81,7 @@ function buildRoutes(
           cwd: process.cwd(),
           node: process.version,
         },
-        chat: buildChatDiagnostics(store, memoryExtraction),
+        chat: buildChatDiagnostics(store, chatRequests, memoryExtraction),
         hermes: await hermes.getStatus(500),
         memory: memoryProvider.diagnostics(),
         managed: await managedBackend.getAccount(),
@@ -102,6 +104,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
 }> {
   const localState = applyLocalStateIsolation();
   const store = new ChatStore();
+  const chatRequests = new ChatRequestRegistry();
   const runtimeMode = readRuntimeMode();
   const managedBackend = new ManagedBackendClient();
   const customConnectorsStore = new CustomConnectorsStore();
@@ -206,7 +209,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     async () => (await codexAuth.getStatus()).connected,
   );
   const routes = [
-    ...buildRoutes(store, hermes, memoryExtraction, managedBackend, composioBridge, localState, memoryProvider, connectionsStore),
+    ...buildRoutes(store, chatRequests, hermes, memoryExtraction, managedBackend, composioBridge, localState, memoryProvider, connectionsStore),
     ...buildMemoryRoutes(memoryProvider),
     ...buildComposioBridgeRoutes(composioBridge),
     ...buildDraftsRoutes(composioBridge, store),
@@ -228,7 +231,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
     ...buildModelAuthRoutes(codexAuth, anthropicAuth),
-    ...buildChatRoutes(store, hermes, managedBackend, memoryExtraction, async () => {
+    ...buildChatRoutes(store, hermes, managedBackend, chatRequests, memoryExtraction, async () => {
       const codex = await codexAuth.getStatus();
       if (codex.connected) return CODEX_CHAT_MODELS[0];
       const anthropic = await anthropicAuth.getStatus();
@@ -264,11 +267,13 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     return cleanupPromise;
   };
   server.on('close', () => {
+    chatRequests.cancelAll();
     void cleanup();
   });
 
   const port = opts.port ?? parseInt(process.env.PORT || '0', 10);
   const close = async () => {
+    chatRequests.cancelAll();
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });

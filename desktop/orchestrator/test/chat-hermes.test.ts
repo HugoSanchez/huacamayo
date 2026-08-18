@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import { startServer } from '../src/http/server.ts';
 import { makeMinimalPdf } from './fixtures/documents.ts';
@@ -10,6 +10,7 @@ describe('Hermes Chat Streaming', () => {
   let gatewayPort = 0;
   let requestLog: Array<Record<string, unknown>> = [];
   let breakConversationChain = false;
+  let holdResponseStream = false;
   let responseCounter = 0;
   let sessionCounter = 0;
   let messageCounter = 0;
@@ -27,6 +28,7 @@ describe('Hermes Chat Streaming', () => {
   beforeEach(() => {
     requestLog = [];
     breakConversationChain = false;
+    holdResponseStream = false;
     responseCounter = 0;
     sessionCounter = 0;
     messageCounter = 0;
@@ -67,6 +69,17 @@ describe('Hermes Chat Streaming', () => {
         req.on('end', () => {
           const parsed = JSON.parse(body) as Record<string, unknown>;
           requestLog.push(parsed);
+
+          if (holdResponseStream) {
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+              'X-Hermes-Session-Id': 'sess-held',
+            });
+            res.flushHeaders();
+            return;
+          }
 
           const conversation = typeof parsed.conversation === 'string' ? parsed.conversation : null;
           const explicitHistory = Array.isArray(parsed.conversation_history)
@@ -252,6 +265,44 @@ describe('Hermes Chat Streaming', () => {
     expect(requestLog[0].conversation).toBe(sessionId);
     expect(requestLog[0].instructions).toBeUndefined();
     expect(requestLog[0].conversation_history).toBeUndefined();
+  });
+
+  it('rejects a second send for the same session and keeps cancellation reserved until unwind', async () => {
+    const created = await fetchJson('/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Concurrent send', model: 'gpt-5.4' }),
+    });
+    const sessionId = created.body.session.id as string;
+    holdResponseStream = true;
+
+    const firstPromise = fetch(url(`/chat/sessions/${sessionId}/messages`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'First message' }),
+    });
+    await vi.waitFor(() => expect(requestLog).toHaveLength(1));
+
+    const duplicate = await fetchJson(`/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'Duplicate message' }),
+    });
+    expect(duplicate).toMatchObject({
+      status: 409,
+      body: { error: 'conflict' },
+    });
+
+    const cancelled = await fetchJson(`/chat/sessions/${sessionId}/cancel`, { method: 'POST' });
+    expect(cancelled.body.status).toBe('stopped');
+    const first = await firstPromise;
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain('"reason":"aborted"');
+
+    const messages = await fetchJson(`/chat/sessions/${sessionId}/messages`);
+    expect(messages.body.messages).toHaveLength(1);
+    expect(messages.body.messages[0].content).toBe('First message');
+    expect(requestLog).toHaveLength(1);
   });
 
   it('uses the stored session model when a message does not repeat it', async () => {
