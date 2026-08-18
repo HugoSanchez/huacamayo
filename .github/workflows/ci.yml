@@ -34,9 +34,9 @@ jobs:
         run: npm test
 
   # Boots Hermes at the pinned ref with all Verso runtime patches applied and
-  # requires a streaming /v1/responses to answer 200 + SSE — the same check
-  # scripts/smoke-test-hermes-bundle.sh runs against the macOS bundle, minus
-  # the bundled interpreter. Catches the failure class that shipped in 1.0.15:
+  # runs the shared assertions from scripts/lib/smoke-gateway-checks.sh — the
+  # same checks scripts/smoke-test-hermes-bundle.sh runs against the macOS
+  # bundle, minus the bundled interpreter. Catches the failure class of 1.0.15:
   # a regenerated patch that applies cleanly and byte-compiles but lands on
   # the wrong call site and crashes every chat request at runtime.
   hermes-runtime-smoke:
@@ -84,7 +84,7 @@ jobs:
           pip install -q "./hermes-src[${{ steps.pin.outputs.extras }}]" ${{ steps.pin.outputs.pins }}
           hermes --version || true
 
-      - name: Boot gateway and smoke a streaming /v1/responses
+      - name: Boot gateway and run the shared smoke assertions
         run: |
           set -euo pipefail
           export HERMES_HOME="$RUNNER_TEMP/hermes-home"
@@ -96,49 +96,11 @@ jobs:
 
           hermes gateway run > "$RUNNER_TEMP/gateway.log" 2>&1 &
           GW=$!
+          trap 'kill "$GW" 2>/dev/null || true' EXIT
 
-          deadline=$(( $(date +%s) + 120 ))
-          until curl -sf -o /dev/null -H "Authorization: Bearer $API_SERVER_KEY" "http://127.0.0.1:18977/v1/models"; do
-            if ! kill -0 "$GW" 2>/dev/null; then
-              echo "::error::gateway died during startup"
-              tail -40 "$RUNNER_TEMP/gateway.log"
-              exit 1
-            fi
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::gateway not ready within 120s"
-              tail -40 "$RUNNER_TEMP/gateway.log"
-              exit 1
-            fi
-            sleep 2
-          done
-
-          body='{"input":"smoke test","conversation":"ci-smoke-1","truncation":"auto","stream":true,"store":true,"model":"gpt-5.5","reasoning":{"effort":"low"}}'
-          status="$(curl -s -N --max-time 60 -o response.txt -w "%{http_code}" \
-            -X POST "http://127.0.0.1:18977/v1/responses" \
-            -H "Authorization: Bearer $API_SERVER_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Accept: text/event-stream" \
-            -d "$body")"
-
-          kill "$GW" 2>/dev/null || true
-
-          if [ "$status" != "200" ]; then
-            echo "::error::/v1/responses returned HTTP $status (expected 200 + SSE)"
-            head -5 response.txt
-            echo "---- errors.log ----"
-            tail -40 "$HERMES_HOME/logs/errors.log" 2>/dev/null || tail -40 "$RUNNER_TEMP/gateway.log"
-            exit 1
-          fi
-          if ! grep -q "^event: " response.txt; then
-            echo "::error::HTTP 200 but no SSE events in response"
-            head -5 response.txt
-            exit 1
-          fi
-          if ! grep -Eq "^event: response\.(completed|failed)" response.txt; then
-            echo "::error::SSE stream never reached a terminal event"
-            grep "^event: " response.txt
-            exit 1
-          fi
-          terminal="$(grep -Eo '^event: response\.(completed|failed)' response.txt | tail -1)"
-          echo "PASS: HTTP 200, SSE stream terminated with ${terminal#event: }"
-          echo "(response.failed is expected — CI has no model credentials; the handler is healthy either way)"
+          source scripts/lib/smoke-gateway-checks.sh
+          SMOKE_PORT=18977 SMOKE_API_KEY="$API_SERVER_KEY" SMOKE_PID="$GW"
+          SMOKE_LOG="$RUNNER_TEMP/gateway.log" SMOKE_HOME="$HERMES_HOME" SMOKE_TMP="$RUNNER_TEMP"
+          smoke_wait_for_gateway 120
+          smoke_assert_streaming_responses "ci-smoke-1"
+          smoke_assert_mcp_oauth_routes

@@ -45,4 +45,4 @@ verso-edkey.txt
 
 # Downloaded local embedding-model cache. It is rebuilt/downloaded by the
 # runtime and must not be committed with application source.
-models/
+/models/

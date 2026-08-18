@@ -31,6 +31,10 @@ cd "$ROOT"
 CHAT_UI="desktop/chat-ui/src"
 CONTENT_VIEW="desktop/macos/ContentView.swift"
 
+# Guard against silently scanning nothing if these paths ever move.
+[ -d "$CHAT_UI/styles" ] || { echo "style-guard: missing $CHAT_UI/styles" >&2; exit 1; }
+[ -f "$CONTENT_VIEW" ] || { echo "style-guard: missing $CONTENT_VIEW" >&2; exit 1; }
+
 # A color literal: #hex (3/4/6/8 digits), rgb(, rgba(, or hsl(/hsla(.
 COLOR_RE='#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\('
 
