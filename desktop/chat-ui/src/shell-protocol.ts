@@ -1,17 +1,13 @@
 // Wire format between the Swift shell and the chat-ui WebView.
 //
-// Today the IPC is a tangle of ~14 named CustomEvents (Swift → JS) and
-// per-type `chatBridge.postMessage` discriminators (JS → Swift). This file
-// is the first step toward consolidating that into three channels:
+// All product-level shell IPC uses three channels:
 //
 //   • Swift → JS: `verso:shell-state` carrying a full `ShellState` snapshot.
 //   • Swift → JS: `verso:shell-command` for transient commands.
 //   • JS → Swift: `chatBridge.postMessage({type: 'action', action})` with a
 //     single discriminated `ShellAction` payload.
 //
-// Step 1 just defines the shapes — no behavior change. See
-// `.context/plans/session-state-consolidation.md` for the full plan and
-// `desktop/macos/ChatWebView.swift` for the matching Swift side.
+// `desktop/macos/ChatWebView.swift` contains the matching Swift definitions.
 
 import type { ChatSessionSummary } from './types';
 
@@ -31,10 +27,10 @@ export type ShellCommand =
   | { kind: 'open-skills-catalog' }
   | { kind: 'close-skills-catalog' }
   | { kind: 'open-cron'; id: string }
-  | { kind: 'open-settings' };
+  | { kind: 'open-settings' }
+  | { kind: 'focus-chat' };
 
-/// Action sent from JS → Swift via the chatBridge. One discriminated union
-/// will eventually replace the per-type `*Changed` messages we have today.
+/// Action sent from JS → Swift via the chatBridge.
 export type ShellAction =
   | { kind: 'select-session'; id: string | null }
   | { kind: 'create-session' }
@@ -56,6 +52,9 @@ export type ShellAction =
   // become actively-viewed again. Chat-ui owns the rule because only it
   // knows full overlay state.
   | { kind: 'session-unread'; id: string; unread: boolean }
+  | { kind: 'crons-changed' }
+  | { kind: 'connections-changed' }
+  | { kind: 'skills-changed' }
   | { kind: 'open-external-url'; url: string }
   | { kind: 'sign-out' }
   // User dismissed the catalog via the chat-ui's close button (rather

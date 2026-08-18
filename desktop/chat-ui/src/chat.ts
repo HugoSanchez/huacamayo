@@ -13,6 +13,7 @@ import type {
   StoredChatMessage,
   ToolkitView,
 } from './types';
+import { postShellAction } from './shell-bridge';
 
 let sidecarPort: number | null = null;
 let sidecarToken: string | null = null;
@@ -26,12 +27,12 @@ let sidecarToken: string | null = null;
 // via `postShellAction` instead, which Swift's `handleShellAction` routes
 // through the consolidated channel. Cron/skill mutations still use the
 // lightweight refresh bridge because Swift owns those sidebar collections.
-function notifyHost(type: 'cronsChanged' | 'skillsChanged'): void {
-  window.webkit?.messageHandlers?.chatBridge?.postMessage({ type });
+function notifyHost(kind: 'crons-changed' | 'skills-changed'): void {
+  postShellAction({ kind });
 }
 
 function notifyConnectionsChanged(): void {
-  window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'connectionsChanged' });
+  postShellAction({ kind: 'connections-changed' });
 }
 
 export function setSidecarPort(port: number) {
@@ -345,7 +346,7 @@ export async function installHubSkill(identifier: string): Promise<HubSkillInsta
     'Failed to install hub skill',
     { method: 'POST' },
   );
-  notifyHost('skillsChanged');
+  notifyHost('skills-changed');
   return body;
 }
 
@@ -355,7 +356,7 @@ export async function toggleSkill(slug: string, enabled: boolean): Promise<Skill
     'Failed to toggle skill',
     jsonInit('POST', { enabled }),
   );
-  notifyHost('skillsChanged');
+  notifyHost('skills-changed');
   return body.skill;
 }
 
@@ -441,13 +442,13 @@ export async function patchCron(id: string, payload: Partial<{
     'Failed to update cron job',
     jsonInit('PATCH', payload),
   );
-  notifyHost('cronsChanged');
+  notifyHost('crons-changed');
   return body.cron;
 }
 
 export async function deleteCron(id: string): Promise<void> {
   await requestJson<void>(`/crons/${encodeURIComponent(id)}`, 'Failed to delete cron job', { method: 'DELETE' });
-  notifyHost('cronsChanged');
+  notifyHost('crons-changed');
 }
 
 export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Promise<import('./types').CronJobView> {
@@ -456,7 +457,7 @@ export async function cronAction(id: string, op: 'pause' | 'resume' | 'run'): Pr
     `Failed to ${op} cron job`,
     { method: 'POST' },
   );
-  notifyHost('cronsChanged');
+  notifyHost('crons-changed');
   return body.cron;
 }
 
@@ -466,7 +467,7 @@ export async function pinSkill(slug: string, pinned: boolean): Promise<SkillSumm
     'Failed to pin skill',
     jsonInit('POST', { pinned }),
   );
-  notifyHost('skillsChanged');
+  notifyHost('skills-changed');
   return body.skill;
 }
 
@@ -496,9 +497,8 @@ export function openCustomConnectorAuth(connectorId: string): void {
 }
 
 export function openExternalUrl(url: string): void {
-  const handler = window.webkit?.messageHandlers?.chatBridge;
-  if (handler) {
-    handler.postMessage({ type: 'openExternalUrl', url });
+  if (window.webkit?.messageHandlers?.chatBridge) {
+    postShellAction({ kind: 'open-external-url', url });
     return;
   }
 

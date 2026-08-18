@@ -4,6 +4,13 @@ import path from 'node:path';
 
 const port = parseInt(process.env.API_SERVER_PORT || process.env.PORT || '8642', 10);
 const host = process.env.API_SERVER_HOST || process.env.HOST || '127.0.0.1';
+const portConflictOnceFile = process.env.FAKE_HERMES_PORT_CONFLICT_ONCE_FILE;
+
+if (portConflictOnceFile && !existsSync(portConflictOnceFile)) {
+  writeFileSync(portConflictOnceFile, String(port), 'utf8');
+  console.error(`ERROR gateway.run: api_server: Port ${port} already in use`);
+  process.exit(0);
+}
 
 let responseCounter = 0;
 let sessionCounter = 0;

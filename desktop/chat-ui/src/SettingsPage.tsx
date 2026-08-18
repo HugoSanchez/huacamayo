@@ -14,6 +14,7 @@ import {
   type IngestionSourceView,
 } from './chat';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
+import { postShellAction } from './shell-bridge';
 
 interface ManagedAccountView {
   backend: {
@@ -106,7 +107,7 @@ export function SettingsPage({ onBack }: Props) {
       }
     }
     // Notify the macOS shell so it clears Keychain and switches to SignInView.
-    window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'signOut' });
+    postShellAction({ kind: 'sign-out' });
     setIsSigningOut(false);
   }
 

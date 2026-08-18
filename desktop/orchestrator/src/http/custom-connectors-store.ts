@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readJsonFileOr, writeJsonFileAtomic } from './atomic-json-file.ts';
 
 export type CustomConnectorAuth = 'none' | 'bearer' | 'oauth';
 export type CustomConnectorTransport = 'http' | 'sse';
@@ -94,20 +94,20 @@ export class CustomConnectorsStore {
   }
 
   private load(): StoreShape {
-    if (!existsSync(this.storePath)) return { connectors: [] };
-    try {
-      const parsed = JSON.parse(readFileSync(this.storePath, 'utf8')) as Partial<StoreShape>;
-      return { connectors: Array.isArray(parsed.connectors) ? parsed.connectors.filter(isRecord) : [] };
-    } catch {
-      return { connectors: [] };
-    }
+    return readJsonFileOr(
+      this.storePath,
+      (value) => {
+        const parsed = value && typeof value === 'object' && !Array.isArray(value)
+          ? value as Partial<StoreShape>
+          : {};
+        return { connectors: Array.isArray(parsed.connectors) ? parsed.connectors.filter(isRecord) : [] };
+      },
+      () => ({ connectors: [] }),
+    );
   }
 
   private save(): void {
-    mkdirSync(path.dirname(this.storePath), { recursive: true });
-    const tmpPath = `${this.storePath}.${process.pid}.tmp`;
-    writeFileSync(tmpPath, `${JSON.stringify(this.state, null, 2)}\n`, 'utf8');
-    renameSync(tmpPath, this.storePath);
+    writeJsonFileAtomic(this.storePath, this.state);
   }
 }
 

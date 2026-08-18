@@ -27,7 +27,7 @@ final class SidecarManager: ObservableObject {
     private var launchGeneration = 0
     private var restartTask: Task<Void, Never>?
     private var restartAttempts = 0
-    private let maxRestartAttempts = 8
+    private let restartPolicy = SidecarRestartPolicy.standard
     private let logger = Logger(subsystem: "com.verso.app", category: "Sidecar")
 
     struct ManagedAccountSnapshot: Equatable, Decodable {
@@ -392,13 +392,12 @@ final class SidecarManager: ObservableObject {
     /// explicitly, we never restart.
     private func scheduleRestart() {
         guard !stopRequested else { return }
-        guard restartAttempts < maxRestartAttempts else {
-            logger.error("Sidecar restart attempts exhausted (\(self.maxRestartAttempts)). Giving up.")
+        guard restartAttempts < restartPolicy.maximumAttempts else {
+            logger.error("Sidecar restart attempts exhausted (\(self.restartPolicy.maximumAttempts)). Giving up.")
             return
         }
         restartAttempts += 1
-        // 0.4, 0.8, 1.6, 3.2, ... capped at 10s.
-        let delay = min(pow(2.0, Double(restartAttempts - 1)) * 0.4, 10.0)
+        guard let delay = restartPolicy.delay(forAttempt: restartAttempts) else { return }
         logger.info("Restarting sidecar (attempt \(self.restartAttempts)) in \(delay, format: .fixed(precision: 2))s")
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(delay))
@@ -414,12 +413,19 @@ final class SidecarManager: ObservableObject {
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
 
-        let serverDir = Self.orchestratorPath()
+        let serverDir = SidecarRuntimeResolver.orchestratorPath(
+            environment: ProcessInfo.processInfo.environment,
+            bundleResourcePath: Bundle.main.resourcePath,
+            currentDirectory: FileManager.default.currentDirectoryPath,
+            sourceFilePath: #filePath
+        )
         guard FileManager.default.fileExists(atPath: serverDir) else {
             throw SidecarError.directoryNotFound(serverDir)
         }
 
-        guard let nodePath = Self.nodePath() else {
+        guard let nodePath = SidecarRuntimeResolver.nodePath(
+            bundleResourcePath: Bundle.main.resourcePath
+        ) else {
             throw SidecarError.executableNotFound("node")
         }
 
@@ -454,12 +460,25 @@ final class SidecarManager: ObservableObject {
         if env["VERSO_BACKEND_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
             env["VERSO_BACKEND_URL"] = "https://verso-backend-2lg3.onrender.com"
         }
-        // Release builds also point the orchestrator at the bundled Python /
-        // Hermes / wheels so it can build the user's venv from offline files
-        // on first launch — no `brew install python` and no PyPI access
-        // required. Debug builds leave these unset so HermesSupervisor falls
-        // back to the developer's existing ~/.hermes install.
-        Self.applyBundledRuntimeEnv(&env)
+        // Release builds use runtime components from app Resources. Debug
+        // builds accept the same layout or fall back to desktop/runtime-bundles
+        // so local launches exercise the packaged Python and Hermes paths.
+        #if DEBUG
+        let allowDevelopmentRuntime = true
+        #else
+        let allowDevelopmentRuntime = false
+        #endif
+        let bundleRoot = SidecarRuntimeResolver.bundleRoot(
+            bundleResourcePath: Bundle.main.resourcePath,
+            sourceFilePath: #filePath,
+            allowDevelopmentFallback: allowDevelopmentRuntime
+        )
+        SidecarRuntimeResolver.applyBundledRuntimeEnvironment(
+            &env,
+            bundleRoot: bundleRoot,
+            homeDirectory: home,
+            hermesHomeOverride: ProcessInfo.processInfo.environment["VERSO_HERMES_HOME"]
+        )
         if let launchManagedSession, !launchManagedSession.isExpired {
             env["VERSO_MANAGED_SESSION_TOKEN"] = launchManagedSession.token
             env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = launchManagedSession.expiresAt
@@ -505,7 +524,7 @@ final class SidecarManager: ObservableObject {
         // failure envelopes (`{"status":"error", ...}`) the server emits
         // before exiting. Once the sidecar reaches "ready" we stop buffering
         // and only forward to the log file.
-        let stderrBuffer = StderrBuffer()
+        let stderrBuffer = SidecarStartupErrorBuffer()
         let stderrReader = stderrPipe.fileHandleForReading
         stderrReader.readabilityHandler = { [weak self, weak logHandle] handle in
             let chunk = handle.availableData
@@ -525,7 +544,7 @@ final class SidecarManager: ObservableObject {
             // satisfy Swift's concurrency checker. The holder also makes the
             // resume call idempotent.
             let resolver = StartupResolver(continuation: continuation)
-            let stdoutAccumulator = StdoutAccumulator()
+            let startupParser = SynchronizedSidecarStartupParser()
 
             process.terminationHandler = { [weak self, weak logHandle] terminatedProcess in
                 let reason = Self.describeTermination(terminatedProcess)
@@ -544,8 +563,7 @@ final class SidecarManager: ObservableObject {
                     }
 
                     if !resolver.isResolved() {
-                        let stderrText = stderrBuffer.text()
-                        if let startup = Self.parseStartupError(stderrText) {
+                        if let startup = stderrBuffer.latestFailure() {
                             resolver.resume(.failure(SidecarError.startupFailed(startup)))
                         } else {
                             resolver.resume(.failure(SidecarError.unexpectedExit))
@@ -567,8 +585,18 @@ final class SidecarManager: ObservableObject {
                 let chunk = handle.availableData
                 if chunk.isEmpty {
                     if !resolver.isResolved() {
-                        let stderrText = stderrBuffer.text()
-                        if let startup = Self.parseStartupError(stderrText) {
+                        for event in startupParser.finish() {
+                            switch event {
+                            case .ready(let port):
+                                stderrBuffer.clear()
+                                resolver.resume(.success(port))
+                                return
+                            case .failure(let failure):
+                                resolver.resume(.failure(SidecarError.startupFailed(failure)))
+                                return
+                            }
+                        }
+                        if let startup = stderrBuffer.latestFailure() {
                             resolver.resume(.failure(SidecarError.startupFailed(startup)))
                         } else {
                             resolver.resume(.failure(SidecarError.unexpectedExit))
@@ -584,24 +612,14 @@ final class SidecarManager: ObservableObject {
 
                 if resolver.isResolved() { return }
 
-                let text = stdoutAccumulator.appendAndDecode(chunk)
-                for line in text.split(separator: "\n") {
-                    guard let jsonData = line.data(using: .utf8),
-                          let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                          let status = obj["status"] as? String else { continue }
-                    if status == "ready", let port = obj["port"] as? Int {
+                for event in startupParser.append(chunk) {
+                    switch event {
+                    case .ready(let port):
                         // Free the startup buffer; from here on stderr only flows to the log file.
                         stderrBuffer.clear()
                         resolver.resume(.success(port))
                         return
-                    }
-                    if status == "error" {
-                        let failure = SidecarStartupFailure(
-                            code: obj["code"] as? String ?? "unknown",
-                            message: obj["message"] as? String ?? "Sidecar failed to start",
-                            recoverable: obj["recoverable"] as? Bool ?? false,
-                            details: obj["details"] as? String
-                        )
+                    case .failure(let failure):
                         resolver.resume(.failure(SidecarError.startupFailed(failure)))
                         return
                     }
@@ -674,217 +692,6 @@ final class SidecarManager: ObservableObject {
         return formatter.string(from: Date())
     }
 
-    nonisolated private static func parseStartupError(_ stderrText: String) -> SidecarStartupFailure? {
-        let lines = stderrText
-            .split(whereSeparator: \.isNewline)
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        for line in lines.reversed() {
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let status = obj["status"] as? String,
-                  status == "error" else { continue }
-
-            return SidecarStartupFailure(
-                code: obj["code"] as? String ?? "unknown",
-                message: obj["message"] as? String ?? "Sidecar failed to start",
-                recoverable: obj["recoverable"] as? Bool ?? false,
-                details: obj["details"] as? String
-            )
-        }
-
-        return nil
-    }
-
-    private static func findExecutable(_ name: String) -> String? {
-        let candidates = [
-            "/opt/homebrew/bin/\(name)",
-            "/usr/local/bin/\(name)",
-            "/usr/bin/\(name)",
-        ]
-
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
-            return path
-        }
-
-        return nil
-    }
-
-    /// Resolve which `node` binary to run.
-    /// Release builds ship a universal `node` at Resources/node/bin/node, so
-    /// friends without Homebrew/system Node still launch correctly. Debug
-    /// builds fall back to the developer's system Node so daily Cmd+R doesn't
-    /// require running scripts/build-runtime-bundles.sh first.
-    private static func nodePath() -> String? {
-        if let bundled = Bundle.main.resourcePath {
-            let bundledNode = (bundled as NSString).appendingPathComponent("node/bin/node")
-            if FileManager.default.isExecutableFile(atPath: bundledNode) {
-                return bundledNode
-            }
-        }
-        return findExecutable("node")
-    }
-
-    /// Wire env vars that tell the orchestrator where the bundled Hermes
-    /// runtime lives. Release builds read these from Resources/ (populated by
-    /// copy-runtime-bundles.sh). Debug builds fall back to the repo's
-    /// desktop/runtime-bundles/ — built once via scripts/build-runtime-bundles.sh
-    /// — so Cmd+R works without an ~/.hermes install or scheme env vars.
-    ///
-    /// As of the venv-bundling refactor, the runtime ships pre-installed
-    /// inside site-packages/<arch>/ — no first-launch pip install and no
-    /// per-user runtime venv directory. The legacy VERSO_RUNTIME_DIR env var
-    /// is no longer set; the orchestrator reads VERSO_BUNDLED_SITE_PACKAGES_DIR
-    /// instead.
-    private static func applyBundledRuntimeEnv(_ env: inout [String: String]) {
-        guard let bundleRoot = resolveBundleRoot() else { return }
-        let pythonDir = (bundleRoot as NSString).appendingPathComponent("python")
-        let sitePackagesDir = (bundleRoot as NSString).appendingPathComponent("site-packages")
-        let defaultsDir = (bundleRoot as NSString).appendingPathComponent("hermes-defaults")
-        let versionFile = (bundleRoot as NSString).appendingPathComponent("BUNDLE_VERSION")
-
-        let appSupport = (NSHomeDirectory() as NSString)
-            .appendingPathComponent("Library/Application Support/Verso")
-        let hermesHome = (appSupport as NSString).appendingPathComponent("hermes-home")
-        let pythonCacheDir = (NSHomeDirectory() as NSString)
-            .appendingPathComponent("Library/Caches/Verso/python-bytecode")
-        try? FileManager.default.createDirectory(
-            atPath: pythonCacheDir,
-            withIntermediateDirectories: true
-        )
-
-        env["VERSO_BUNDLED_PYTHON_DIR"] = pythonDir
-        env["VERSO_BUNDLED_SITE_PACKAGES_DIR"] = sitePackagesDir
-        env["VERSO_BUNDLED_DEFAULTS"] = defaultsDir
-        // Respect an explicit launch-environment override for isolated test
-        // profiles. Normal app and Conductor launches pass the durable
-        // App Support profile so credentials, connections, and Hermes state
-        // survive a rebuild.
-        env["VERSO_HERMES_HOME"] =
-            ProcessInfo.processInfo.environment["VERSO_HERMES_HOME"] ?? hermesHome
-        env["VERSO_PYTHON_CACHE_DIR"] = pythonCacheDir
-
-        // CRITICAL: prevent Python from writing __pycache__/*.pyc files into
-        // the signed .app bundle on first launch. The bundle is read-only by
-        // Gatekeeper convention — any post-sign mutation breaks the code
-        // signature and the next codesign --verify --deep fails with "file
-        // added". This propagates to every Python child the orchestrator
-        // spawns (Hermes gateway, verso MCP server, Codex auth helper, ...)
-        // because they all inherit the orchestrator's environment. The cache
-        // prefix is a second guard for any child that decides to write bytecode
-        // anyway: it redirects those writes outside the bundle.
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["PYTHONPYCACHEPREFIX"] = pythonCacheDir
-
-        if let bundleVersion = try? String(contentsOfFile: versionFile, encoding: .utf8) {
-            env["VERSO_BUNDLE_VERSION"] = bundleVersion.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
-
-    /// Locate the runtime-bundles layout (python/, site-packages/,
-    /// hermes-defaults/). Release: Resources/. Debug fallback: repo's
-    /// desktop/runtime-bundles/, discovered relative to this source file.
-    private static func resolveBundleRoot() -> String? {
-        let fm = FileManager.default
-        let hasArtifacts: (String) -> Bool = { root in
-            let ns = root as NSString
-            return fm.fileExists(atPath: ns.appendingPathComponent("python"))
-                && fm.fileExists(atPath: ns.appendingPathComponent("site-packages"))
-                && fm.fileExists(atPath: ns.appendingPathComponent("hermes-defaults"))
-        }
-
-        if let resources = Bundle.main.resourcePath, hasArtifacts(resources) {
-            return resources
-        }
-
-        #if DEBUG
-        // #filePath resolves at compile time, so an Xcode build keeps a stable
-        // anchor back to the repo even though the running .app lives in
-        // DerivedData. Walk up to find the repo root, then point at the
-        // runtime-bundles populated by scripts/build-runtime-bundles.sh.
-        let macosDir = (#filePath as NSString).deletingLastPathComponent
-        let desktopDir = (macosDir as NSString).deletingLastPathComponent
-        let repoBundles = (desktopDir as NSString).appendingPathComponent("runtime-bundles")
-        if hasArtifacts(repoBundles) { return repoBundles }
-        #endif
-
-        return nil
-    }
-
-    /// Path to the sidecar package directory.
-    /// In development: relative to the repo. In production: bundled in the app.
-    private static func orchestratorPath() -> String {
-        if let override = ProcessInfo.processInfo.environment["ORCHESTRATOR_PATH"] {
-            return override
-        }
-
-        if let bundled = Bundle.main.resourcePath {
-            let bundledPath = (bundled as NSString).appendingPathComponent("orchestrator")
-            if FileManager.default.fileExists(atPath: bundledPath) {
-                return bundledPath
-            }
-        }
-
-        let thisFile = #filePath
-        let macosDir = (thisFile as NSString).deletingLastPathComponent
-        let desktopDir = (macosDir as NSString).deletingLastPathComponent
-        let siblingCandidate = (desktopDir as NSString).appendingPathComponent("orchestrator")
-        if FileManager.default.fileExists(atPath: siblingCandidate) {
-            return siblingCandidate
-        }
-
-        let currentDirectory = FileManager.default.currentDirectoryPath
-        let currentDirectoryCandidate = (currentDirectory as NSString).appendingPathComponent("orchestrator")
-        if FileManager.default.fileExists(atPath: currentDirectoryCandidate) {
-            return currentDirectoryCandidate
-        }
-
-        let repoRootCandidate = (currentDirectory as NSString).appendingPathComponent("desktop/orchestrator")
-        if FileManager.default.fileExists(atPath: repoRootCandidate) {
-            return repoRootCandidate
-        }
-
-        return repoRootCandidate
-    }
-}
-
-struct SidecarStartupFailure {
-    let code: String
-    let message: String
-    let recoverable: Bool
-    let details: String?
-}
-
-// Thread-safe rolling buffer used to capture stderr during startup. Writes
-// happen on the FileHandle reader queue, reads happen on the I/O continuation
-// queue, so we serialize via a lock. Capped to keep memory bounded if the
-// child is silently spewing.
-private final class StderrBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = Data()
-    private let cap = 64 * 1024
-
-    func append(_ chunk: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        buffer.append(chunk)
-        if buffer.count > cap {
-            buffer.removeFirst(buffer.count - cap)
-        }
-    }
-
-    func text() -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        return String(data: buffer, encoding: .utf8) ?? ""
-    }
-
-    func clear() {
-        lock.lock()
-        defer { lock.unlock() }
-        buffer.removeAll(keepingCapacity: false)
-    }
 }
 
 // One-shot resolver wrapping a CheckedContinuation. Calling resume() more
@@ -917,20 +724,6 @@ private final class StartupResolver: @unchecked Sendable {
     }
 }
 
-// Buffers stdout chunks during startup until we see the "ready" handshake.
-// Wrapped in a class so the FileHandle readabilityHandler closure can mutate
-// it without tripping Swift 6 strict-concurrency checks.
-private final class StdoutAccumulator: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = Data()
-
-    func appendAndDecode(_ chunk: Data) -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        buffer.append(chunk)
-        return String(data: buffer, encoding: .utf8) ?? ""
-    }
-}
 
 enum SidecarError: LocalizedError {
     case executableNotFound(String)

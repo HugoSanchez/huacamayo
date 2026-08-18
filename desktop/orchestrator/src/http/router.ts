@@ -187,6 +187,7 @@ function isPublicRoute(method: string, pathname: string): boolean {
   if (method === 'GET' && pathname === '/health') return true;
   if (method === 'GET' && /^\/connections\/requests\/[^/]+\/open$/.test(pathname)) return true;
   if (method === 'GET' && pathname === '/connections/callback') return true;
+  if (method === 'GET' && pathname === '/connections/callback/font') return true;
   if (method === 'GET' && /^\/connectors\/custom\/[^/]+\/icon$/.test(pathname)) return true;
   if (method === 'GET' && /^\/connectors\/custom\/[^/]+\/open$/.test(pathname)) return true;
   return false;

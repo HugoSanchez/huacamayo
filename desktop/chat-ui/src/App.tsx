@@ -8,14 +8,12 @@ import { HubSkillDetailPage } from './HubSkillDetailPage';
 import { CronDetailPage } from './CronDetailPage';
 import { SettingsPage } from './SettingsPage';
 import {
-  archiveChatSession,
   cancelChatRequest,
   createConnectionRequest,
   createChatSession,
   updateChatSessionModel,
   getAnthropicStatus,
   getChatMessages,
-  getChatSessions,
   getCodexStatus,
   getConnectionRequest,
   getConnections,
@@ -31,7 +29,6 @@ import {
   setSidecarAuthToken,
   setSidecarPort,
   streamChatMessage,
-  unarchiveChatSession,
 } from './chat';
 import type {
   AttachedContext,
@@ -49,8 +46,10 @@ import type {
   ToolkitView,
 } from './types';
 import { ANTHROPIC_CHAT_MODELS, CHAT_MODEL_LABELS, CODEX_CHAT_MODELS } from './types';
-import type { ShellAction, ShellState } from './shell-protocol';
+import type { ShellCommand, ShellState } from './shell-protocol';
 import { useBrowserShellHost } from './browser-shell-host';
+import { applyChatSSEEvent } from './chat-event-reducer';
+import { hasNativeShell, postShellAction } from './shell-bridge';
 
 declare global {
   interface Window {
@@ -66,10 +65,10 @@ declare global {
     __versoPendingCatalogOpen?: boolean;
     __versoPendingSkillsCatalogOpen?: boolean;
     __versoPendingShellState?: ShellState | null;
+    __versoPendingShellCommands?: ShellCommand[];
+    __versoShellCommandReady?: boolean;
   }
 }
-
-const SESSION_STORAGE_KEY = 'verso.chat.sessionId';
 
 // Bucket key for messages typed before a session exists. `adoptSession` migrates
 // this bucket onto the real session id once `createChatSession` resolves so the
@@ -85,17 +84,14 @@ function isCodexAuthError(err: string): boolean {
 
 export function App() {
   const isNativeShell = hasNativeShell();
-  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  // Session-state consolidation step 2: receive the full Swift shell-state
-  // snapshot. Nothing consumes this yet — step 3 will cut over `sessions` and
-  // `selectedSessionId` to be derived from here, deleting the dual stores.
-  // Initialized from `__versoPendingShellState` so a snapshot pushed before
-  // mount (or via the user script's atDocumentStart hook) is already present
-  // on first render.
+  // The shell host is the only owner of sessions and selection. Swift drives
+  // this snapshot in native mode; BrowserShellHost provides the same contract
+  // during browser development.
   const [shellState, setShellState] = useState<ShellState | null>(
     () => (typeof window !== 'undefined' ? window.__versoPendingShellState ?? null : null),
   );
+  const sessions = shellState?.sessions ?? [];
+  const selectedSessionId = shellState?.selectedSessionId ?? null;
   // Messages live in a per-session bucket so an in-flight stream for session A
   // can't bleed into session B's view when the user switches mid-stream.
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
@@ -112,7 +108,7 @@ export function App() {
   // record lacks a logoUrl). Best-effort: failures here just fall back to the
   // initial-letter badge.
   const [toolkitCatalog, setToolkitCatalog] = useState<ToolkitView[]>([]);
-  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const isLoadingSessions = connected && shellState === null;
   const [isHydratingSession, setIsHydratingSession] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [isCatalogOpen, setIsCatalogOpen] = useState<boolean>(
@@ -225,27 +221,22 @@ export function App() {
     return true;
   }, []);
 
-  const postCatalogState = useCallback((type: 'catalogStateChanged' | 'skillsCatalogStateChanged', open: boolean) => {
-    if (!isNativeShell) return;
-    window.webkit?.messageHandlers?.chatBridge?.postMessage({ type, open });
-  }, [isNativeShell]);
-
   const handleCloseCatalog = useCallback(() => {
     setIsCatalogOpen(false);
-    postCatalogState('catalogStateChanged', false);
-  }, [postCatalogState]);
+    postShellAction({ kind: 'catalog-closed' });
+  }, []);
 
   const handleCloseSkillsCatalog = useCallback(() => {
     setIsSkillsCatalogOpen(false);
-    postCatalogState('skillsCatalogStateChanged', false);
-  }, [postCatalogState]);
+    postShellAction({ kind: 'skills-catalog-closed' });
+  }, []);
 
   const handleCloseCatalogs = useCallback(() => {
     setIsCatalogOpen(false);
     setIsSkillsCatalogOpen(false);
-    postCatalogState('catalogStateChanged', false);
-    postCatalogState('skillsCatalogStateChanged', false);
-  }, [postCatalogState]);
+    postShellAction({ kind: 'catalog-closed' });
+    postShellAction({ kind: 'skills-catalog-closed' });
+  }, []);
 
   const markSessionNotStreaming = useCallback((sessionId: string) => {
     streamingControllersRef.current.delete(sessionId);
@@ -353,7 +344,9 @@ export function App() {
   // authoritative, then stop.
   useEffect(() => {
     if (!connected) return;
-    if (!customConnectors.some((c) => c.status.state === 'pending_auth' || c.status.cached === true)) return;
+    if (!customConnectors.some((c) =>
+      c.status.state === 'pending_auth'
+      || (c.status.state === 'connected' && c.status.cached === true))) return;
     const timer = window.setInterval(() => {
       void refreshConnections();
     }, 2_000);
@@ -409,23 +402,6 @@ export function App() {
     }
   }, []);
 
-  const refreshSessionList = useCallback(async (): Promise<ChatSessionSummary[]> => {
-    if (!getSidecarPort()) return [];
-
-    setIsLoadingSessions(true);
-    try {
-      const nextSessions = sortSessions(await getChatSessions());
-      setSessions(nextSessions);
-      setSessionError(null);
-      return nextSessions;
-    } catch (error: unknown) {
-      setSessionError(error instanceof Error ? error.message : String(error));
-      return [];
-    } finally {
-      setIsLoadingSessions(false);
-    }
-  }, []);
-
   // Update a single session's bucket. Pure (no read-then-write race) so we can
   // call it from any SSE/poll callback without worrying about stale closures.
   const updateSessionMessages = useCallback((
@@ -438,26 +414,11 @@ export function App() {
     }));
   }, []);
 
-  // Persist the selected session id for the *next* app launch. In native
-  // mode Swift's `@AppStorage("selectedChatSessionId")` is the source of
-  // truth, so the JS write is a dead entry — skip it. Browser mode keeps
-  // its own localStorage so reloads survive.
-  const persistSelectedSessionId = useCallback((sessionId: string | null) => {
-    if (isNativeShell) return;
-    if (sessionId) {
-      window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
-    } else {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    }
-  }, [isNativeShell]);
-
   const hydrateSession = useCallback(async (sessionId: string | null) => {
     const token = ++hydrateTokenRef.current;
 
     if (!sessionId) {
       sessionIdRef.current = null;
-      setSelectedSessionId(null);
-      persistSelectedSessionId(null);
       setIsHydratingSession(false);
       return;
     }
@@ -467,8 +428,6 @@ export function App() {
     // this session yet, seed an empty one so the previous session's messages
     // don't linger in the message list during the fetch.
     sessionIdRef.current = sessionId;
-    setSelectedSessionId(sessionId);
-    persistSelectedSessionId(sessionId);
     setMessagesBySession((prev) => (sessionId in prev ? prev : { ...prev, [sessionId]: [] }));
 
     // Refetching while a stream is writing into this session's bucket would
@@ -488,25 +447,19 @@ export function App() {
       setSessionError(null);
     } catch (error: unknown) {
       if (token !== hydrateTokenRef.current) return;
-      sessionIdRef.current = null;
-      setSelectedSessionId(null);
-      persistSelectedSessionId(null);
       setSessionError(error instanceof Error ? error.message : String(error));
     } finally {
       if (token === hydrateTokenRef.current) {
         setIsHydratingSession(false);
       }
     }
-  }, [persistSelectedSessionId]);
+  }, []);
 
   const adoptSession = useCallback((session: ChatSessionSummary, preserveMessages: boolean): string => {
     const nextSession = normalizeSession(session);
     const prevSessionKey = sessionIdRef.current ?? PENDING_SESSION_KEY;
     sessionIdRef.current = nextSession.id;
-    setSelectedSessionId(nextSession.id);
     setModel(nextSession.model);
-    setSessions((prev) => sortSessions(replaceSession(prev, nextSession)));
-    persistSelectedSessionId(nextSession.id);
     setMessagesBySession((prev) => {
       if (preserveMessages && prevSessionKey !== nextSession.id) {
         // Carry the pending/current bucket onto the new session id so the
@@ -531,7 +484,7 @@ export function App() {
     // `sessionStateChanged` chatBridge message.
     postShellAction({ kind: 'select-session', id: nextSession.id });
     return nextSession.id;
-  }, [isNativeShell, persistSelectedSessionId]);
+  }, []);
 
   useEffect(() => {
     const applyPort = (port: number) => {
@@ -540,7 +493,7 @@ export function App() {
       setConnected(true);
       // Session bootstrap is now driven by the shell host (Swift in native,
       // `useBrowserShellHost` in browser) — both fetch and dispatch a
-      // `verso:shell-state` snapshot, which the mirror effects pick up.
+      // `verso:shell-state` snapshot, which the state subscriber picks up.
       // Fast fetch paints from the sidecar's local cache when the remote
       // sync is slow; the follow-up full fetch rides the same in-flight
       // sync server-side and converges the UI to fresh data.
@@ -605,8 +558,7 @@ export function App() {
         ? detail.sessionId
         : null;
       // postShellAction routes to Swift in native and to BrowserShellHost
-      // in browser; both end up dispatching a fresh shellState that the
-      // mirror effects pick up.
+      // in browser; both end up dispatching a fresh shellState snapshot.
       postShellAction({ kind: 'select-session', id: sessionId });
     };
     window.addEventListener('verso:select-session', onSelectSession as EventListener);
@@ -629,14 +581,6 @@ export function App() {
     };
   }, []);
 
-  // Mirror the snapshot into the existing local state. The rest of the
-  // chat-ui still reads from `sessions` / `selectedSessionId` — the mirror
-  // is what bridges the new single-owner model to that legacy state.
-  useEffect(() => {
-    if (!shellState) return;
-    setSessions(shellState.sessions);
-  }, [shellState]);
-
   useEffect(() => {
     if (!shellState) return;
     const next = shellState.selectedSessionId;
@@ -656,79 +600,66 @@ export function App() {
   }, [shellState, hydrateSession, handleCloseCatalogs]);
 
   useEffect(() => {
-    const handleCatalogToggle = (event: Event) => {
-      const detail = (event as CustomEvent<{ open?: unknown }>).detail;
-      const open = typeof detail?.open === 'boolean' ? detail.open : !isCatalogOpen;
-      setIsCatalogOpen(open);
-      if (open) setIsSkillsCatalogOpen(false);
+    const handleShellCommand = (event: Event) => {
+      const command = (event as CustomEvent<ShellCommand>).detail;
+      if (!command) return;
+      switch (command.kind) {
+        case 'open-catalog':
+          setIsCatalogOpen(true);
+          setIsSkillsCatalogOpen(false);
+          return;
+        case 'close-catalog':
+          setIsCatalogOpen(false);
+          return;
+        case 'open-skills-catalog':
+          setIsSkillsCatalogOpen(true);
+          setIsCatalogOpen(false);
+          return;
+        case 'close-skills-catalog':
+          setIsSkillsCatalogOpen(false);
+          return;
+        case 'open-cron':
+          setSelectedCronId(command.id);
+          setSelectedSkillSlug(null);
+          setSelectedHubSkillIdentifier(null);
+          setIsCatalogOpen(false);
+          setIsSkillsCatalogOpen(false);
+          return;
+        case 'open-settings':
+          setIsSettingsOpen(true);
+          setSelectedCronId(null);
+          setSelectedSkillSlug(null);
+          setSelectedHubSkillIdentifier(null);
+          setIsCatalogOpen(false);
+          setIsSkillsCatalogOpen(false);
+          return;
+        case 'focus-chat':
+          setSelectedSkillSlug(null);
+          setSelectedHubSkillIdentifier(null);
+          setSelectedCronId(null);
+          setIsSettingsOpen(false);
+          setIsCatalogOpen(false);
+          setIsSkillsCatalogOpen(false);
+          return;
+        default: {
+          const unhandled: never = command;
+          void unhandled;
+          return;
+        }
+      }
     };
-
-    window.addEventListener('verso:toggle-catalog', handleCatalogToggle as EventListener);
+    window.addEventListener('verso:shell-command', handleShellCommand as EventListener);
+    window.__versoShellCommandReady = true;
+    const pending = window.__versoPendingShellCommands ?? [];
+    window.__versoPendingShellCommands = [];
+    for (const command of pending) {
+      handleShellCommand(new CustomEvent<ShellCommand>('verso:shell-command', { detail: command }));
+    }
     return () => {
-      window.removeEventListener('verso:toggle-catalog', handleCatalogToggle as EventListener);
+      window.__versoShellCommandReady = false;
+      window.removeEventListener('verso:shell-command', handleShellCommand as EventListener);
     };
-  }, [isCatalogOpen]);
-
-  useEffect(() => {
-    const handleSkillsCatalogToggle = (event: Event) => {
-      const detail = (event as CustomEvent<{ open?: unknown }>).detail;
-      const open = typeof detail?.open === 'boolean' ? detail.open : !isSkillsCatalogOpen;
-      setIsSkillsCatalogOpen(open);
-      if (open) setIsCatalogOpen(false);
-    };
-
-    window.addEventListener('verso:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
-    return () => {
-      window.removeEventListener('verso:toggle-skills-catalog', handleSkillsCatalogToggle as EventListener);
-    };
-  }, [isSkillsCatalogOpen]);
-
-  useEffect(() => {
-    const handleOpenCron = (event: Event) => {
-      const detail = (event as CustomEvent<{ id?: unknown }>).detail;
-      const id = typeof detail?.id === 'string' ? detail.id : null;
-      if (!id) return;
-      setSelectedCronId(id);
-      setSelectedSkillSlug(null);
-      setSelectedHubSkillIdentifier(null);
-      handleCloseCatalogs();
-    };
-    window.addEventListener('verso:open-cron-detail', handleOpenCron as EventListener);
-    return () => {
-      window.removeEventListener('verso:open-cron-detail', handleOpenCron as EventListener);
-    };
-  }, [handleCloseCatalogs]);
-
-  useEffect(() => {
-    const handleOpenSettings = () => {
-      setIsSettingsOpen(true);
-      setSelectedCronId(null);
-      setSelectedSkillSlug(null);
-      setSelectedHubSkillIdentifier(null);
-      handleCloseCatalogs();
-    };
-    window.addEventListener('verso:open-settings', handleOpenSettings as EventListener);
-    return () => {
-      window.removeEventListener('verso:open-settings', handleOpenSettings as EventListener);
-    };
-  }, [handleCloseCatalogs]);
-
-  // Re-tapping the already-selected session in the native leftbar fires this.
-  // Selection doesn't change, so the shell-state mirror effect never runs —
-  // we clear any open page here so the click still lands you back in the chat.
-  useEffect(() => {
-    const handleFocusChat = () => {
-      setSelectedSkillSlug(null);
-      setSelectedHubSkillIdentifier(null);
-      setSelectedCronId(null);
-      setIsSettingsOpen(false);
-      handleCloseCatalogs();
-    };
-    window.addEventListener('verso:focus-chat', handleFocusChat as EventListener);
-    return () => {
-      window.removeEventListener('verso:focus-chat', handleFocusChat as EventListener);
-    };
-  }, [handleCloseCatalogs]);
+  }, []);
 
   useEffect(() => {
     const handleAttachCron = (event: Event) => {
@@ -786,7 +717,7 @@ export function App() {
             connectionPollers.current.delete(requestId);
             await refreshConnections();
             bumpCatalogRefresh();
-            window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'connectionsChanged' });
+            postShellAction({ kind: 'connections-changed' });
           }
         } catch {
           window.clearInterval(poller);
@@ -810,7 +741,7 @@ export function App() {
         } else {
           await refreshConnections();
           bumpCatalogRefresh();
-          window.webkit?.messageHandlers?.chatBridge?.postMessage({ type: 'connectionsChanged' });
+          postShellAction({ kind: 'connections-changed' });
         }
       } catch (error: unknown) {
         setSessionError(error instanceof Error ? error.message : String(error));
@@ -860,9 +791,8 @@ export function App() {
     // durable for empty sessions and prevents a reopen from switching a
     // conversation to a different provider.
     void updateChatSessionModel(sessionId, nextModel)
-      .then((session) => {
-        const normalized = normalizeSession(session);
-        setSessions((prev) => sortSessions(replaceSession(prev, normalized)));
+      .then(() => {
+        postShellAction({ kind: 'session-mutated', id: sessionId });
       })
       .catch((error: unknown) => {
         setSessionError(error instanceof Error ? error.message : String(error));
@@ -875,7 +805,7 @@ export function App() {
     if (isHydratingSession || sessionId === selectedSessionId) return;
     // Route through the shell host so its sessions/selection state stays
     // authoritative — `BrowserShellHost` in browser, Swift in native. The
-    // host dispatches a fresh shellState that the mirror effect picks up;
+    // host dispatches a fresh shellState that the state subscriber picks up;
     // overlay clears happen there too.
     postShellAction({ kind: 'select-session', id: sessionId });
   }, [isHydratingSession, selectedSessionId]);
@@ -889,17 +819,10 @@ export function App() {
     const session = sessions.find((candidate) => candidate.id === selectedSessionId);
     if (!session) return;
 
-    void (async () => {
-      try {
-        const nextSession = normalizeSession(session.archivedAt
-          ? await unarchiveChatSession(selectedSessionId)
-          : await archiveChatSession(selectedSessionId));
-        setSessions((prev) => sortSessions(replaceSession(prev, nextSession)));
-        setSessionError(null);
-      } catch (error: unknown) {
-        setSessionError(error instanceof Error ? error.message : String(error));
-      }
-    })();
+    postShellAction({
+      kind: session.archivedAt ? 'unarchive-session' : 'archive-session',
+      id: selectedSessionId,
+    });
   }, [isHydratingSession, selectedSessionId, sessions, streamingSessions]);
 
   // Wires up the SSE handlers for an assistant placeholder that's already in
@@ -930,7 +853,7 @@ export function App() {
           pendingEvents = [];
           updateSessionMessages(sessionId, (prev) => prev.map((message) => {
             if (message.id !== assistantId) return message;
-            return events.reduce((next, event) => applySSEEvent(next, event), message);
+            return events.reduce((next, event) => applyChatSSEEvent(next, event), message);
           }));
         };
         const scheduleFlush = () => {
@@ -945,7 +868,7 @@ export function App() {
           (event: ChatSSEEvent) => {
             // Catch the Hermes "no credentials" event mid-stream and swap the
             // assistant placeholder for a Codex connect widget instead of
-            // letting applySSEEvent surface the raw CLI-flavoured error.
+            // letting applyChatSSEEvent surface the raw CLI-flavoured error.
             if (event.type === 'error' && typeof event.message === 'string' && isCodexAuthError(event.message)) {
               flushEvents();
               updateSessionMessages(sessionId, (prev) => prev.map((message) =>
@@ -1167,7 +1090,7 @@ export function App() {
     if (!connected || isHydratingSession) return;
 
     sessionIdRef.current = null;
-    setSelectedSessionId(null);
+    postShellAction({ kind: 'select-session', id: null });
     setSelectedSkillSlug(null);
     setSelectedHubSkillIdentifier(null);
     setMessagesBySession((prev) => {
@@ -1176,7 +1099,6 @@ export function App() {
       delete next[PENDING_SESSION_KEY];
       return next;
     });
-    persistSelectedSessionId(null);
     handleCloseSkillsCatalog();
     const selectedAvailableModel = model && availableModels.includes(model) ? model : defaultModel;
     void (async () => {
@@ -1195,7 +1117,7 @@ export function App() {
         setSessionError(error instanceof Error ? error.message : String(error));
       }
     })();
-  }, [adoptSession, availableModels, connected, defaultModel, handleCloseSkillsCatalog, handleSend, isHydratingSession, model, persistSelectedSessionId]);
+  }, [adoptSession, availableModels, connected, defaultModel, handleCloseSkillsCatalog, handleSend, isHydratingSession, model]);
 
   const handleStop = useCallback(() => {
     // Per-session streams: the Stop button is in the InputBar of the
@@ -1542,7 +1464,9 @@ function CustomConnectorSection({
                 <span>{connector.name}</span>
                 <span className="custom-connector-tag">custom</span>
               </div>
-              <div className="custom-connector-status">{customConnectorStatusText(connector)}</div>
+              {connector.status.state !== 'connected' && (
+                <div className="custom-connector-status">{customConnectorStatusText(connector)}</div>
+              )}
             </div>
             <div className="custom-connector-actions">
               {connector.status.state !== 'connected' && (
@@ -1562,96 +1486,9 @@ function CustomConnectorSection({
 }
 
 function customConnectorStatusText(connector: CustomConnectorView): string {
-  if (connector.status.state === 'connected') {
-    return connector.status.toolCount > 0 ? `${connector.status.toolCount} tools` : 'Connected';
-  }
   if (connector.status.state === 'pending_auth') return 'Waiting for sign-in';
+  if (connector.status.state === 'connected') return 'Connected';
   return connector.status.reason;
-}
-
-function applySSEEvent(msg: ChatMessage, event: ChatSSEEvent): ChatMessage {
-  const steps = msg.steps ?? [];
-  const ev = event as any;
-
-  if (event.type === 'assistant') {
-    const blocks = ev.message?.content ?? ev.content ?? [];
-    let newSteps = steps;
-    let newContent = msg.content;
-
-    for (const block of blocks) {
-      if (block.type === 'text' && block.text) {
-        newContent = block.text;
-      } else if (block.type === 'tool_use') {
-        // Any intermediate prose accumulated in `content` (from streaming
-        // deltas) needs to land in `steps` *before* this tool, so the
-        // collapsible renders text and tool calls in true chronological
-        // order. Once promoted, clear `content` so subsequent deltas for the
-        // next text block start fresh instead of appending to the old text.
-        const trimmed = newContent.trim();
-        if (trimmed) {
-          newSteps = [...newSteps, { type: 'text', text: trimmed }];
-        }
-        newContent = '';
-        newSteps = [...newSteps, {
-          type: 'tool',
-          id: block.id,
-          name: block.name ?? 'tool',
-          input: block.input,
-        }];
-      }
-    }
-    return { ...msg, steps: newSteps, content: newContent };
-  }
-
-  if (event.type === 'user') {
-    const blocks = ev.message?.content ?? ev.content ?? [];
-    if (!Array.isArray(blocks)) return msg;
-    let newSteps = steps;
-    for (const block of blocks) {
-      if (block.type !== 'tool_result') continue;
-      const toolUseId = block.tool_use_id;
-      const result = stringifyToolResult(block.content);
-      newSteps = attachResult(newSteps, toolUseId, result, block.content);
-    }
-    return { ...msg, steps: newSteps };
-  }
-
-  if (event.type === 'content_block_delta' || event.type === 'text') {
-    const delta = ev.delta?.text ?? ev.text ?? '';
-    return { ...msg, content: msg.content + delta };
-  }
-
-  if (event.type === 'reasoning_delta') {
-    const delta = typeof ev.delta === 'string' ? ev.delta : ev.delta?.text ?? ev.text ?? '';
-    if (!delta) return msg;
-    const reasoning = appendReasoningDelta(msg.reasoning, delta);
-    return { ...msg, reasoning, steps: appendReasoningStep(steps, delta) };
-  }
-
-  if (event.type === 'reasoning') {
-    const reasoning = typeof ev.reasoning === 'string' ? ev.reasoning.trim() : '';
-    if (!reasoning) return msg;
-    return {
-      ...msg,
-      reasoning: mergeFinalReasoning(msg.reasoning, reasoning),
-      steps: mergeFinalReasoningStep(steps, reasoning),
-    };
-  }
-
-  if (event.type === 'result') {
-    const text = ev.result ?? '';
-    if (text) return { ...msg, content: text };
-  }
-
-  if (event.type === 'error') {
-    return { ...msg, content: msg.content + `\n\n**Error:** ${event.message ?? 'Unknown error'}` };
-  }
-
-  if (event.type === 'done') {
-    return { ...msg, isStreaming: false, endedAt: Date.now() };
-  }
-
-  return msg;
 }
 
 function toUiMessage(message: StoredChatMessage): ChatMessage {
@@ -1665,159 +1502,6 @@ function toUiMessage(message: StoredChatMessage): ChatMessage {
     startedAt: message.startedAt,
     endedAt: message.endedAt,
   };
-}
-
-function appendReasoningDelta(existing: string | null | undefined, delta: string): string {
-  const current = typeof existing === 'string' ? existing : '';
-  return current + delta;
-}
-
-function mergeFinalReasoning(existing: string | null | undefined, next: string): string {
-  const current = typeof existing === 'string' ? existing.trim() : '';
-  if (!current) return next;
-  if (isSameReasoning(current, next)) return current;
-  return `${current}\n\n${next}`;
-}
-
-function appendReasoningStep(steps: ActivityStep[], delta: string): ActivityStep[] {
-  const items = [...steps];
-  const last = items[items.length - 1];
-  if (last?.type === 'reasoning') {
-    items[items.length - 1] = { ...last, text: last.text + delta };
-    return items;
-  }
-  return [...items, { type: 'reasoning', text: delta }];
-}
-
-function mergeFinalReasoningStep(steps: ActivityStep[], reasoning: string): ActivityStep[] {
-  const current = steps
-    .filter((step): step is Extract<ActivityStep, { type: 'reasoning' }> => step.type === 'reasoning')
-    .map((step) => step.text)
-    .join('\n\n');
-  if (current && isSameReasoning(current, reasoning)) return steps;
-  return [...steps, { type: 'reasoning', text: reasoning }];
-}
-
-function isSameReasoning(a: string, b: string): boolean {
-  const left = normalizeReasoningForCompare(a);
-  const right = normalizeReasoningForCompare(b);
-  return left === right || left.includes(right) || right.includes(left);
-}
-
-function normalizeReasoningForCompare(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-function stringifyToolResult(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((entry) => (typeof entry === 'string' ? entry : entry?.text ?? JSON.stringify(entry)))
-      .join('\n');
-  }
-  if (content == null) return '';
-  try { return JSON.stringify(content); } catch { return String(content); }
-}
-
-function attachResult(
-  steps: ActivityStep[],
-  toolUseId: string | undefined,
-  result: string,
-  rawContent?: unknown,
-): ActivityStep[] {
-  const items = [...steps];
-  const connection = parseConnectionRequest(rawContent);
-  if (toolUseId) {
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const step = items[index];
-      if (step.type === 'tool' && step.id === toolUseId && !step.result) {
-        items[index] = connection ? { ...step, result, connection } : { ...step, result };
-        return items;
-      }
-    }
-  }
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const step = items[index];
-    if (step.type === 'tool' && !step.result) {
-      items[index] = connection ? { ...step, result, connection } : { ...step, result };
-      return items;
-    }
-  }
-  return items;
-}
-
-function parseConnectionRequest(content: unknown): ConnectionRequestView | null {
-  const target = unwrapConnectionPayload(content);
-  if (!target) return null;
-
-  const id = typeof target.id === 'string' ? target.id : '';
-  const toolkitSlug = typeof target.toolkitSlug === 'string' ? target.toolkitSlug : '';
-  const toolkitName = typeof target.toolkitName === 'string' ? target.toolkitName : '';
-  const status = target.status;
-  if (!id || !toolkitSlug || !toolkitName) return null;
-  if (status !== 'pending' && status !== 'connected' && status !== 'failed' && status !== 'expired') {
-    return null;
-  }
-
-  return {
-    id,
-    toolkitSlug,
-    toolkitName,
-    logoUrl: typeof target.logoUrl === 'string' ? target.logoUrl : null,
-    status,
-    redirectUrl: typeof target.redirectUrl === 'string' ? target.redirectUrl : null,
-    connectedAccountId: typeof target.connectedAccountId === 'string' ? target.connectedAccountId : null,
-    errorMessage: typeof target.errorMessage === 'string' ? target.errorMessage : null,
-  };
-}
-
-function unwrapConnectionPayload(content: unknown): Record<string, unknown> | null {
-  let current = normalizeConnectionPayload(content);
-
-  for (let index = 0; index < 4; index += 1) {
-    if (!current) return null;
-
-    if (current.kind === 'connection_request') {
-      return asRecord(current.request) ?? current;
-    }
-
-    if (current.structuredContent !== undefined) {
-      current = normalizeConnectionPayload(current.structuredContent);
-      continue;
-    }
-
-    if (current.result !== undefined) {
-      current = normalizeConnectionPayload(current.result);
-      continue;
-    }
-
-    return current;
-  }
-
-  return current;
-}
-
-function normalizeConnectionPayload(content: unknown): Record<string, unknown> | null {
-  if (typeof content === 'string') {
-    try {
-      const parsed = JSON.parse(content);
-      return asRecord(parsed);
-    } catch {
-      return null;
-    }
-  }
-
-  if (Array.isArray(content)) {
-    const text = content
-      .map((item) => asRecord(item))
-      .map((item) => typeof item?.text === 'string' ? item.text : '')
-      .filter(Boolean)
-      .join('\n')
-      .trim();
-    return text ? normalizeConnectionPayload(text) : null;
-  }
-
-  return asRecord(content);
 }
 
 function updateConnectionSteps(
@@ -1840,25 +1524,6 @@ function normalizeSession(session: ChatSessionSummary): ChatSessionSummary {
     ...session,
     archivedAt: session.archivedAt ?? null,
   };
-}
-
-function replaceSession(sessions: ChatSessionSummary[], nextSession: ChatSessionSummary): ChatSessionSummary[] {
-  const filtered = sessions.filter((session) => session.id !== nextSession.id);
-  return [nextSession, ...filtered];
-}
-
-function sortSessions(sessions: ChatSessionSummary[]): ChatSessionSummary[] {
-  return [...sessions].sort((left, right) => {
-    const leftArchived = !!left.archivedAt;
-    const rightArchived = !!right.archivedAt;
-    if (leftArchived !== rightArchived) {
-      return leftArchived ? 1 : -1;
-    }
-
-    const leftSortKey = left.archivedAt ?? left.updatedAt;
-    const rightSortKey = right.archivedAt ?? right.updatedAt;
-    return rightSortKey.localeCompare(leftSortKey);
-  });
 }
 
 function formatSessionSummary(session: ChatSessionSummary): string {
@@ -1884,31 +1549,6 @@ function formatRelativeTime(value: string): string {
     month: 'short',
     day: 'numeric',
   });
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function hasNativeShell(): boolean {
-  return window.__versoShellMode === 'native'
-    || typeof window.webkit?.messageHandlers?.chatBridge?.postMessage === 'function';
-}
-
-/// Single consolidated channel for posting a typed `ShellAction` to whichever
-/// shell host is active. Routes to Swift's `chatBridge` in native mode and to
-/// the in-process `BrowserShellHost` via a CustomEvent in browser mode. Mode
-/// detection is implicit: presence of `chatBridge.postMessage` means we're
-/// inside Vervo.app.
-function postShellAction(action: ShellAction): void {
-  const bridge = window.webkit?.messageHandlers?.chatBridge;
-  if (bridge) {
-    bridge.postMessage({ type: 'action', action });
-    return;
-  }
-  window.dispatchEvent(new CustomEvent<ShellAction>('verso:shell-action', { detail: action }));
 }
 
 function notifyNativeResponseReady(isNativeShell: boolean): void {

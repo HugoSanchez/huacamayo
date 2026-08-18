@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readJsonFileOr, writeJsonFileAtomic } from './atomic-json-file.ts';
 
 export type LocalStateMode =
   | 'disabled'
@@ -254,24 +255,26 @@ function legacyDataExists(roots: ReturnType<typeof buildLocalStateRoots>): boole
 }
 
 function readOwnerMarker(markerPath: string): LocalStateOwnerMarker | null {
-  if (!existsSync(markerPath)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(markerPath, 'utf8')) as Partial<LocalStateOwnerMarker>;
-    if (parsed.version !== 1) return null;
-    if (typeof parsed.ownerHash !== 'string' || !/^[a-f0-9]{32}$/.test(parsed.ownerHash)) return null;
-    if (typeof parsed.claimedAt !== 'string' || !parsed.claimedAt) return null;
-    return {
-      version: 1,
-      ownerHash: parsed.ownerHash,
-      claimedAt: parsed.claimedAt,
-    };
-  } catch {
-    return null;
-  }
+  return readJsonFileOr(
+    markerPath,
+    (value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      const parsed = value as Partial<LocalStateOwnerMarker>;
+      if (parsed.version !== 1) return null;
+      if (typeof parsed.ownerHash !== 'string' || !/^[a-f0-9]{32}$/.test(parsed.ownerHash)) return null;
+      if (typeof parsed.claimedAt !== 'string' || !parsed.claimedAt) return null;
+      return {
+        version: 1,
+        ownerHash: parsed.ownerHash,
+        claimedAt: parsed.claimedAt,
+      };
+    },
+    () => null,
+  );
 }
 
 function writeOwnerMarker(markerPath: string, marker: LocalStateOwnerMarker): void {
-  writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+  writeJsonFileAtomic(markerPath, marker);
 }
 
 function stripInternal(resolved: ResolvedLocalState): LocalStateSnapshot {

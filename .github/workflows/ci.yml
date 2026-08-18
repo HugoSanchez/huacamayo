@@ -16,7 +16,7 @@ jobs:
         run: bash scripts/check-style-tokens.sh
 
   orchestrator-tests:
-    name: Orchestrator tests (vitest)
+    name: Orchestrator tests + typecheck
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -32,6 +32,78 @@ jobs:
       - name: Run tests
         working-directory: desktop/orchestrator
         run: npm test
+      - name: Typecheck
+        working-directory: desktop/orchestrator
+        run: npm run typecheck
+
+  backend-tests:
+    name: Managed backend tests + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Run tests
+        working-directory: backend
+        run: npm test
+      - name: Typecheck
+        working-directory: backend
+        run: npm run typecheck
+
+  chat-ui-tests:
+    name: Chat UI tests + typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/chat-ui/package-lock.json
+      - name: Install dependencies
+        working-directory: desktop/chat-ui
+        run: npm ci
+      - name: Run tests
+        working-directory: desktop/chat-ui
+        run: npm test
+      - name: Typecheck
+        working-directory: desktop/chat-ui
+        run: npm run typecheck
+      - name: Build embedded WebView assets
+        run: scripts/build-chat-ui.sh
+      - name: Verify embedded WebView assets are current
+        run: git diff --exit-code -- desktop/macos/chat-ui
+
+  macos-tests:
+    name: macOS hostless tests
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/chat-ui/package-lock.json
+      - name: Install chat UI dependencies used by the Xcode build phase
+        working-directory: desktop/chat-ui
+        run: npm ci
+      - name: Run native unit tests
+        run: >-
+          xcodebuild test
+          -project verso.xcodeproj
+          -scheme verso
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/verso-derived-data"
+          CODE_SIGNING_ALLOWED=NO
 
   # Boots Hermes at the pinned ref with all Verso runtime patches applied and
   # runs the shared assertions from scripts/lib/smoke-gateway-checks.sh — the
@@ -50,18 +122,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Read Hermes pin from build script
+      - name: Read shared Hermes runtime configuration
         id: pin
         run: |
-          ref="$(grep -E '^HERMES_REF="' scripts/build-runtime-bundles.sh | cut -d'"' -f2)"
-          repo="$(grep -E '^HERMES_REPO="' scripts/build-runtime-bundles.sh | cut -d'"' -f2)"
-          extras="$(grep -E '^HERMES_EXTRAS="' scripts/build-runtime-bundles.sh | cut -d'"' -f2)"
-          pins="$(grep -E '^HERMES_EXTRA_PINS=' scripts/build-runtime-bundles.sh | sed 's/.*(\(.*\)).*/\1/' | tr -d '"')"
-          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
-          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
-          echo "extras=${extras}" >> "$GITHUB_OUTPUT"
-          echo "pins=${pins}" >> "$GITHUB_OUTPUT"
-          echo "pinned: ${repo} @ ${ref} extras=[${extras}] pins=[${pins}]"
+          source scripts/runtime-config.sh
+          printf 'ref=%s\n' "$HERMES_REF" >> "$GITHUB_OUTPUT"
+          printf 'repo=%s\n' "$HERMES_REPO" >> "$GITHUB_OUTPUT"
+          printf 'extras=%s\n' "$HERMES_EXTRAS" >> "$GITHUB_OUTPUT"
+          printf 'pins=%s\n' "${HERMES_EXTRA_PINS[*]}" >> "$GITHUB_OUTPUT"
+          echo "pinned: ${HERMES_REPO} @ ${HERMES_REF} extras=[${HERMES_EXTRAS}] pins=[${HERMES_EXTRA_PINS[*]}]"
 
       - name: Fetch Hermes at pinned ref
         run: |
@@ -72,12 +141,7 @@ jobs:
           git checkout -q FETCH_HEAD
 
       - name: Apply Verso runtime patches (build order)
-        run: |
-          cd hermes-src
-          for f in $(ls ../desktop/runtime-patches/hermes-agent/*.patch | LC_ALL=C sort); do
-            echo "== applying $(basename "$f")"
-            patch -p1 --batch < "$f"
-          done
+        run: scripts/apply-hermes-patches.sh hermes-src
 
       - name: Install patched Hermes
         run: |

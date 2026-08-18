@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildConnectionsRoutes } from '../src/http/connections.ts';
+import { buildConnectionsRoutes, renderCallbackPage } from '../src/http/connections.ts';
 import { dispatch, json, route, type Route } from '../src/http/router.ts';
 import type { ConnectionsService } from '../src/integrations/composio.ts';
 
@@ -88,7 +88,28 @@ describe('sidecar router auth boundary', () => {
     expect((await request('/health')).status).toBe(200);
     expect((await request('/connections/requests/abc/open')).status).toBe(302);
     expect((await request('/connections/callback?status=success')).status).toBe(200);
+    expect((await request('/connections/callback/font')).status).toBe(200);
     expect((await request('/connections/requests/abc')).status).toBe(401);
+  });
+
+  it('renders branded callback pages and serves the bundled font', async () => {
+    const html = renderCallbackPage('<Complete>', 'Return to verso & continue.');
+    expect(html).toContain('font-family: "IBM Plex Sans"');
+    expect(html).toContain('background: #F5F2EA');
+    expect(html).toContain('text-align: center');
+    expect(html).toContain('&lt;Complete&gt;');
+    expect(html).toContain('verso &amp; continue');
+
+    const routes = buildConnectionsRoutes({} as ConnectionsService);
+    const callback = await request('/connections/callback?status=success', { routes });
+    expect(callback.status).toBe(200);
+    expect(callback.headers['content-type']).toBe('text/html; charset=utf-8');
+
+    const font = await request('/connections/callback/font', { routes });
+    expect(font.status).toBe(200);
+    expect(font.headers['content-type']).toBe('font/ttf');
+    expect(font.headers['access-control-allow-origin']).toBe('*');
+    expect(Number(font.headers['content-length'])).toBeGreaterThan(100_000);
   });
 
   it('rejects malformed, foreign, and DNS-rebinding Host headers before public routes', async () => {
@@ -233,6 +254,10 @@ function testRoutes(): Route[] {
     route('GET', '/connections/callback', async (_req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end('<!doctype html><title>OK</title>');
+    }),
+    route('GET', '/connections/callback/font', async (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'font/ttf' });
+      res.end('font');
     }),
   ];
 }

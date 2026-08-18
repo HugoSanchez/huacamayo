@@ -139,7 +139,8 @@ export class CustomConnectorService {
     } catch (error: unknown) {
       // Surface the failure on the row itself — a silent 500 leaves the user
       // clicking Retry with nothing visibly happening.
-      this.lastAuthErrors.set(id, error instanceof Error ? error.message : String(error));
+      const message = customConnectorErrorMessage(error);
+      this.lastAuthErrors.set(id, message);
       throw error;
     }
   }
@@ -321,7 +322,7 @@ export class CustomConnectorService {
 
   private setAuthError(record: CustomConnectorRecord, message: string, signal: AbortSignal): void {
     if (signal.aborted || !this.store.get(record.id)) return;
-    this.lastAuthErrors.set(record.id, message);
+    this.lastAuthErrors.set(record.id, customConnectorErrorMessage(message));
   }
 }
 
@@ -413,8 +414,26 @@ function handleError(res: ServerResponse, error: unknown): void {
     json(res, error.status, { error: 'bad_request', message: error.message });
     return;
   }
-  const message = error instanceof Error ? error.message : String(error);
-  json(res, 500, { error: 'internal_error', message });
+  const diagnostic = error instanceof Error ? error.message : String(error);
+  console.error(`[custom-connectors] ${diagnostic}`);
+  json(res, 500, { error: 'internal_error', message: customConnectorErrorMessage(error) });
+}
+
+export function customConnectorErrorMessage(error: unknown): string {
+  const raw = (error instanceof Error ? error.message : String(error)).trim();
+  if (!raw) return 'We couldn’t connect to this MCP server. Please try again.';
+
+  if (/stopped unexpectedly|recent logs|process exit|eaddrinuse|address already in use|port\s+\d+\s+already in use/i.test(raw)) {
+    return 'Verso couldn’t start the connection service. Please try again.';
+  }
+
+  // Probe/auth errors are deliberately short and actionable; keep those.
+  // Anything unexpectedly verbose is an internal diagnostic and belongs in
+  // logs rather than a connection form.
+  if (raw.length > 240 || raw.includes('\n')) {
+    return 'We couldn’t connect to this MCP server. Check the URL or credentials and try again.';
+  }
+  return raw;
 }
 
 function contentTypeForPath(filePath: string): string {

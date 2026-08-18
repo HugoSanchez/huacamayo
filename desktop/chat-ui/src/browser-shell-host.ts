@@ -1,5 +1,5 @@
 // Browser-mode equivalent of the Swift shell. When `npm run dev` runs the
-// chat-ui outside Vervo.app, this hook plays Swift's role: owns the sessions
+// chat-ui outside Verso.app, this hook plays Swift's role: owns the sessions
 // list + current selection, dispatches `verso:shell-state` snapshots, and
 // handles `verso:shell-action` posts from `postShellAction`. After this is
 // installed, the chat-ui's shellState pipeline drives both native and
@@ -8,7 +8,7 @@
 // No-op in native — `isNativeShell` short-circuits everything so Swift
 // remains the sole driver there.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ChatSessionSummary } from './types';
 import type { ShellAction, ShellState } from './shell-protocol';
 import {
@@ -32,8 +32,6 @@ export function useBrowserShellHost(opts: UseBrowserShellHostOptions): void {
   // hook mounts (Vite HMR), so we both fetch on mount and react to changes.
   const initializedRef = useRef(false);
 
-  const [, force] = useState(0);
-
   const dispatchShellState = () => {
     const detail: ShellState = {
       sessions: sessionsRef.current,
@@ -54,7 +52,6 @@ export function useBrowserShellHost(opts: UseBrowserShellHostOptions): void {
         writePersistedSelection(selectedRef.current);
       }
       dispatchShellState();
-      force((v) => v + 1);
       return next;
     } catch {
       return sessionsRef.current;
@@ -170,6 +167,19 @@ export function useBrowserShellHost(opts: UseBrowserShellHostOptions): void {
           // No browser-mode equivalent; the chat-ui handles overlay close
           // state itself and there's no managed session to sign out of.
           return;
+        case 'session-streaming':
+        case 'session-unread':
+        case 'crons-changed':
+        case 'connections-changed':
+        case 'skills-changed':
+          // Native-shell bookkeeping/refresh signals. Browser mode already
+          // owns these surfaces locally, so there is no host work to do.
+          return;
+        default: {
+          const unhandled: never = action;
+          void unhandled;
+          return;
+        }
       }
     };
 
@@ -206,9 +216,10 @@ function sortSessions(sessions: ChatSessionSummary[]): ChatSessionSummary[] {
     const leftArchived = !!left.archivedAt;
     const rightArchived = !!right.archivedAt;
     if (leftArchived !== rightArchived) return leftArchived ? 1 : -1;
-    const leftSortKey = left.archivedAt ?? left.updatedAt;
-    const rightSortKey = right.archivedAt ?? right.updatedAt;
-    return rightSortKey.localeCompare(leftSortKey);
+    const leftSortKey = left.archivedAt ?? left.createdAt;
+    const rightSortKey = right.archivedAt ?? right.createdAt;
+    const byDate = rightSortKey.localeCompare(leftSortKey);
+    return byDate !== 0 ? byDate : right.id.localeCompare(left.id);
   });
 }
 

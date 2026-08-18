@@ -8,7 +8,12 @@ import { CustomConnectorKeychain, type KeychainExec } from '../src/http/keychain
 import { probeMcpServer } from '../src/http/mcp-probe.ts';
 import { HermesSupervisor } from '../src/http/hermes-supervisor.ts';
 import { countCustomConnectorTools } from '../src/http/hermes-gateway-client.ts';
-import { CustomConnectorService, removeHermesOAuthFiles, waitForCustomConnectorTools } from '../src/http/custom-connectors.ts';
+import {
+  CustomConnectorService,
+  customConnectorErrorMessage,
+  removeHermesOAuthFiles,
+  waitForCustomConnectorTools,
+} from '../src/http/custom-connectors.ts';
 
 describe('custom MCP connectors', () => {
   let tempRoot = '';
@@ -58,6 +63,14 @@ describe('custom MCP connectors', () => {
       auth: 'none',
       logoUrl: null,
     })).toThrow(/reserved/);
+  });
+
+  it('keeps connector diagnostics out of user-facing errors', () => {
+    expect(customConnectorErrorMessage(new Error(
+      'Hermes gateway stopped unexpectedly (process exit code 0). Recent logs: Port 50104 already in use',
+    ))).toBe('Verso couldn’t start the connection service. Please try again.');
+    expect(customConnectorErrorMessage(new Error('The server rejected the API token.')))
+      .toBe('The server rejected the API token.');
   });
 
   it('uses the security CLI wrapper without exposing secret values in errors', async () => {

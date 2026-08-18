@@ -28,6 +28,7 @@ describe('HermesSupervisor restart', () => {
       VERSO_HERMES_HOME: process.env.VERSO_HERMES_HOME,
       API_SERVER_KEY: process.env.API_SERVER_KEY,
       VERSO_HERMES_API_SERVER_KEY: process.env.VERSO_HERMES_API_SERVER_KEY,
+      FAKE_HERMES_PORT_CONFLICT_ONCE_FILE: process.env.FAKE_HERMES_PORT_CONFLICT_ONCE_FILE,
     };
     // No VERSO_HERMES_GATEWAY_URL: exercise the dynamic-port managed path the
     // desktop app uses, where every spawn must land on a fresh port.
@@ -103,4 +104,19 @@ describe('HermesSupervisor restart', () => {
     expect(message).toContain('stopped unexpectedly');
     expect(message).toContain('Could not bind 127.0.0.1:8642');
   });
+
+  it('recovers a managed restart from a startup port conflict', async () => {
+    const before = await supervisor!.getStatus();
+    const marker = path.join(tempHome, 'fail-port-once');
+    process.env.FAKE_HERMES_PORT_CONFLICT_ONCE_FILE = marker;
+    try {
+      await supervisor!.restart();
+    } finally {
+      delete process.env.FAKE_HERMES_PORT_CONFLICT_ONCE_FILE;
+    }
+
+    const after = await supervisor!.getStatus();
+    expect(after.reachable).toBe(true);
+    expect(new URL(after.baseUrl).port).not.toBe(new URL(before.baseUrl).port);
+  }, 30_000);
 });
