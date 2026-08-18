@@ -20,6 +20,7 @@ describe('Crons orchestrator routes', () => {
       VERSO_HERMES_ARGS: process.env.VERSO_HERMES_ARGS,
       VERSO_HERMES_CWD: process.env.VERSO_HERMES_CWD,
       VERSO_HERMES_MANAGED: process.env.VERSO_HERMES_MANAGED,
+      VERSO_HERMES_API_SERVER_KEY: process.env.VERSO_HERMES_API_SERVER_KEY,
     };
 
     gatewayPort = await allocatePort();
@@ -31,6 +32,7 @@ describe('Crons orchestrator routes', () => {
     ]);
     process.env.VERSO_HERMES_CWD = process.cwd();
     process.env.VERSO_HERMES_MANAGED = 'true';
+    process.env.VERSO_HERMES_API_SERVER_KEY = 'verso-crons-test-key';
 
     const result = await startServer({ port: 0, allowUnauthenticated: true });
     server = result.server;

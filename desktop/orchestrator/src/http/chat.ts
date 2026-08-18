@@ -572,7 +572,7 @@ async function runHermesMessage(
     });
   }
 
-  const config = await hermes.ensureReady(controller.signal);
+  let config = await hermes.ensureReady(controller.signal);
 
   const activeRequest: ActiveChatRequest = {
     sessionId: opts.session.id,
@@ -693,7 +693,32 @@ async function runHermesMessage(
       onEvent: handleEvent,
     });
   } catch (error: unknown) {
-    if (shouldRetryWithoutCursor(error) && linkedHermesSessionId) {
+    if (isHermesGatewayAuthFailure(error)) {
+      sendSSE(opts.res, {
+        type: 'status',
+        provider: 'hermes',
+        session_id: opts.session.id,
+        message: 'Reconnecting to Hermes',
+      });
+
+      streamedText = '';
+      finalText = '';
+      config = await hermes.recoverFromAuthFailure();
+      activeRequest.gatewayUrl = config.baseUrl;
+      await streamHermesConversation(config, {
+        conversation: opts.session.id,
+        userPrompt: opts.userPrompt,
+        attachments: opts.attachments,
+        conversationHistory: null,
+        reasoningEffort: opts.reasoningEffort ?? null,
+        model: opts.model ?? null,
+        signal: controller.signal,
+        onSessionId: (sessionId) => {
+          linkedHermesSessionId = sessionId;
+        },
+        onEvent: handleEvent,
+      });
+    } else if (shouldRetryWithoutCursor(error) && linkedHermesSessionId) {
       sendSSE(opts.res, {
         type: 'status',
         provider: 'hermes',
@@ -1056,6 +1081,11 @@ function shouldRetryWithoutCursor(error: unknown): boolean {
   if (!(error instanceof HermesHttpError)) return false;
   if (error.status !== 404) return false;
   return /previous response not found/i.test(error.body);
+}
+
+function isHermesGatewayAuthFailure(error: unknown): boolean {
+  if (!(error instanceof HermesHttpError) || error.status !== 401) return false;
+  return /invalid[_ ]api[_ ]key|unauthorized/i.test(error.body);
 }
 
 function sendSSE(res: ServerResponse, data: unknown): void {

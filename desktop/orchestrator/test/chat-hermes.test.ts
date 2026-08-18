@@ -53,6 +53,12 @@ describe('Hermes Chat Streaming', () => {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/v1/models') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ object: 'list', data: [] }));
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/v1/responses') {
         let body = '';
         req.on('data', (chunk) => {
