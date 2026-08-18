@@ -1,0 +1,183 @@
+--- a/tools/tool_search.py
++++ b/tools/tool_search.py
+@@ -54,7 +54,13 @@
+ # underestimating, which is the safer default.
+ CHARS_PER_TOKEN = 4.0
+ 
++# A search hit whose parameter schema serializes under this many chars gets
++# the schema inlined in the tool_search result, letting the model skip the
++# tool_describe round trip. Bigger schemas fall back to name+description —
++# the model describes those explicitly, exactly as before.
++SCHEMA_HIT_CHAR_CAP = 8_000
+ 
++
+ # ---------------------------------------------------------------------------
+ # Configuration plumbing
+ # ---------------------------------------------------------------------------
+@@ -68,6 +74,15 @@
+     threshold_pct: float  # 0..100 — only used when enabled == "auto"
+     search_default_limit: int
+     max_search_limit: int
++    # How many top search hits include their full parameter schema inline
++    # (subject to SCHEMA_HIT_CHAR_CAP). 0 restores name+description-only
++    # results.
++    search_schema_hits: int = 3
++    # Tool names that stay in the model-visible tools array even when tool
++    # search activates. A pinned name that matches no registered tool is
++    # inert; pinned tools are excluded from the deferred catalog and from
++    # the auto-mode threshold estimate.
++    pinned: Tuple[str, ...] = ()
+ 
+     @classmethod
+     def from_raw(cls, raw: Any) -> "ToolSearchConfig":
+@@ -106,14 +121,43 @@
+         search_default_limit = max(1, min(max_search_limit,
+                                           _safe_int(raw.get("search_default_limit"), 5)))
+ 
++        search_schema_hits = max(0, min(10, _safe_int(raw.get("search_schema_hits"), 3)))
++
+         return cls(
+             enabled=enabled,
+             threshold_pct=threshold_pct,
+             search_default_limit=search_default_limit,
+             max_search_limit=max_search_limit,
++            search_schema_hits=search_schema_hits,
++            pinned=_parse_pinned(raw.get("pinned")),
+         )
+ 
+ 
++def _parse_pinned(value: Any) -> Tuple[str, ...]:
++    """Parse ``tools.tool_search.pinned`` into a validated name tuple.
++
++    Malformed entries are dropped rather than raising, matching the rest of
++    the config parsing: a typo in user config must not break the agent.
++    Bridge tool names can never be pinned, and the list is capped so a
++    pathological config cannot defeat deferral wholesale.
++    """
++    if not isinstance(value, (list, tuple)):
++        return ()
++    names: List[str] = []
++    seen: set[str] = set()
++    for item in value:
++        if not isinstance(item, str):
++            continue
++        name = item.strip()
++        if not name or name in seen or name in BRIDGE_TOOL_NAMES:
++            continue
++        seen.add(name)
++        names.append(name)
++        if len(names) >= 100:
++            break
++    return tuple(names)
++
++
+ def _safe_int(value: Any, fallback: int) -> int:
+     try:
+         return int(value)
+@@ -186,12 +230,15 @@
+         return False
+ 
+ 
+-def classify_tools(tool_defs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
++def classify_tools(
++    tool_defs: List[Dict[str, Any]],
++    pinned: frozenset[str] = frozenset(),
++) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+     """Split a tool-defs list into (visible, deferrable).
+ 
+     ``visible`` retains every tool that must stay in the model-facing array:
+-    every core tool, plus any tool we can't classify. ``deferrable`` is the
+-    candidate set for catalog entry.
++    every core tool, every pinned tool, plus any tool we can't classify.
++    ``deferrable`` is the candidate set for catalog entry.
+     """
+     visible: List[Dict[str, Any]] = []
+     deferrable: List[Dict[str, Any]] = []
+@@ -202,7 +249,9 @@
+             # Should never happen — bridge tools are added after classification —
+             # but be defensive.
+             continue
+-        if is_deferrable_tool_name(name):
++        if name in pinned:
++            visible.append(td)
++        elif is_deferrable_tool_name(name):
+             deferrable.append(td)
+         else:
+             visible.append(td)
+@@ -432,14 +481,17 @@
+     """
+     desc_search = (
+         f"Search {deferred_count} additional tools that are loaded on demand. "
+-        "Returns up to ``limit`` matches with name and description. Follow "
+-        f"with `{TOOL_DESCRIBE_NAME}` to load a tool's full parameter schema, "
+-        f"then `{TOOL_CALL_NAME}` to invoke it. Tools listed at the top of this "
+-        "system prompt are already available and do not need to be searched."
++        "Returns up to ``limit`` matches with name and description; top "
++        "matches also include the tool's ``parameters`` schema. When a match "
++        f"has ``parameters``, invoke it directly with `{TOOL_CALL_NAME}`; "
++        f"otherwise load the schema first with `{TOOL_DESCRIBE_NAME}`. Tools "
++        "listed at the top of this system prompt are already available and "
++        "do not need to be searched."
+     )
+     desc_describe = (
+         f"Load the full JSON schema for one tool returned by `{TOOL_SEARCH_NAME}`. "
+-        f"Required before `{TOOL_CALL_NAME}` if the tool's parameters are unknown."
++        f"Only needed before `{TOOL_CALL_NAME}` when the search match did not "
++        "already include ``parameters``."
+     )
+     desc_call = (
+         "Invoke a deferred tool by name with the given arguments. Argument shape "
+@@ -551,7 +603,7 @@
+     incoming = [td for td in tool_defs
+                 if (td.get("function") or {}).get("name") not in BRIDGE_TOOL_NAMES]
+ 
+-    visible, deferrable = classify_tools(incoming)
++    visible, deferrable = classify_tools(incoming, pinned=frozenset(config.pinned))
+     if not deferrable:
+         return AssemblyResult(tool_defs=incoming, activated=False)
+ 
+@@ -592,14 +644,23 @@
+     return name in BRIDGE_TOOL_NAMES
+ 
+ 
+-def _format_search_hit(entry: CatalogEntry) -> Dict[str, Any]:
+-    return {
++def _format_search_hit(entry: CatalogEntry, include_schema: bool = False) -> Dict[str, Any]:
++    hit: Dict[str, Any] = {
+         "name": entry.name,
+         "source": entry.source,
+         "source_name": entry.source_name,
+         # Cap description so a chatty MCP server doesn't blow up the result.
+         "description": (entry.description or "")[:400],
+     }
++    if include_schema:
++        params = (entry.schema.get("function") or {}).get("parameters") or {}
++        try:
++            serialized = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
++        except (TypeError, ValueError):
++            serialized = None
++        if serialized is not None and len(serialized) <= SCHEMA_HIT_CHAR_CAP:
++            hit["parameters"] = params
++    return hit
+ 
+ 
+ def dispatch_tool_search(args: Dict[str, Any],
+@@ -619,13 +680,16 @@
+     else:
+         limit = max(1, min(config.max_search_limit, _safe_int(raw_limit, config.search_default_limit)))
+ 
+-    _, deferrable = classify_tools(current_tool_defs)
++    _, deferrable = classify_tools(current_tool_defs, pinned=frozenset(config.pinned))
+     catalog = build_catalog(deferrable)
+     hits = search_catalog(catalog, query, limit=limit)
+     return json.dumps({
+         "query": query,
+         "total_available": len(catalog),
+-        "matches": [_format_search_hit(h) for h in hits],
++        "matches": [
++            _format_search_hit(h, include_schema=(i < config.search_schema_hits))
++            for i, h in enumerate(hits)
++        ],
+     }, ensure_ascii=False)
+ 
+ 
