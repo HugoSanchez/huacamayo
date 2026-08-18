@@ -2,10 +2,8 @@ import { json, route, type Route } from './router.ts';
 import { ChatStore } from './chat-store.ts';
 import {
   ComposioBridgeHttpError,
-  NATIVE_DRAFT_CHANNELS,
-  resolvePendingDraft,
+  SUPPORTED_MESSAGE_DRAFT_CHANNELS,
   type ComposioBridgeService,
-  type DraftResolution,
 } from '../integrations/composio-bridge.ts';
 
 interface DraftPayload {
@@ -15,15 +13,12 @@ interface DraftPayload {
   subject: string;
   body: string;
   threadId: string;
-  wasEdited: boolean;
   sessionId: string;
   draftId: string;
 }
 
-// Native channels: Verso dispatches the send directly from the widget's Send
-// button. The model already ended its turn after proposing, so this path
-// never touches the held-draft registry — it just fires the Composio tool.
-const NATIVE_DISPATCH: Record<string, { slug: string; buildArgs: (p: DraftPayload) => Record<string, unknown> }> = {
+// Verso dispatches directly from the widget after the model's turn ends.
+const MESSAGE_DRAFT_DISPATCH: Record<string, { slug: string; buildArgs: (p: DraftPayload) => Record<string, unknown> }> = {
   gmail: {
     slug: 'GMAIL_SEND_EMAIL',
     buildArgs: (p) => {
@@ -52,9 +47,8 @@ const NATIVE_DISPATCH: Record<string, { slug: string; buildArgs: (p: DraftPayloa
 
 export function buildDraftsRoutes(bridge: ComposioBridgeService, store: ChatStore): Route[] {
   return [
-    // POST /drafts/send — native channels (Slack/Gmail). Dispatches the send
-    // directly and returns the result. No held draft involved; the model is
-    // not re-engaged. This is the fast, native-feeling path.
+    // POST /drafts/send — dispatches supported Slack/Gmail drafts without
+    // re-engaging the model.
     route('POST', '/drafts/send', async (_req, res, _params, body) => {
       let payload: DraftPayload;
       try {
@@ -64,11 +58,11 @@ export function buildDraftsRoutes(bridge: ComposioBridgeService, store: ChatStor
         return json(res, 400, { error: 'bad_request', message });
       }
 
-      const native = NATIVE_DISPATCH[payload.channel];
-      if (!native) {
+      const dispatch = MESSAGE_DRAFT_DISPATCH[payload.channel];
+      if (!dispatch) {
         return json(res, 400, {
           error: 'bad_request',
-          message: `Channel "${payload.channel}" is not dispatched by Verso — use the approval flow instead.`,
+          message: `Channel "${payload.channel}" is not supported. Drafts are limited to Gmail and Slack.`,
         });
       }
       if (!payload.sessionId) {
@@ -85,17 +79,17 @@ export function buildDraftsRoutes(bridge: ComposioBridgeService, store: ChatStor
       }
 
       try {
-        const result = await bridge.executeTool(native.slug, native.buildArgs(payload));
+        const result = await bridge.executeTool(dispatch.slug, dispatch.buildArgs(payload));
         if (result.error) {
           return json(res, 502, {
             error: 'send_failed',
             message: result.error,
             channel: payload.channel,
-            toolSlug: native.slug,
+            toolSlug: dispatch.slug,
           });
         }
         store.recordDraftResolution(payload.sessionId, payload.draftId, 'sent', payload.channel);
-        json(res, 200, { status: 'sent', channel: payload.channel, toolSlug: native.slug, result: result.data });
+        json(res, 200, { status: 'sent', channel: payload.channel, toolSlug: dispatch.slug, result: result.data });
       } catch (error: unknown) {
         if (error instanceof ComposioBridgeHttpError) {
           return json(res, error.status, { error: 'send_failed', message: error.message });
@@ -105,9 +99,8 @@ export function buildDraftsRoutes(bridge: ComposioBridgeService, store: ChatStor
       }
     }),
 
-    // POST /drafts/:id/discard — native channels only. There is no held tool
-    // call to resolve for these, but the local chat history still needs a
-    // durable final state so reopened sessions do not resurrect stale widgets.
+    // POST /drafts/:id/discard — records a durable final state so reopened
+    // sessions do not resurrect discarded widgets.
     route('POST', '/drafts/:id/discard', async (_req, res, params, body) => {
       const payload = parseDiscardPayload(body);
       if (!payload.sessionId) {
@@ -116,10 +109,10 @@ export function buildDraftsRoutes(bridge: ComposioBridgeService, store: ChatStor
       if (!payload.channel) {
         return json(res, 400, { error: 'bad_request', message: 'Field "channel" is required' });
       }
-      if (!NATIVE_DRAFT_CHANNELS.has(payload.channel)) {
+      if (!SUPPORTED_MESSAGE_DRAFT_CHANNELS.has(payload.channel)) {
         return json(res, 400, {
           error: 'bad_request',
-          message: `Channel "${payload.channel}" is not dispatched by Verso — use the rejection flow instead.`,
+          message: `Channel "${payload.channel}" is not supported. Drafts are limited to Gmail and Slack.`,
         });
       }
       const resolution = store.recordDraftResolution(payload.sessionId, params.id, 'discarded', payload.channel);
@@ -132,59 +125,8 @@ export function buildDraftsRoutes(bridge: ComposioBridgeService, store: ChatStor
       json(res, 200, { status: 'discarded', draftId: params.id });
     }),
 
-    // POST /drafts/:id/approve — generic channels only. Resolves the held
-    // tool call with the (possibly edited) final values so the agent
-    // dispatches the send itself.
-    route('POST', '/drafts/:id/approve', async (_req, res, params, body) => {
-      let payload: DraftPayload;
-      try {
-        payload = parseDraftPayload(body);
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        return json(res, 400, { error: 'bad_request', message });
-      }
-
-      const resolution: DraftResolution = {
-        status: 'approved',
-        was_edited: payload.wasEdited,
-        channel: payload.channel,
-        final_to: payload.to,
-        final_cc: payload.cc,
-        final_subject: payload.subject,
-        final_body: payload.body,
-        final_thread_id: payload.threadId,
-      };
-      const resolved = resolvePendingDraft(params.id, resolution);
-      if (!resolved) {
-        return json(res, 410, {
-          error: 'not_pending',
-          message: 'This draft is no longer pending — it may have already been resolved or timed out.',
-        });
-      }
-      json(res, 200, { status: 'approved', draftId: params.id });
-    }),
-
-    // POST /drafts/:id/reject — generic channels only. The held tool call
-    // resolves with status='rejected'; the agent acknowledges and moves on.
-    route('POST', '/drafts/:id/reject', async (_req, res, params) => {
-      const resolved = resolvePendingDraft(params.id, {
-        status: 'rejected',
-        reason: 'discarded_by_user',
-      });
-      if (!resolved) {
-        return json(res, 410, {
-          error: 'not_pending',
-          message: 'This draft is no longer pending — it may have already been resolved or timed out.',
-        });
-      }
-      json(res, 200, { status: 'rejected', draftId: params.id });
-    }),
   ];
 }
-
-// Exposed so the chat UI side and tests can agree on which channels skip the
-// approval round-trip.
-export { NATIVE_DRAFT_CHANNELS };
 
 function parseDraftPayload(body: unknown): DraftPayload {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -204,7 +146,6 @@ function parseDraftPayload(body: unknown): DraftPayload {
     subject: stringField(record.subject),
     body: body_,
     threadId: stringField(record.threadId),
-    wasEdited: record.wasEdited === true,
     sessionId: stringField(record.sessionId),
     draftId: stringField(record.draftId),
   };

@@ -50,6 +50,24 @@ describe('Draft resolutions', () => {
     });
   });
 
+  it('keeps discarded drafts resolved after the store is reopened', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'verso-drafts-reopen-'));
+    tempDirs.push(dir);
+    const databasePath = path.join(dir, 'chat.sqlite');
+    const firstStore = new ChatStore(databasePath);
+    const session = firstStore.createSession('Reopen draft');
+    firstStore.recordDraftResolution(session.id, 'draft_restart', 'discarded', 'gmail');
+
+    const reopenedStore = new ChatStore(databasePath);
+    expect(reopenedStore.listDraftResolutions(session.id)).toEqual([
+      expect.objectContaining({
+        draftId: 'draft_restart',
+        status: 'discarded',
+        channel: 'gmail',
+      }),
+    ]);
+  });
+
   it('annotates pending native draft tool steps with durable sent status', () => {
     const input = {
       channel: 'gmail',
@@ -135,7 +153,7 @@ describe('Draft resolutions', () => {
     const res = await fetch(`http://127.0.0.1:${port}/drafts/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...input, draftId, sessionId: session.id, wasEdited: false }),
+      body: JSON.stringify({ ...input, draftId, sessionId: session.id }),
     });
 
     expect(res.status).toBe(200);
@@ -164,7 +182,7 @@ describe('Draft resolutions', () => {
     const res = await fetch(`http://127.0.0.1:${port}/drafts/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...input, draftId, sessionId: session.id, wasEdited: false }),
+      body: JSON.stringify({ ...input, draftId, sessionId: session.id }),
     });
 
     expect(res.status).toBe(200);
@@ -200,6 +218,34 @@ describe('Draft resolutions', () => {
       status: 'discarded',
       channel: 'slack',
     });
+
+    const repeated = await fetch(`http://127.0.0.1:${port}/drafts/${encodeURIComponent(draftId)}/discard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.id, channel: 'slack' }),
+    });
+    expect(repeated.status).toBe(200);
+    expect(store.listDraftResolutions(session.id)).toHaveLength(1);
+  });
+
+  it('rejects unsupported draft channels without creating a resolution', async () => {
+    const store = tempStore();
+    const session = store.createSession('Notion action');
+    const port = await startDraftServer(store, {
+      executeTool: async () => ({ data: null, error: null, logId: null }),
+    });
+
+    const res = await fetch(`http://127.0.0.1:${port}/drafts/draft_notion/discard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.id, channel: 'notion' }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      message: 'Channel "notion" is not supported. Drafts are limited to Gmail and Slack.',
+    });
+    expect(store.listDraftResolutions(session.id)).toEqual([]);
   });
 
   async function startDraftServer(
