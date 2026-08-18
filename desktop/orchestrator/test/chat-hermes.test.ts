@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import { startServer } from '../src/http/server.ts';
 import { makeMinimalPdf } from './fixtures/documents.ts';
@@ -23,6 +23,17 @@ describe('Hermes Chat Streaming', () => {
     VERSO_MEMORY_DB_PATH?: string;
     VERSO_MEMORY_CHAT_CAPTURE?: string;
   } = {};
+
+  beforeEach(() => {
+    requestLog = [];
+    breakConversationChain = false;
+    responseCounter = 0;
+    sessionCounter = 0;
+    messageCounter = 0;
+    storedResponses.clear();
+    conversations.clear();
+    sessions.clear();
+  });
 
   beforeAll(async () => {
     envSnapshot = {
@@ -203,15 +214,6 @@ describe('Hermes Chat Streaming', () => {
   }
 
   it('streams a Hermes response through Hermes-backed chat session messages', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-    responseCounter = 0;
-    sessionCounter = 0;
-    messageCounter = 0;
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -247,12 +249,6 @@ describe('Hermes Chat Streaming', () => {
   });
 
   it('uses the stored session model when a message does not repeat it', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -273,15 +269,6 @@ describe('Hermes Chat Streaming', () => {
   });
 
   it('forwards image attachments as multimodal input and stores marker text', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-    responseCounter = 0;
-    sessionCounter = 0;
-    messageCounter = 0;
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -323,15 +310,6 @@ describe('Hermes Chat Streaming', () => {
   });
 
   it('accepts an image-only message with no text content', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-    responseCounter = 0;
-    sessionCounter = 0;
-    messageCounter = 0;
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -361,15 +339,6 @@ describe('Hermes Chat Streaming', () => {
   });
 
   it('injects converted document Markdown into the prompt and stores only a marker', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-    responseCounter = 0;
-    sessionCounter = 0;
-    messageCounter = 0;
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -405,15 +374,6 @@ describe('Hermes Chat Streaming', () => {
   });
 
   it('sends image parts but no image part for documents in a mixed message', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-    responseCounter = 0;
-    sessionCounter = 0;
-    messageCounter = 0;
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -458,15 +418,6 @@ describe('Hermes Chat Streaming', () => {
   });
 
   it('recovers by replaying Hermes-backed chat history when conversation chaining breaks', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-    responseCounter = 0;
-    sessionCounter = 0;
-    messageCounter = 0;
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -506,15 +457,6 @@ describe('Hermes Chat Streaming', () => {
   });
 
   it('marks a memory extraction job pending after a chat turn', async () => {
-    requestLog = [];
-    breakConversationChain = false;
-    storedResponses.clear();
-    conversations.clear();
-    sessions.clear();
-    responseCounter = 0;
-    sessionCounter = 0;
-    messageCounter = 0;
-
     const created = await fetchJson('/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -34,6 +34,7 @@ export class AttachmentValidationError extends Error {}
 
 const UNSUPPORTED_MESSAGE =
   'Only images (PNG, JPEG, WebP, GIF) and documents (PDF, Word, PowerPoint) are supported';
+const INVALID_BASE64_CHAR = /[^A-Za-z0-9+/=]/;
 
 /** Must stay in sync with the marker parsing in chat-ui (MessageList.tsx). */
 export function attachmentMarker(name: string, kind: AttachmentKind): string {
@@ -67,15 +68,12 @@ export function parseChatAttachments(body: unknown): ChatAttachment[] {
       throw new AttachmentValidationError('Each attachment needs base64 data');
     }
 
-    let bytes: Buffer;
-    try {
-      bytes = Buffer.from(dataBase64, 'base64');
-    } catch {
+    // Buffer.from(..., 'base64') silently ignores invalid characters, so
+    // validate the encoded form before decoding it.
+    if (!isBase64(dataBase64)) {
       throw new AttachmentValidationError('Attachment data is not valid base64');
     }
-    if (bytes.length === 0) {
-      throw new AttachmentValidationError('Attachment data is not valid base64');
-    }
+    const bytes = Buffer.from(dataBase64, 'base64');
 
     const sniffed = sniffAttachment(bytes);
     if (!sniffed) {
@@ -105,6 +103,13 @@ export function parseChatAttachments(body: unknown): ChatAttachment[] {
   }
 
   return attachments;
+}
+
+function isBase64(value: string): boolean {
+  if (value.length % 4 !== 0 || INVALID_BASE64_CHAR.test(value)) return false;
+  const padding = value.indexOf('=');
+  return padding === -1
+    || (padding >= value.length - 2 && /^={1,2}$/.test(value.slice(padding)));
 }
 
 // Marker lines use square brackets, so strip them (plus control chars) from

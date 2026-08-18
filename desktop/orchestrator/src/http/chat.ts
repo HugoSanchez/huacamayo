@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { json, route, type Route } from './router.ts';
 import {
@@ -8,7 +7,8 @@ import {
   type ChatSessionSummary,
 } from './chat-store.ts';
 import { applyDraftResolutions } from './draft-resolutions.ts';
-import { HermesSupervisor, hermesGatewayAuthHeaders, type HermesGatewayConfig } from './hermes-supervisor.ts';
+import { HermesSupervisor, type HermesGatewayConfig } from './hermes-supervisor.ts';
+import { extractAssistantText, hermesGatewayAuthHeaders, hermesOneShotText } from './hermes-gateway-client.ts';
 import {
   hermesHistoryHomeCandidates,
   readHermesChatMessages,
@@ -300,7 +300,6 @@ export function buildChatRoutes(
           reasoningEffort,
           model,
           res,
-          requestBaseUrl: requestBaseUrl(req),
         }, store, hermes, managedBackend, memoryExtraction);
       } catch (error: unknown) {
         if (isAbortError(error)) {
@@ -478,11 +477,7 @@ function formatCronContextLines(cron: HermesCronJob): string[] {
 }
 
 function hydrateSessionSummaries(store: ChatStore): ChatSessionSummary[] {
-  return store.listSessionRecords().map((record) => hydrateSessionSummaryRecord(record, store));
-}
-
-function hydrateSessionSummary(record: ChatSessionRecord, store: ChatStore): ChatSessionSummary {
-  return hydrateSessionSummaryRecord(record, store);
+  return store.listSessionRecords().map((record) => hydrateSessionSummary(record, store));
 }
 
 function hydrateSessionMessages(
@@ -522,7 +517,7 @@ function addLocalResponseTimings(messages: ChatMessageRecord[]): ChatMessageReco
   });
 }
 
-function hydrateSessionSummaryRecord(
+function hydrateSessionSummary(
   record: ChatSessionRecord,
   store: ChatStore,
 ): ChatSessionSummary {
@@ -558,7 +553,6 @@ async function runHermesMessage(
     reasoningEffort?: ReasoningEffort | null;
     model?: ChatModel | null;
     res: ServerResponse;
-    requestBaseUrl: string;
   },
   store: ChatStore,
   hermes: HermesSupervisor,
@@ -818,29 +812,8 @@ async function generateSessionTitle(
   userPrompt: string,
   assistantText: string,
 ): Promise<string | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TITLE_GEN_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${config.baseUrl}/v1/responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...hermesGatewayAuthHeaders(config) },
-      body: JSON.stringify({
-        input: TITLE_PROMPT_TEMPLATE(userPrompt, assistantText),
-        truncation: 'auto',
-        stream: false,
-        store: false,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as Record<string, unknown>;
-    const raw = extractFinalResponseText({ response: data });
-    return sanitizeGeneratedTitle(raw);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const raw = await hermesOneShotText(config, TITLE_PROMPT_TEMPLATE(userPrompt, assistantText), TITLE_GEN_TIMEOUT_MS);
+  return sanitizeGeneratedTitle(raw);
 }
 
 function sanitizeGeneratedTitle(raw: string): string | null {
@@ -1036,16 +1009,7 @@ function extractResponseId(data: HermesEventPayload): string | null {
 }
 
 function extractFinalResponseText(data: HermesEventPayload): string {
-  const response = asRecord(data?.response);
-  const output = Array.isArray(response?.output) ? response.output : [];
-
-  for (let index = output.length - 1; index >= 0; index -= 1) {
-    const item = asRecord(output[index]);
-    if (!item || item.type !== 'message' || item.role !== 'assistant') continue;
-    return extractOutputText(item.content);
-  }
-
-  return '';
+  return extractAssistantText(asRecord(data?.response));
 }
 
 function extractResponseError(data: HermesEventPayload): string {
@@ -1070,20 +1034,6 @@ function extractReasoningDelta(data: HermesEventPayload): string {
   return typeof nestedText === 'string' ? nestedText : '';
 }
 
-function extractOutputText(content: unknown): string {
-  if (!Array.isArray(content)) return '';
-
-  return content
-    .map((block) => {
-      const record = asRecord(block);
-      return record?.type === 'output_text' && typeof record.text === 'string'
-        ? record.text
-        : '';
-    })
-    .filter(Boolean)
-    .join('');
-}
-
 function parseJsonMaybe(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   const trimmed = value.trim();
@@ -1106,11 +1056,6 @@ function shouldRetryWithoutCursor(error: unknown): boolean {
   if (!(error instanceof HermesHttpError)) return false;
   if (error.status !== 404) return false;
   return /previous response not found/i.test(error.body);
-}
-
-function requestBaseUrl(req: IncomingMessage): string {
-  const host = req.headers.host || '127.0.0.1';
-  return `http://${host}`;
 }
 
 function sendSSE(res: ServerResponse, data: unknown): void {
@@ -1138,9 +1083,4 @@ function preview(content: string): string {
   const compact = content.replace(/\s+/g, ' ').trim();
   if (compact.length <= 120) return compact;
   return `${compact.slice(0, 120)}...`;
-}
-
-function timestampToIso(value: unknown): string | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return new Date(value * 1000).toISOString();
 }

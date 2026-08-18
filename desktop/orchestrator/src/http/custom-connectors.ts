@@ -2,10 +2,11 @@ import { createReadStream, existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { json, route, type Route } from './router.ts';
+import { renderCallbackPage, sendHtml } from './connections.ts';
 import { CustomConnectorsStore, sanitizeCustomConnectorSlug, type CustomConnectorRecord } from './custom-connectors-store.ts';
 import { CustomConnectorKeychain } from './keychain.ts';
 import { probeMcpServer } from './mcp-probe.ts';
-import { countCustomConnectorTools, fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-toolsets.ts';
+import { countCustomConnectorTools, fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-gateway-client.ts';
 import type { HermesSupervisor } from './hermes-supervisor.ts';
 
 export type CustomConnectorStatus =
@@ -96,12 +97,11 @@ export class CustomConnectorService {
       iconContentType: probe.iconContentType,
     });
     const displayRecord = this.store.update(record.id, {
-      logoUrl: probe.iconPath ? `/connectors/custom/${encodeURIComponent(record.id)}/icon` : probe.logoUrl,
+      logoUrl: probe.iconPath ? `/connectors/custom/${encodeURIComponent(record.id)}/icon` : null,
     });
     try {
       if (auth === 'bearer') await this.keychain.setSecret(record.id, parsed.token ?? '');
       await this.hermes.restart();
-      await this.hermes.waitUntilReady(90_000);
       return this.view(displayRecord, await this.waitForConnectorTools(displayRecord));
     } catch (error) {
       this.store.delete(record.id);
@@ -120,7 +120,7 @@ export class CustomConnectorService {
       const updated = this.store.update(id, {
         transport: probe.transport,
         auth: current.auth === 'bearer' ? 'bearer' : probe.auth,
-        logoUrl: probe.iconPath ? `/connectors/custom/${encodeURIComponent(current.id)}/icon` : probe.logoUrl ?? current.logoUrl,
+        logoUrl: probe.iconPath ? `/connectors/custom/${encodeURIComponent(current.id)}/icon` : current.logoUrl,
         iconPath: probe.iconPath ?? current.iconPath ?? null,
         iconContentType: probe.iconContentType ?? current.iconContentType ?? null,
       });
@@ -135,7 +135,6 @@ export class CustomConnectorService {
         return viewFor(updated, await fetchRegisteredToolNames(this.hermes.gatewayConfig));
       }
       await this.hermes.restart();
-      await this.hermes.waitUntilReady(90_000);
       return this.view(updated, await this.waitForConnectorTools(updated));
     } catch (error: unknown) {
       // Surface the failure on the row itself — a silent 500 leaves the user
@@ -169,7 +168,7 @@ export class CustomConnectorService {
       return;
     }
     this.lastAuthErrors.set(record.id, result.message);
-    sendHtml(res, 500, 'Sign-in unavailable', result.message);
+    sendHtml(res, 500, renderCallbackPage('Sign-in unavailable', result.message));
   }
 
   async remove(id: string): Promise<void> {
@@ -303,7 +302,6 @@ export class CustomConnectorService {
     const registered = await fetchRegisteredToolNames(this.hermes.gatewayConfig);
     if (registered && countCustomConnectorTools(registered, record.slug) > 0) return;
     await this.hermes.restart();
-    await this.hermes.waitUntilReady(90_000);
     const refreshed = await waitForCustomConnectorTools(
       record,
       () => fetchRegisteredToolNames(this.hermes.gatewayConfig),
@@ -410,7 +408,7 @@ class HttpInputError extends Error {
   }
 }
 
-function handleError(res: Parameters<typeof json>[0], error: unknown): void {
+function handleError(res: ServerResponse, error: unknown): void {
   if (error instanceof HttpInputError) {
     json(res, error.status, { error: 'bad_request', message: error.message });
     return;
@@ -426,35 +424,6 @@ function contentTypeForPath(filePath: string): string {
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
   if (ext === '.webp') return 'image/webp';
   return 'image/x-icon';
-}
-
-function sendHtml(res: ServerResponse, status: number, title: string, message: string): void {
-  res.writeHead(status, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
-  res.end(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
-  </head>
-  <body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 32px;">
-    <h1>${escapeHtml(title)}</h1>
-    <p>${escapeHtml(message)}</p>
-  </body>
-</html>`);
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[char] ?? char));
 }
 
 function delay(ms: number): Promise<void> {

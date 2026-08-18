@@ -20,7 +20,7 @@ import { ANTHROPIC_CHAT_MODELS, CODEX_CHAT_MODELS } from './model-catalog.ts';
 import { readAnthropicKeyFromEnvFile } from './model-auth.ts';
 import { CustomConnectorsStore } from './custom-connectors-store.ts';
 import { CustomConnectorKeychain } from './keychain.ts';
-import { fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-toolsets.ts';
+import { fetchRegisteredToolNames, hermesGatewayAuthHeaders } from './hermes-gateway-client.ts';
 
 export interface HermesGatewayConfig {
   baseUrl: string;
@@ -92,8 +92,6 @@ function getHermesApiServerKey(): string | null {
   if (explicit) return explicit;
   return isManagedDisabled() ? null : MANAGED_API_SERVER_KEY;
 }
-
-export { hermesGatewayAuthHeaders };
 
 function getHermesLaunchConfig(): HermesLaunchConfig {
   const startupTimeoutMs = getHermesGatewayConfig().startupTimeoutMs;
@@ -228,7 +226,6 @@ export class HermesSupervisor {
   private readonly manualMode: boolean;
   private readonly managedHermesHome: string;
   private readonly templateHermesHome: string;
-  private readonly seedHermesHome: string;
   private readonly runtimeMode: RuntimeMode;
   private readonly memoryToolsMode: 'full' | 'none';
   private readonly customConnectorsStore: CustomConnectorsStore;
@@ -261,7 +258,6 @@ export class HermesSupervisor {
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
-    this.seedHermesHome = this.templateHermesHome;
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
 
@@ -309,10 +305,7 @@ export class HermesSupervisor {
       return {
         command: bundled.python,
         args: [bundled.hermesScript, ...args],
-        env: {
-          ...getBundledPythonBytecodeEnv(),
-          PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':'),
-        },
+        env: bundledPythonEnv(bundled),
       };
     }
     return { command: this.launch.command, args: [...args], env: {} };
@@ -449,10 +442,6 @@ export class HermesSupervisor {
     });
     this.restartPromise = promise;
     return promise;
-  }
-
-  async waitUntilReady(timeoutMs: number): Promise<void> {
-    await this.ensureReady(AbortSignal.timeout(timeoutMs));
   }
 
   private snapshot(reachable: boolean): HermesRuntimeSnapshot {
@@ -621,16 +610,8 @@ export class HermesSupervisor {
     const gatewayUrl = new URL(this.config.baseUrl);
     const port = gatewayUrl.port || (gatewayUrl.protocol === 'https:' ? '443' : '80');
     const host = gatewayUrl.hostname;
-    // Release builds run the bundled hermes script via the bundled Python.
-    // Python needs PYTHONPATH to find the pre-installed packages — without
-    // this, `from hermes_cli.main import main` fails immediately. Debug
-    // builds leave PYTHONPATH untouched so the developer's venv-resolved
-    // imports keep working.
     const bundled = getBundledHermesInvocation();
-    const pythonPathExtras = bundled
-      ? { PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':') }
-      : {};
-    const pythonBytecodeEnv = bundled ? getBundledPythonBytecodeEnv() : {};
+    const pythonEnv = bundled ? bundledPythonEnv(bundled) : {};
     const customConnectorEnv: Record<string, string> = {};
     for (const connector of this.customConnectorsStore.list()) {
       if (connector.auth !== 'bearer') continue;
@@ -640,8 +621,7 @@ export class HermesSupervisor {
 
     const env = {
       ...process.env,
-      ...pythonBytecodeEnv,
-      ...pythonPathExtras,
+      ...pythonEnv,
       ...customConnectorEnv,
       PORT: port,
       HOST: host,
@@ -682,13 +662,13 @@ export class HermesSupervisor {
     this.migrateLegacyVervoProfile();
     mkdirSync(this.managedHermesHome, { recursive: true });
     const configExistedBeforeSeed = existsSync(join(this.managedHermesHome, 'config.yaml'));
-    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'config.yaml');
-    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, '.env');
-    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'auth.json');
+    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'config.yaml');
+    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, '.env');
+    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'auth.json');
     this.syncManagedAuthStore();
-    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'SOUL.md');
-    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
-    seedHermesHomeFile(this.seedHermesHome, this.managedHermesHome, 'memories/USER.md');
+    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'SOUL.md');
+    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/MEMORY.md');
+    seedHermesHomeFile(this.templateHermesHome, this.managedHermesHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers();
     this.pausePreReleaseBrowserCrons();
@@ -784,7 +764,7 @@ export class HermesSupervisor {
   }
 
   private syncManagedAuthStore(): void {
-    const sourcePath = join(this.seedHermesHome, 'auth.json');
+    const sourcePath = join(this.templateHermesHome, 'auth.json');
     const targetPath = join(this.managedHermesHome, 'auth.json');
     if (sourcePath === targetPath || !existsSync(sourcePath)) return;
 
@@ -813,29 +793,25 @@ export class HermesSupervisor {
    * a (broken) toggle for them.
    */
   private enforceAlwaysDisabledSkills(): void {
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    let config: Record<string, unknown> = {};
-    if (existsSync(configPath)) {
-      try {
-        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          config = parsed as Record<string, unknown>;
-        }
-      } catch {
-        config = {};
-      }
-    }
+    this.mergeDisabledSkills(ALWAYS_DISABLED_HERMES_SKILLS);
+  }
 
+  /**
+   * Union `names` into the profile's `skills.disabled` list (sorted).
+   * Non-destructive — leaves anything else the user disabled in place —
+   * and skips the write when every name is already present.
+   */
+  private mergeDisabledSkills(names: readonly string[]): void {
+    const configPath = join(this.managedHermesHome, 'config.yaml');
+    const config = readYamlRecord(configPath) ?? {};
     const skills = asRecord(config.skills) ?? {};
     const existing = Array.isArray(skills.disabled)
       ? skills.disabled.filter((item): item is string => typeof item === 'string')
       : [];
     const existingSet = new Set(existing);
-    if (ALWAYS_DISABLED_HERMES_SKILLS.every((name) => existingSet.has(name))) {
-      return;
-    }
+    if (names.every((name) => existingSet.has(name))) return;
 
-    skills.disabled = [...new Set([...existing, ...ALWAYS_DISABLED_HERMES_SKILLS])].sort();
+    skills.disabled = [...new Set([...existing, ...names])].sort();
     config.skills = skills;
     mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, YAML.stringify(config), 'utf8');
@@ -857,29 +833,7 @@ export class HermesSupervisor {
    * is the only writer — we never overwrite a user's choices on later launches.
    */
   private seedDefaultDisabledSkills(): void {
-    const configPath = join(this.managedHermesHome, 'config.yaml');
-    let config: Record<string, unknown> = {};
-    if (existsSync(configPath)) {
-      try {
-        const parsed = YAML.parse(readFileSync(configPath, 'utf8'));
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          config = parsed as Record<string, unknown>;
-        }
-      } catch {
-        config = {};
-      }
-    }
-
-    const skills = asRecord(config.skills) ?? {};
-    const existing = Array.isArray(skills.disabled)
-      ? skills.disabled.filter((item): item is string => typeof item === 'string')
-      : [];
-    const merged = [...new Set([...existing, ...DEFAULT_DISABLED_HERMES_SKILLS])].sort();
-
-    skills.disabled = merged;
-    config.skills = skills;
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, YAML.stringify(config), 'utf8');
+    this.mergeDisabledSkills(DEFAULT_DISABLED_HERMES_SKILLS);
   }
 
   // One-shot rename of the pre-rename ~/.hermes/profiles/vervo profile to
@@ -918,16 +872,7 @@ export class HermesSupervisor {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     if (!existsSync(configPath)) return;
 
-    let config: Record<string, unknown> = {};
-    try {
-      const raw = readFileSync(configPath, 'utf8');
-      const parsed = YAML.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        config = parsed as Record<string, unknown>;
-      }
-    } catch {
-      config = {};
-    }
+    const config = readYamlRecord(configPath) ?? {};
 
     const hasAnthropic = readAnthropicKeyFromEnvFile(this.managedHermesHome) !== null;
     const hasCodex = this.hasCodexPoolCredentials();
@@ -1005,23 +950,14 @@ export class HermesSupervisor {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     if (!existsSync(configPath)) return;
 
-    let config: Record<string, unknown> = {};
-    try {
-      const raw = readFileSync(configPath, 'utf8');
-      const parsed = YAML.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        config = parsed as Record<string, unknown>;
-      }
-    } catch {
-      config = {};
-    }
+    const config = readYamlRecord(configPath) ?? {};
 
     const currentModel = asRecord(config.model);
     const baseUrl = typeof currentModel?.base_url === 'string' ? currentModel.base_url : '';
     const provider = typeof currentModel?.provider === 'string' ? currentModel.provider : '';
     if (provider !== 'custom' || !baseUrl.endsWith('/llm/v1')) return;
 
-    const templateModel = asRecord(readYamlRecord(join(this.seedHermesHome, 'config.yaml'))?.model);
+    const templateModel = asRecord(readYamlRecord(join(this.templateHermesHome, 'config.yaml'))?.model);
     if (templateModel) {
       config.model = templateModel;
     } else {
@@ -1034,16 +970,7 @@ export class HermesSupervisor {
     const configPath = join(this.managedHermesHome, 'config.yaml');
     if (!existsSync(configPath)) return;
 
-    let config: Record<string, unknown> = {};
-    try {
-      const raw = readFileSync(configPath, 'utf8');
-      const parsed = YAML.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        config = parsed as Record<string, unknown>;
-      }
-    } catch {
-      config = {};
-    }
+    const config = readYamlRecord(configPath) ?? {};
 
     const mcpServers = asRecord(config.mcp_servers) ?? {};
     delete mcpServers.vervo;
@@ -1215,18 +1142,15 @@ export class HermesSupervisor {
   }
 
   private async ping(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const signals = [AbortSignal.timeout(timeoutMs), signal].filter(Boolean) as AbortSignal[];
     try {
       const res = await fetch(`${this.config.baseUrl}/health`, {
         method: 'GET',
-        signal: anySignal([controller.signal, signal].filter(Boolean) as AbortSignal[]),
+        signal: AbortSignal.any(signals),
       });
       return res.ok;
     } catch {
       return false;
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }
@@ -1267,6 +1191,17 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Env for running bundled Hermes: Python needs PYTHONPATH to find the
+// pre-installed packages — without it, `from hermes_cli.main import main`
+// fails immediately. Debug builds (no bundle) leave PYTHONPATH untouched so
+// the developer's venv-resolved imports keep working.
+function bundledPythonEnv(bundled: { sitePackages: string }): Record<string, string> {
+  return {
+    ...getBundledPythonBytecodeEnv(),
+    PYTHONPATH: [bundled.sitePackages, process.env.PYTHONPATH].filter(Boolean).join(':'),
+  };
+}
+
 function hasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -1289,29 +1224,6 @@ async function waitForExit(exited: Promise<void>, timeoutMs: number): Promise<bo
     exited.then(() => true),
     delay(timeoutMs).then(() => false),
   ]);
-}
-
-function anySignal(signals: AbortSignal[]): AbortSignal {
-  const controller = new AbortController();
-  const activeSignals = signals.filter(Boolean);
-
-  if (activeSignals.some((signal) => signal.aborted)) {
-    controller.abort();
-    return controller.signal;
-  }
-
-  const onAbort = () => {
-    controller.abort();
-    for (const signal of activeSignals) {
-      signal.removeEventListener('abort', onAbort);
-    }
-  };
-
-  for (const signal of activeSignals) {
-    signal.addEventListener('abort', onAbort, { once: true });
-  }
-
-  return controller.signal;
 }
 
 async function allocatePort(): Promise<number> {

@@ -123,37 +123,13 @@ export async function registerComposioRoutes(app: FastifyInstance, deps: Composi
 }
 
 function validateLoopbackCallbackUrl(value: string): string {
+  // The anchored shape check leaves only the port range to validate.
   const rawMatch = value.match(/^http:\/\/127\.0\.0\.1:([0-9]{1,5})\/connections\/callback$/);
-  if (!rawMatch) {
+  const port = rawMatch ? Number(rawMatch[1]) : 0;
+  if (port < 1 || port > 65535) {
     throw new ComposioServiceError(400, 'Invalid callbackUrl.');
   }
-
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new ComposioServiceError(400, 'Invalid callbackUrl.');
-  }
-
-  if (
-    url.protocol !== 'http:'
-    || url.hostname !== '127.0.0.1'
-    || !url.port
-    || url.username
-    || url.password
-    || url.pathname !== '/connections/callback'
-    || url.search
-    || url.hash
-  ) {
-    throw new ComposioServiceError(400, 'Invalid callbackUrl.');
-  }
-
-  const port = Number(rawMatch[1]);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new ComposioServiceError(400, 'Invalid callbackUrl.');
-  }
-
-  return url.toString();
+  return value;
 }
 
 function extractBearerToken(request: FastifyRequest): string {

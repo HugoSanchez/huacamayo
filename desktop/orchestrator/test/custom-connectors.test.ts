@@ -7,7 +7,7 @@ import { CustomConnectorsStore, sanitizeCustomConnectorSlug } from '../src/http/
 import { CustomConnectorKeychain, type KeychainExec } from '../src/http/keychain.ts';
 import { probeMcpServer } from '../src/http/mcp-probe.ts';
 import { HermesSupervisor } from '../src/http/hermes-supervisor.ts';
-import { countCustomConnectorTools } from '../src/http/hermes-toolsets.ts';
+import { countCustomConnectorTools } from '../src/http/hermes-gateway-client.ts';
 import { CustomConnectorService, removeHermesOAuthFiles, waitForCustomConnectorTools } from '../src/http/custom-connectors.ts';
 
 describe('custom MCP connectors', () => {
@@ -682,8 +682,7 @@ function fakeHermes(hermesHome: string) {
     launchCwd: null,
     invoke: vi.fn(() => null),
     restart: vi.fn(async () => {}),
-    waitUntilReady: vi.fn(async () => {}),
-  } as unknown as HermesSupervisor & { restart: ReturnType<typeof vi.fn>; waitUntilReady: ReturnType<typeof vi.fn> };
+  } as unknown as HermesSupervisor & { restart: ReturnType<typeof vi.fn> };
 }
 
 function fakeResponse() {

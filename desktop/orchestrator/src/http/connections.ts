@@ -111,7 +111,7 @@ function requestBaseUrl(req: IncomingMessage): string {
   return `http://127.0.0.1:${port}`;
 }
 
-function renderCallbackPage(title: string, message: string): string {
+export function renderCallbackPage(title: string, message: string): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -174,7 +174,7 @@ function renderCallbackPage(title: string, message: string): string {
 </html>`;
 }
 
-function sendHtml(res: ServerResponse, status: number, html: string): void {
+export function sendHtml(res: ServerResponse, status: number, html: string): void {
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': Buffer.byteLength(html),
