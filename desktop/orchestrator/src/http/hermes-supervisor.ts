@@ -245,6 +245,7 @@ export class HermesSupervisor {
   private readonly customConnectorKeychain: CustomConnectorKeychain;
 
   private config: HermesGatewayConfig;
+  private managedEndpointSelected: boolean;
   private orchestratorBaseUrl: string | null = null;
   private child: ChildProcess | null = null;
   private startPromise: Promise<void> | null = null;
@@ -269,6 +270,7 @@ export class HermesSupervisor {
     this.customConnectorsStore = options.customConnectorsStore ?? new CustomConnectorsStore();
     this.customConnectorKeychain = options.customConnectorKeychain ?? new CustomConnectorKeychain();
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
+    this.managedEndpointSelected = this.hasExplicitBaseUrl;
     this.manualMode = isManagedDisabled();
     this.templateHermesHome = getTemplateHermesHome();
     this.managedHermesHome = getManagedHermesHome(this.templateHermesHome);
@@ -657,6 +659,21 @@ export class HermesSupervisor {
   private async ensureSpawnTargetAvailable(): Promise<void> {
     const target = new URL(this.config.baseUrl);
     const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
+
+    // The default URL is only a discovery/configuration fallback. Select a
+    // unique endpoint before the first managed spawn so two Verso instances
+    // cannot both observe 8642 as free and then race to bind it. Keep the
+    // selected endpoint for normal restarts because OAuth callbacks depend on
+    // the origin remaining stable for the lifetime of this supervisor.
+    if (!this.hasExplicitBaseUrl && !this.managedEndpointSelected) {
+      this.config = {
+        ...this.config,
+        baseUrl: `http://${DEFAULT_HOST}:${await allocatePort()}`,
+      };
+      this.managedEndpointSelected = true;
+      return;
+    }
+
     if (await canBind(target.hostname, port)) {
       return;
     }
@@ -664,6 +681,7 @@ export class HermesSupervisor {
     if (!this.hasExplicitBaseUrl) {
       const port = await allocatePort();
       this.config = { ...this.config, baseUrl: `http://${DEFAULT_HOST}:${port}` };
+      this.managedEndpointSelected = true;
       return;
     }
 
