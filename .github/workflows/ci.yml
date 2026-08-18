@@ -141,11 +141,7 @@ jobs:
           git checkout -q FETCH_HEAD
 
       - name: Apply Verso runtime patches (build order)
-        run: |
-          scripts/apply-hermes-patches.sh hermes-src
-          # Hermes builds via setuptools-scm, which excludes patch-created
-          # untracked files from the wheel unless they are added to Git's index.
-          git -C hermes-src add -f gateway/platforms/verso_mcp_oauth.py
+        run: scripts/apply-hermes-patches.sh hermes-src
 
       - name: Install patched Hermes
         run: |

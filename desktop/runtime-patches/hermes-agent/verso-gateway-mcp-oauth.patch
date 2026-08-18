@@ -19,7 +19,7 @@
      # ------------------------------------------------------------------
 --- a/gateway/platforms/verso_mcp_oauth.py	1970-01-01 01:00:00
 +++ b/gateway/platforms/verso_mcp_oauth.py	2026-08-17 11:25:21
-@@ -0,0 +1,422 @@
+@@ -0,0 +1,428 @@
 +"""Verso runtime patch: MCP OAuth flow endpoints on the gateway API server.
 +
 +Mirrors the dashboard-mediated MCP OAuth flow from ``hermes_cli/web_server.py``
