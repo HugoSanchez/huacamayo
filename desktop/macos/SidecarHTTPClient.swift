@@ -95,9 +95,32 @@ struct SidecarHTTPClient {
     }
 
     func clearManagedSession() async throws {
-        var request = makeRequest(path: "managed/session")
-        request.httpMethod = "DELETE"
-        _ = try await send(request)
+        try await perform(path: "managed/session", method: "DELETE")
+    }
+
+    func decode<Response: Decodable>(
+        _ type: Response.Type,
+        path: String,
+        method: String = "GET",
+        body: Data? = nil
+    ) async throws -> Response {
+        let data = try await perform(path: path, method: method, body: body)
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    @discardableResult
+    func perform(
+        path: String,
+        method: String = "GET",
+        body: Data? = nil
+    ) async throws -> Data {
+        var request = makeRequest(path: path)
+        request.httpMethod = method
+        request.httpBody = body
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        return try await send(request)
     }
 
     private func makeRequest(path: String) -> URLRequest {

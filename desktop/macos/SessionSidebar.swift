@@ -851,65 +851,6 @@ private struct SidebarCronRow: View {
     }
 }
 
-struct SidebarCron: Decodable, Identifiable, Equatable {
-    let id: String
-    let name: String
-    let scheduleDisplay: String?
-    let nextRunAt: String?
-    let lastStatus: String?
-    let lastError: String?
-    let state: String
-    let enabled: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case name
-        case scheduleDisplay = "schedule_display"
-        case nextRunAt = "next_run_at"
-        case lastStatus = "last_status"
-        case lastError = "last_error"
-        case state
-        case enabled
-    }
-}
-
-struct SidebarCronsResponse: Decodable {
-    let crons: [SidebarCron]
-}
-
-struct SidebarSkill: Decodable, Identifiable, Equatable {
-    let slug: String
-    let name: String
-    let description: String
-    let category: String?
-    let tags: [String]
-    let prerequisites: [String]
-    let platforms: [String]
-    let enabled: Bool
-    let pinned: Bool
-
-    var id: String { slug }
-}
-
-struct SidebarSkillsResponse: Decodable {
-    let skills: [SidebarSkill]
-}
-
-struct SidebarSkillToggleRequest: Encodable {
-    let enabled: Bool
-}
-
-struct SidebarConnection: Decodable, Identifiable {
-    let connectedAccountId: String
-    let toolkitSlug: String
-    let toolkitName: String
-    let logoUrl: String?
-    let status: String
-
-    var id: String { connectedAccountId }
-    var displayToolkitName: String { sidebarDisplayToolkitName(toolkitName) }
-}
-
 private struct SidebarConnectionRow: View {
     let connection: SidebarConnection
     let theme: ConductorThemePalette
@@ -966,40 +907,6 @@ private struct SidebarConnectionRow: View {
             isHovered = hovering
         }
     }
-}
-
-struct SidebarCustomConnector: Decodable, Identifiable {
-    let id: String
-    let name: String
-    let slug: String
-    let url: String
-    let transport: String
-    let auth: String
-    var logoUrl: String?
-    let status: SidebarCustomConnectorStatus
-
-    var displayName: String {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? slug : trimmed
-    }
-
-    var statusText: String {
-        switch status.state {
-        case "connected":
-            return "Connected"
-        case "pending_auth":
-            return "Waiting for sign-in"
-        default:
-            return status.reason ?? "No tools registered"
-        }
-    }
-}
-
-struct SidebarCustomConnectorStatus: Decodable {
-    let state: String
-    let toolCount: Int?
-    let reason: String?
-    let cached: Bool?
 }
 
 private struct SidebarCustomConnectorRow: View {
@@ -1124,31 +1031,6 @@ private struct ConnectionLogo: View {
     }
 }
 
-private func sidebarDisplayToolkitName(_ name: String) -> String {
-    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    let normalized = trimmed.lowercased().replacingOccurrences(of: "_", with: " ")
-    switch normalized {
-    case "google calendar", "googlecalendar":
-        return "Calendar"
-    case "google docs", "googledocs":
-        return "Docs"
-    case "google drive", "googledrive":
-        return "Drive"
-    case "google sheets", "googlesheets":
-        return "Sheets"
-    case "granola mcp":
-        return "Granola"
-    default:
-        if normalized.hasPrefix("google ") {
-            return String(trimmed.dropFirst("Google ".count))
-        }
-        if normalized.hasSuffix(" mcp") {
-            return String(trimmed.dropLast(" MCP".count))
-        }
-        return trimmed.isEmpty ? name : trimmed
-    }
-}
-
 private final class ConnectionLogoCache {
     static let shared = ConnectionLogoCache()
 
@@ -1163,79 +1045,9 @@ private final class ConnectionLogoCache {
     }
 }
 
-struct SidebarConnectionsResponse: Decodable {
-    let connections: [SidebarConnection]
-}
-
-struct SidebarCustomConnectorsResponse: Decodable {
-    let connectors: [SidebarCustomConnector]
-}
-
-struct SidebarCustomConnectorResponse: Decodable {
-    let connector: SidebarCustomConnector
-}
-
-// Internal (not `private`) so the shell-protocol types in ChatWebView.swift
-// can carry `[SidebarChatSession]` inside `ShellState`.
-struct SidebarChatSession: Codable, Identifiable, Equatable {
-    let id: String
-    let title: String
-    let createdAt: String
-    let updatedAt: String
-    let archivedAt: String?
-    let model: String?
-    let messageCount: Int
-    let lastMessagePreview: String?
-}
-
-struct SidebarChatSessionsResponse: Decodable {
-    let sessions: [SidebarChatSession]
-}
-
-struct SidebarChatSessionEnvelope: Decodable {
-    let session: SidebarChatSession
-}
-
-struct SidebarRenameSessionRequest: Encodable {
-    let title: String
-}
-
 struct SidebarToast: Identifiable, Equatable {
     let id: UUID
     let message: String
-}
-
-enum SidebarRequestError: LocalizedError {
-    case invalidResponse
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidResponse:
-            return "The sidecar returned an invalid response."
-        }
-    }
-}
-
-func replacing(_ session: SidebarChatSession, in sessions: [SidebarChatSession]) -> [SidebarChatSession] {
-    let filtered = sessions.filter { $0.id != session.id }
-    return [session] + filtered
-}
-
-func sortSessions(_ sessions: [SidebarChatSession]) -> [SidebarChatSession] {
-    sessions.sorted { left, right in
-        if (left.archivedAt == nil) != (right.archivedAt == nil) {
-            return left.archivedAt == nil
-        }
-
-        // Active sessions keep a stable spatial position. Activity still
-        // updates the trailing age, streaming indicator, and unread dot, but
-        // concurrent responses no longer reshuffle the navigation under the
-        // user's pointer. Newly created sessions naturally enter at the top.
-        let leftKey = left.archivedAt ?? left.createdAt
-        let rightKey = right.archivedAt ?? right.createdAt
-        if leftKey != rightKey { return leftKey > rightKey }
-        return left.id > right.id
-    }
 }
 
 private func sessionTimestampLabel(_ session: SidebarChatSession) -> String {
