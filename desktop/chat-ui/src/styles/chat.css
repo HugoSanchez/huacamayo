@@ -223,7 +223,7 @@
 .chat-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 44px;
+  padding: 16px 64px;
 }
 
 /* Centre the message column inside the padded doc.

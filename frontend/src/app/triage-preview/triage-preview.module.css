@@ -1,0 +1,2219 @@
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/assets/fonts/IBMPlexSans-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/assets/fonts/IBMPlexSans-Medium.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/assets/fonts/IBMPlexSans-SemiBold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/assets/fonts/IBMPlexSans-Bold.woff2') format('woff2');
+}
+
+.page {
+  --background: #f5f2ea;
+  --background-grad-a: #f5f2ea;
+  --background-grad-b: #efebe0;
+  --brand-glow: rgba(109, 122, 76, 0.1);
+  --foreground: #34332d;
+  --muted: #8f8c7f;
+  --subtle: rgba(50, 48, 40, 0.09);
+  --border: rgba(50, 48, 40, 0.11);
+  --card: rgba(239, 235, 224, 0.92);
+  --accent: rgba(109, 122, 76, 0.08);
+  --primary: #6d7a4c;
+  --primarySoft: rgba(109, 122, 76, 0.18);
+  --danger: #dc2626;
+  --warning: #d97706;
+  --success: #16a34a;
+  --info: #0284c7;
+  --diagonal: rgba(17, 18, 20, 0.18);
+
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(60% 50% at 50% 0%, var(--background-grad-a) 0%, transparent 70%),
+    radial-gradient(42% 34% at 82% 10%, var(--brand-glow) 0%, transparent 72%),
+    linear-gradient(180deg, var(--background-grad-a) 0%, var(--background-grad-b) 100%);
+  background-color: var(--background);
+  background-attachment: fixed;
+  color: var(--foreground);
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+}
+
+.page[data-theme='dark'] {
+  --background: #1e2022;
+  --background-grad-a: #26282b;
+  --background-grad-b: #1e2022;
+  --brand-glow: rgba(166, 192, 122, 0.08);
+  --foreground: rgba(255, 255, 255, 0.9);
+  --muted: rgba(255, 255, 255, 0.46);
+  --subtle: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.1);
+  --card: rgba(38, 40, 43, 0.92);
+  --accent: rgba(255, 255, 255, 0.06);
+  --primary: #a6c07a;
+  --primarySoft: rgba(166, 192, 122, 0.18);
+  --diagonal: rgba(244, 244, 245, 0.22);
+}
+
+.nav {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 50;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--background) 92%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.navInner,
+.heroInner,
+.sectionInner,
+.footerInner {
+  width: min(1200px, calc(100vw - 48px));
+  margin: 0 auto;
+}
+
+.navInner {
+  display: flex;
+  height: 56px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  color: #000000;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.navActions,
+.heroActions,
+.toolbar div,
+.detailHead div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.iconButton,
+.textLink,
+.outlineButton {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--foreground) 72%, transparent);
+  font: inherit;
+  font-size: 13px;
+}
+
+.iconButton {
+  position: relative;
+  width: 32px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.iconButton:hover,
+.textLink:hover {
+  color: var(--foreground);
+}
+
+.iconButton svg,
+.primaryButton svg,
+.secondaryButton svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.outlineButton {
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--foreground) 40%, transparent);
+  color: var(--foreground);
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.outlineButton:hover,
+.secondaryButton:hover {
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.hero {
+  position: relative;
+  z-index: 10;
+  padding: 108px 0 0;
+  overflow: hidden;
+}
+
+.heroTop {
+  position: relative;
+  display: flex;
+  min-height: 350px;
+  padding-bottom: 64px;
+}
+
+.heroText {
+  position: relative;
+  z-index: 3;
+  width: min(540px, 100%);
+}
+
+.heroText h1,
+.section h2,
+.cta h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.heroText h1 {
+  max-width: 540px;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 1.08;
+}
+
+.heroText p {
+  max-width: 520px;
+  margin: 24px 0 0;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.65;
+}
+
+.heroActions {
+  margin-top: 40px;
+}
+
+.primaryButton,
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--foreground);
+  font-weight: 500;
+  transition: background 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+.primaryButton {
+  padding: 12px 24px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 14px;
+}
+
+.primaryButton:hover {
+  opacity: 0.9;
+}
+
+.logoScene {
+  position: absolute;
+  top: 44%;
+  right: -130px;
+  z-index: 1;
+  display: block;
+  width: min(58vw, 680px);
+  aspect-ratio: 1;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.logoCube {
+  position: absolute;
+  inset: 12%;
+  transform: rotateX(55deg) rotateZ(45deg);
+  transform-style: preserve-3d;
+}
+
+.logoCube span {
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 60%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, transparent), transparent 48%),
+    repeating-linear-gradient(-45deg, transparent 0 12px, var(--subtle) 12px 13px);
+  box-shadow: inset 0 0 0 1px var(--subtle);
+}
+
+.logoCube span:nth-child(1) {
+  transform: translateZ(72px);
+}
+
+.logoCube span:nth-child(2) {
+  transform: translate(54px, -54px) translateZ(24px);
+}
+
+.logoCube span:nth-child(3) {
+  transform: translate(108px, -108px) translateZ(-24px);
+}
+
+.logoCube span:nth-child(4) {
+  transform: translate(162px, -162px) translateZ(-72px);
+}
+
+.mockupShell {
+  position: relative;
+  overflow: visible;
+}
+
+.mockup {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: var(--card);
+  box-shadow: 0 26px 90px color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+.mockup::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 128px;
+  background: linear-gradient(to top, var(--background), transparent);
+  content: '';
+  pointer-events: none;
+}
+
+.versoMockup {
+  height: min(620px, 70vh);
+  min-height: 520px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 28px 100px color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.versoMockup::after {
+  display: none;
+}
+
+.versoSide {
+  display: flex;
+  width: 272px;
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--background);
+  padding: 18px 20px 14px;
+}
+
+.traffic {
+  display: flex;
+  gap: 8px;
+  margin: 2px 0 24px;
+}
+
+.traffic i {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+
+.traffic i:nth-child(1) {
+  background: #ff5f57;
+  border-color: #e2463f;
+}
+
+.traffic i:nth-child(2) {
+  background: #febc2e;
+  border-color: #e1a116;
+}
+
+.traffic i:nth-child(3) {
+  background: #28c840;
+  border-color: #19a72f;
+}
+
+.versoSideScroll {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.mockSection + .mockSection {
+  margin-top: 24px;
+}
+
+.mockSectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
+}
+
+.mockSectionHead span:last-child {
+  color: color-mix(in srgb, var(--muted) 58%, transparent);
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.mockSession,
+.mockSessionActive {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  color: color-mix(in srgb, var(--foreground) 74%, transparent);
+  font-size: 13px;
+}
+
+.mockSession span:first-child,
+.mockSessionActive span:first-child,
+.mockSession span:last-child,
+.mockSessionActive span:last-child {
+  color: color-mix(in srgb, var(--muted) 68%, transparent);
+  font-size: 12px;
+}
+
+.mockSession span:nth-child(2),
+.mockSessionActive span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mockSessionActive span:nth-child(2) {
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+.mockConnections {
+  display: flex;
+  flex-direction: column;
+}
+
+.mockConnection,
+.mockMetaRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  color: color-mix(in srgb, var(--foreground) 74%, transparent);
+  font-size: 13px;
+}
+
+.mockConnection img,
+.mockLogoRow img,
+.mockStep img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.mockMetaRow {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mockMetaRow span:last-child {
+  color: color-mix(in srgb, var(--muted) 68%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mockSideFooter {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--subtle);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mockSideFooter i {
+  width: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.versoMain {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  background: var(--background);
+}
+
+.mockHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--subtle);
+  padding: 11px 24px;
+  text-align: center;
+}
+
+.mockHeader h3 {
+  margin: 0;
+  color: color-mix(in srgb, var(--foreground) 76%, transparent);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mockHeader span {
+  color: color-mix(in srgb, var(--muted) 62%, transparent);
+  font-size: 12px;
+}
+
+.mockHeader span::before {
+  content: "- ";
+}
+
+.mockDocument {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 26px 44px 0;
+}
+
+.mockColumn {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.mockActivityHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.mockActivityHead > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mockActivityHead > span {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.mockLogoRow {
+  display: flex;
+  gap: 6px;
+}
+
+.mockSteps {
+  margin-bottom: 24px;
+}
+
+.mockStep {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 0;
+  color: color-mix(in srgb, var(--foreground) 74%, transparent);
+  font-size: 13px;
+}
+
+.mockStep img {
+  width: 18px;
+  height: 18px;
+}
+
+.mockStep span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mockStep span:last-child,
+.mockMore {
+  color: color-mix(in srgb, var(--muted) 68%, transparent);
+  font-size: 12px;
+}
+
+.mockMore {
+  padding: 8px 0 0 34px;
+}
+
+.mockReply {
+  color: var(--foreground);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.mockReply p {
+  margin: 0 0 18px;
+}
+
+.mockReply h4 {
+  margin: 22px 0 12px;
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.mockReply ul {
+  margin: 0 0 18px 28px;
+  padding-left: 20px;
+}
+
+.mockReply li {
+  margin-bottom: 12px;
+  color: color-mix(in srgb, var(--foreground) 76%, transparent);
+}
+
+.mockReply li::marker {
+  color: var(--muted);
+}
+
+.mockReply strong {
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+.mockComposer {
+  padding: 0 44px 20px;
+  background: var(--background);
+}
+
+.mockComposerInner {
+  display: flex;
+  max-width: 800px;
+  min-height: 88px;
+  margin: 0 auto;
+  flex-direction: column;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding: 12px 16px 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.mockComposerInner > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 12px;
+}
+
+.mockComposerInner > div > span {
+  color: var(--muted);
+}
+
+.mockComposerInner > div > span + span {
+  margin-right: auto;
+}
+
+.mockComposerInner button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  cursor: default;
+  padding: 0;
+}
+
+.mockComposerInner svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.sidebar {
+  display: flex;
+  width: 200px;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid var(--border);
+  padding: 12px;
+}
+
+.sidebarHead,
+.sidebarItem,
+.sidebarItemActive {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebarHead {
+  height: 32px;
+  padding: 0 8px;
+  margin-bottom: 8px;
+}
+
+.sidebarItem,
+.sidebarItemActive {
+  height: 28px;
+  padding: 0 8px;
+}
+
+.sidebarItemActive {
+  border-radius: 6px;
+  background: var(--accent);
+}
+
+.hairline {
+  display: block;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.sectionLabel {
+  width: 56px;
+  height: 6px;
+  margin: 7px 8px 4px;
+  border-radius: 999px;
+  background: var(--subtle);
+}
+
+.squareMark,
+.sidebarIcon,
+.dot,
+.avatarMini,
+.priorityBox,
+.danger,
+.warning,
+.primary,
+.success,
+.muted,
+.info {
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.squareMark {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--primarySoft);
+}
+
+.sidebarIcon {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--subtle);
+}
+
+.dot,
+.danger,
+.warning,
+.primary,
+.success,
+.muted,
+.info {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.dot,
+.muted {
+  background: color-mix(in srgb, var(--muted) 32%, transparent);
+}
+
+.danger {
+  background: var(--danger);
+}
+
+.warning {
+  background: var(--warning);
+}
+
+.primary {
+  background: var(--primary);
+}
+
+.success {
+  background: var(--success);
+}
+
+.info {
+  background: var(--info);
+}
+
+.line,
+.lineShort,
+.issueTitle,
+.toolbar span,
+.detailHead > span,
+.detailHead i,
+.toolbar i,
+.detailTitle,
+.copyLines span,
+.commentLabel,
+.comment div span,
+.flow b {
+  display: inline-block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--subtle);
+}
+
+.lineShort {
+  width: 64px;
+}
+
+.issueList {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.toolbar,
+.detailHead {
+  display: flex;
+  height: 40px;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+}
+
+.toolbar span:nth-child(1) {
+  width: 40px;
+}
+
+.toolbar span:nth-child(2) {
+  width: 32px;
+}
+
+.toolbar span:nth-child(3) {
+  width: 48px;
+}
+
+.toolbar div {
+  margin-left: auto;
+}
+
+.toolbar i,
+.detailHead i {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+}
+
+.issueRow {
+  position: relative;
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+}
+
+.priorityBox {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.priorityBox span {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+}
+
+.issueId {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.issueTitle {
+  position: relative;
+  z-index: 1;
+  background: color-mix(in srgb, var(--foreground) 15%, transparent);
+}
+
+.statusArea {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.avatarMini {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--subtle);
+}
+
+.detailPanel {
+  display: flex;
+  width: 280px;
+  flex-shrink: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
+.detailHead {
+  justify-content: space-between;
+}
+
+.detailHead > span {
+  width: 80px;
+}
+
+.detailBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.detailTitle {
+  width: 128px;
+  height: 8px;
+  background: color-mix(in srgb, var(--foreground) 20%, transparent);
+}
+
+.copyLines {
+  display: grid;
+  gap: 6px;
+}
+
+.copyLines span:first-child {
+  width: 100%;
+}
+
+.copyLines span:last-child {
+  width: 75%;
+}
+
+.property {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.property span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.property i {
+  width: 10px;
+  height: 10px;
+}
+
+.comments {
+  display: grid;
+  gap: 12px;
+}
+
+.commentLabel {
+  width: 56px;
+}
+
+.comment {
+  display: flex;
+  gap: 8px;
+}
+
+.comment div {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+}
+
+.comment div span:first-child {
+  width: 100%;
+}
+
+.comment div span:last-child {
+  width: 66%;
+}
+
+.divider {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  border-top: 1px solid var(--border);
+}
+
+.section {
+  position: relative;
+  z-index: 10;
+  overflow: hidden;
+  padding: 96px 0;
+}
+
+.eyebrow {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.section h2,
+.cta h2 {
+  max-width: 560px;
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  line-height: 1.15;
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 64px;
+  border: 1px solid var(--border);
+}
+
+.feature {
+  padding: 32px;
+}
+
+.feature + .feature {
+  border-left: 1px solid var(--border);
+}
+
+.featureGraphic {
+  display: flex;
+  height: 128px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+}
+
+.feature h3 {
+  margin: 0 0 8px;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.feature p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.bars {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+  padding: 0 24px;
+}
+
+.bars span {
+  height: 8px;
+  border-radius: 999px;
+}
+
+.flow {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+}
+
+.flow span {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.flow i {
+  width: 32px;
+  height: 32px;
+}
+
+.flow b {
+  width: 32px;
+  height: 4px;
+}
+
+.chart {
+  display: flex;
+  width: 100%;
+  height: 64px;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 0 24px;
+}
+
+.chart > span {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px 5px 0 0;
+}
+
+.quoteSection {
+  position: relative;
+  z-index: 10;
+  display: grid;
+  overflow: hidden;
+  min-height: 360px;
+  place-items: center;
+  padding: 96px 24px;
+}
+
+.quoteCard {
+  position: relative;
+  z-index: 1;
+  width: min(720px, 100%);
+  border: 1px solid var(--border);
+  background: var(--background);
+  padding: 40px;
+}
+
+.quoteCard blockquote {
+  margin: 0;
+  color: color-mix(in srgb, var(--foreground) 85%, transparent);
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.person div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 13px;
+}
+
+.person span:first-child {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.person span:last-child {
+  color: var(--muted);
+}
+
+.avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--foreground) 18%, transparent));
+  color: var(--background);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cta {
+  position: relative;
+  z-index: 10;
+  display: grid;
+  justify-items: center;
+  padding: 128px 24px 160px;
+  text-align: center;
+}
+
+.cta h2 {
+  margin: 0 auto;
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 1.1;
+}
+
+.cta p {
+  max-width: 460px;
+  margin: 20px auto 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.secondaryButton {
+  margin-top: 40px;
+  padding: 14px 32px;
+  color: var(--foreground);
+  font-size: 15px;
+}
+
+.footer {
+  position: relative;
+  z-index: 10;
+  border-top: 1px solid var(--border);
+}
+
+.footerInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.diagonalShade,
+.diagonalCompact {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--diagonal) 0,
+    var(--diagonal) 1px,
+    transparent 1px,
+    transparent 8px
+  );
+  pointer-events: none;
+}
+
+.diagonalCompact {
+  z-index: 0;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--diagonal) 56%, transparent) 0,
+    color-mix(in srgb, var(--diagonal) 56%, transparent) 1px,
+    transparent 1px,
+    transparent 6px
+  );
+}
+
+@media (max-width: 980px) {
+  .heroTop {
+    min-height: 0;
+  }
+
+  .logoScene {
+    display: none;
+  }
+
+  .heroText {
+    width: 100%;
+  }
+
+  .featureGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .feature + .feature {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .detailPanel {
+    display: none;
+  }
+
+  .versoMockup {
+    height: 560px;
+  }
+
+  .versoSide {
+    width: 230px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .mockDocument,
+  .mockComposer {
+    padding-right: 28px;
+    padding-left: 28px;
+  }
+
+  .mockReply {
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 700px) {
+  .navInner,
+  .heroInner,
+  .sectionInner,
+  .footerInner {
+    width: min(100vw - 32px, 1200px);
+  }
+
+  .navActions {
+    gap: 2px;
+  }
+
+  .textLink {
+    display: none;
+  }
+
+  .hero {
+    padding-top: 88px;
+  }
+
+  .heroTop {
+    padding-bottom: 44px;
+  }
+
+  .mockup {
+    min-height: 360px;
+  }
+
+  .versoMockup {
+    height: 520px;
+    min-height: 0;
+  }
+
+  .versoSide {
+    display: none;
+  }
+
+  .mockHeader {
+    justify-content: flex-start;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .mockHeader span {
+    display: none;
+  }
+
+  .mockDocument,
+  .mockComposer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .mockActivityHead {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mockActivityHead > span {
+    display: none;
+  }
+
+  .mockStep {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .mockStep span:last-child {
+    display: none;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .issueRow {
+    gap: 8px;
+    padding: 0 12px;
+  }
+
+  .issueTitle {
+    max-width: 34%;
+  }
+
+  .section,
+  .quoteSection {
+    padding-top: 72px;
+    padding-bottom: 72px;
+  }
+
+  .feature {
+    padding: 24px;
+  }
+
+  .quoteCard {
+    padding: 28px;
+  }
+
+  .quoteCard blockquote {
+    font-size: 18px;
+  }
+
+  .cta {
+    padding-top: 92px;
+    padding-bottom: 112px;
+  }
+}
+
+.versoSilhouette {
+  display: grid;
+  grid-template-columns: 255px minmax(480px, 1fr) 280px;
+  min-height: 520px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 16px 16px 0 0;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 28px 100px color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.versoSilhouette::after {
+  height: 112px;
+  background: linear-gradient(to top, var(--background), transparent);
+}
+
+.silhouetteSidebar,
+.silhouetteMain,
+.silhouetteInspector {
+  min-width: 0;
+  background: var(--background);
+}
+
+.silhouetteSidebar {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  padding: 20px 18px 18px;
+}
+
+.silhouetteBrand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 26px;
+}
+
+.silhouetteBrand span {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--primarySoft);
+}
+
+.silhouetteBrand i {
+  width: 100px;
+  height: 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+.silhouetteNav {
+  display: grid;
+  gap: 13px;
+  border-top: 1px solid var(--subtle);
+  border-bottom: 1px solid var(--subtle);
+  padding: 22px 0;
+}
+
+.silhouetteNav span,
+.silhouetteSession span,
+.silhouetteSessionActive span,
+.silhouetteHeader span,
+.silhouetteHeader i,
+.silhouettePrompt span,
+.silhouetteActivityHead span,
+.silhouetteRow span,
+.silhouetteRow i,
+.silhouetteAnswer span,
+.silhouetteComposer span,
+.silhouetteComposer i,
+.silhouetteInspectorHead span,
+.silhouetteInspectorBlock span,
+.silhouetteStatusRow span,
+.silhouetteStatusRow i,
+.silhouetteStatusRow em,
+.silhouetteInspectorFooter span {
+  display: block;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.silhouetteNav span {
+  height: 9px;
+}
+
+.silhouetteNav span:nth-child(1) {
+  width: 74%;
+}
+
+.silhouetteNav span:nth-child(2) {
+  width: 58%;
+}
+
+.silhouetteNav span:nth-child(3) {
+  width: 88%;
+}
+
+.silhouetteSessions {
+  display: grid;
+  gap: 6px;
+  margin-top: 20px;
+}
+
+.silhouetteSession,
+.silhouetteSessionActive {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--muted);
+}
+
+.silhouetteSessionActive {
+  background: var(--primarySoft);
+}
+
+.silhouetteSession span,
+.silhouetteSessionActive span {
+  width: 14px;
+  height: 14px;
+  border-radius: 5px;
+}
+
+.silhouetteSessionActive span {
+  background: var(--primary);
+}
+
+.silhouetteSession i,
+.silhouetteSessionActive i,
+.silhouetteSession em,
+.silhouetteSessionActive em {
+  overflow: hidden;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1;
+  opacity: 0.68;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.silhouetteSessionActive i {
+  color: var(--foreground);
+  opacity: 0.86;
+}
+
+.silhouetteIconStack {
+  display: flex;
+  gap: 9px;
+  margin-top: auto;
+  padding-top: 22px;
+}
+
+.silhouetteIconStack img,
+.silhouetteLogoRow img,
+.silhouetteRow img,
+.silhouetteStatusRow img {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.silhouetteMain {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
+
+.silhouetteHeader {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+}
+
+.silhouetteHeader div {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.silhouetteHeader span {
+  height: 9px;
+}
+
+.silhouetteHeader span:nth-child(1) {
+  width: 68px;
+}
+
+.silhouetteHeader span:nth-child(2) {
+  width: 52px;
+}
+
+.silhouetteHeader span:nth-child(3) {
+  width: 96px;
+}
+
+.silhouetteHeader i {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.silhouetteCanvas {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 34px 42px 0;
+}
+
+.silhouetteThread {
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.silhouettePrompt {
+  display: grid;
+  gap: 10px;
+  max-width: 380px;
+  margin-bottom: 30px;
+}
+
+.silhouettePrompt span {
+  height: 12px;
+}
+
+.silhouettePrompt span:nth-child(1) {
+  width: 100%;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+.silhouettePrompt span:nth-child(2) {
+  width: 68%;
+}
+
+.silhouetteActivity {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--subtle);
+  padding: 18px 0 16px;
+}
+
+.silhouetteActivityHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.silhouetteLogoRow {
+  display: flex;
+  gap: 7px;
+}
+
+.silhouetteActivityHead span {
+  width: 120px;
+  height: 8px;
+}
+
+.silhouetteRows {
+  display: grid;
+}
+
+.silhouetteRow {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  border-top: 1px solid var(--subtle);
+}
+
+.silhouetteRow span {
+  height: 8px;
+}
+
+.silhouetteRow i {
+  width: 42px;
+  height: 8px;
+  justify-self: end;
+}
+
+.silhouetteRow[data-length='short'] span {
+  width: 48%;
+}
+
+.silhouetteRow[data-length='medium'] span {
+  width: 66%;
+}
+
+.silhouetteRow[data-length='wide'] span {
+  width: 82%;
+}
+
+.silhouetteRow[data-length='long'] span {
+  width: 92%;
+}
+
+.silhouetteAnswer {
+  display: grid;
+  gap: 12px;
+  max-width: 560px;
+  margin-top: 30px;
+}
+
+.silhouetteAnswer span {
+  height: 11px;
+}
+
+.silhouetteAnswer span:nth-child(1) {
+  width: 92%;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+.silhouetteAnswer span:nth-child(2) {
+  width: 76%;
+}
+
+.silhouetteAnswer span:nth-child(3) {
+  width: 86%;
+}
+
+.silhouetteAnswer span:nth-child(4) {
+  width: 48%;
+}
+
+.silhouetteComposer {
+  display: flex;
+  min-height: 86px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  border-top: 1px solid var(--border);
+  padding: 18px 42px;
+}
+
+.silhouetteComposer > span {
+  width: min(360px, 58%);
+  height: 11px;
+  margin-top: 8px;
+}
+
+.silhouetteComposer div {
+  display: flex;
+  gap: 10px;
+}
+
+.silhouetteComposer i {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+}
+
+.silhouetteComposer i:last-child {
+  background: var(--foreground);
+}
+
+.silhouetteInspector {
+  display: flex;
+  flex-direction: column;
+  padding: 25px 24px 22px;
+}
+
+.silhouetteInspectorHead {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.silhouetteInspectorHead span {
+  height: 10px;
+}
+
+.silhouetteInspectorHead span:first-child {
+  width: 70%;
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+
+.silhouetteInspectorHead span:last-child {
+  width: 92%;
+}
+
+.silhouetteInspectorBlock {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--subtle);
+  border-bottom: 1px solid var(--subtle);
+  padding: 25px 0;
+}
+
+.silhouetteInspectorBlock span {
+  height: 9px;
+}
+
+.silhouetteInspectorBlock span:nth-child(1) {
+  width: 62%;
+}
+
+.silhouetteInspectorBlock span:nth-child(2) {
+  width: 92%;
+}
+
+.silhouetteInspectorBlock span:nth-child(3) {
+  width: 74%;
+}
+
+.silhouetteStatusList {
+  display: grid;
+  gap: 18px;
+  padding: 26px 0;
+}
+
+.silhouetteStatusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.silhouetteStatusRow div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+}
+
+.silhouetteStatusRow div > span {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+}
+
+.silhouetteStatusRow i {
+  width: 62%;
+  height: 9px;
+}
+
+.silhouetteStatusRow em {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  background: var(--primary);
+}
+
+.silhouetteStatusRow:nth-child(2) em {
+  background: var(--warning);
+}
+
+.silhouetteStatusRow:nth-child(3) em {
+  background: var(--danger);
+}
+
+.silhouetteInspectorFooter {
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 22px;
+  border-top: 1px solid var(--subtle);
+}
+
+.silhouetteInspectorFooter span {
+  height: 9px;
+}
+
+.silhouetteInspectorFooter span:first-child {
+  width: 86%;
+}
+
+.silhouetteInspectorFooter span:last-child {
+  width: 64%;
+}
+
+@media (max-width: 980px) {
+  .versoSilhouette {
+    grid-template-columns: 215px minmax(0, 1fr);
+  }
+
+  .silhouetteInspector {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .versoSilhouette {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 430px;
+  }
+
+  .silhouetteSidebar,
+  .silhouetteInspector {
+    display: none;
+  }
+
+  .silhouetteMain {
+    border-right: 0;
+  }
+
+  .silhouetteHeader {
+    padding: 0 18px;
+  }
+
+  .silhouetteHeader span:nth-child(3),
+  .silhouetteHeader i:first-child {
+    display: none;
+  }
+
+  .silhouetteCanvas {
+    padding: 28px 20px 0;
+  }
+
+  .silhouetteComposer {
+    min-height: 76px;
+    padding: 17px 20px;
+  }
+
+  .silhouetteRow {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .silhouetteRow i {
+    display: none;
+  }
+}
+
+/* Closer to the real Verso app shell: BrowserSidebar + chat-panel. */
+.versoSilhouette {
+  grid-template-columns: 290px minmax(0, 1fr);
+  min-height: 560px;
+}
+
+.silhouetteSidebar {
+  gap: 18px;
+  padding: 20px 16px;
+  background: var(--background);
+}
+
+.silhouetteSidebarHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.silhouetteSidebarHead span,
+.silhouetteSectionTitle {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.silhouetteSidebarHead strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.silhouetteSidebarHead button,
+.silhouetteHeader button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.silhouetteSidebarHead button {
+  width: 30px;
+  height: 30px;
+}
+
+.silhouetteConnectorRail {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+
+.silhouetteConnectorRail img {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.silhouetteSessions {
+  gap: 10px;
+  margin-top: -8px;
+}
+
+.silhouetteSession,
+.silhouetteSessionActive {
+  display: block;
+  min-height: 78px;
+  padding: 14px 12px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+
+.silhouetteSessionActive {
+  border-color: color-mix(in srgb, var(--primary) 22%, transparent);
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+}
+
+.silhouetteSession div,
+.silhouetteSessionActive div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.silhouetteSession i,
+.silhouetteSessionActive i {
+  color: var(--foreground);
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+.silhouetteSession em,
+.silhouetteSessionActive em,
+.silhouetteSession p,
+.silhouetteSessionActive p {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.silhouetteSession p,
+.silhouetteSessionActive p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 7px 0 0;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.silhouetteCustomRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+
+.silhouetteCustomRow span {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--primarySoft);
+}
+
+.silhouetteCustomRow i {
+  width: 118px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.silhouetteMain {
+  border-right: 0;
+}
+
+.silhouetteHeader {
+  min-height: 72px;
+  align-items: center;
+  border-bottom-color: var(--border);
+  padding: 0 28px;
+  background: var(--background);
+}
+
+.silhouetteHeader > div {
+  display: block;
+  min-width: 0;
+  flex: 1;
+}
+
+.silhouetteHeader strong {
+  display: block;
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.silhouetteHeader span {
+  width: auto;
+  height: auto;
+  margin-top: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.silhouetteHeader button {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.silhouetteCanvas {
+  padding: 28px 64px 0;
+}
+
+.silhouetteThread {
+  max-width: 800px;
+}
+
+.silhouettePrompt {
+  margin-left: auto;
+}
+
+.silhouettePrompt span:nth-child(1) {
+  height: 38px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.silhouettePrompt span:nth-child(2) {
+  justify-self: end;
+}
+
+.silhouetteActivity {
+  margin-top: 28px;
+}
+
+.silhouetteActivityHead {
+  justify-content: flex-start;
+}
+
+.silhouetteActivityHead span {
+  margin-left: auto;
+}
+
+.silhouetteComposer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 96px;
+  padding: 0 64px 20px;
+}
+
+.silhouetteComposer::before {
+  display: block;
+  grid-column: 1 / -1;
+  width: min(800px, 100%);
+  height: 1px;
+  margin: 0 auto;
+  background: var(--border);
+  content: '';
+}
+
+.silhouetteComposer > span,
+.silhouetteComposer > div {
+  margin-top: 14px;
+}
+
+.silhouetteComposer > div {
+  justify-self: end;
+}
+
+@media (max-width: 980px) {
+  .versoSilhouette {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+  .silhouetteCanvas,
+  .silhouetteComposer {
+    padding-right: 36px;
+    padding-left: 36px;
+  }
+}
+
+@media (max-width: 700px) {
+  .versoSilhouette {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .silhouetteCanvas,
+  .silhouetteComposer {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+}
