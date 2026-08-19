@@ -27,6 +27,10 @@ __pycache__/
 # Models
 *.gguf
 
+# Local generated runtime state
+.supermemory/
+**/auth-secret
+
 # macOS
 .DS_Store
 
@@ -39,6 +43,10 @@ desktop/runtime-bundles/
 # Sparkle EdDSA private key — should NEVER be committed
 *sparkle*private*key*
 verso-edkey.txt
+*.p12
+*.pfx
+*.pem
+*.mobileprovision
 
 # Workspace-local dev Hermes profile (see scripts/conductor-run-verso.sh)
 .hermes-dev-home/
