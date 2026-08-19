@@ -23,12 +23,12 @@ const appConnections = [
 ] as const;
 
 const activityRows = [
-  ['slack', 'wide'],
-  ['gmail', 'medium'],
-  ['notion', 'long'],
-  ['todoist', 'short'],
-  ['googlecalendar', 'medium'],
-  ['googledrive', 'wide'],
+  ['slack', 'wide', 'warning'],
+  ['gmail', 'medium', 'danger'],
+  ['notion', 'long', 'info'],
+  ['todoist', 'short', 'success'],
+  ['googlecalendar', 'medium', 'info'],
+  ['googledrive', 'wide', 'success'],
 ] as const;
 
 const features = [
@@ -66,23 +66,6 @@ export default function TriagePreviewPage() {
           <Link href="/triage-preview" className={styles.brand}>
             verso.
           </Link>
-          <div className={styles.navActions}>
-            <button
-              className={styles.iconButton}
-              type="button"
-              title="Toggle theme"
-              aria-label="Toggle theme"
-              onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-            >
-              {theme === 'dark' ? <MoonIcon /> : <SunIcon />}
-            </button>
-            <Link className={styles.textLink} href="/login">
-              Log in
-            </Link>
-            <Link className={styles.outlineButton} href="/login">
-              Sign up
-            </Link>
-          </div>
         </div>
       </nav>
 
@@ -90,19 +73,18 @@ export default function TriagePreviewPage() {
         <div className={styles.heroInner}>
           <div className={styles.heroTop}>
             <div className={styles.heroText}>
-              <h1>Free, open-source, GUI to orchestrate Hermes Agents.</h1>
+              <h1>Free, open source, macOS app for Hermes Agents.</h1>
               <p>
-                Verso is the easiest way to run local Hermes agents that connect to the apps you already use — email, calendar, slack, you name it — to help you do more.
+                Verso is a free, open source, personal macOS app for Hermes Agents that makes it very easy to leverage the full power of frontier AI.
               </p>
               <div className={styles.heroActions}>
                 <Link className={styles.primaryButton} href="/login">
-                  Download for free
+                  Download for mac
                   <ArrowRightIcon />
                 </Link>
               </div>
             </div>
 
-            <LogoScene />
           </div>
 
           <IssueMockup />
@@ -186,65 +168,51 @@ function IssueMockup() {
     <div className={styles.mockupShell}>
       <div className={`${styles.mockup} ${styles.versoSilhouette}`}>
         <aside className={styles.silhouetteSidebar}>
-          <div className={styles.traffic}>
-            <i />
-            <i />
-            <i />
-          </div>
-
           <div className={styles.silhouetteSidebarHead}>
-            <div>
-              <span>Sessions</span>
-              <strong>Active workspace</strong>
-            </div>
-            <button type="button" aria-label="New chat">
-              +
-            </button>
+            <span className={styles.mockTile} />
+            <span className={styles.mockLine} />
           </div>
 
-          <div className={styles.silhouetteConnectorRail}>
-            {appConnections.slice(0, 6).map(([logo, name]) => (
-              <img src={logoUrl(logo)} alt="" aria-hidden="true" key={name} />
-            ))}
-          </div>
-
-          <span className={styles.silhouetteSectionTitle}>Active</span>
-          <div className={styles.silhouetteSessions}>
-            {sessions.map(([title, meta, preview], itemIndex) => (
+          <div className={styles.mockNav}>
+            {sessions.slice(0, 4).map((session, index) => (
               <div
-                className={itemIndex === 1 ? styles.silhouetteSessionActive : styles.silhouetteSession}
-                key={title}
+                className={styles.mockNavItem}
+                data-selected={index === 2 ? 'true' : undefined}
+                key={session[0]}
               >
-                <div>
-                  <i>{title}</i>
-                  <em>{meta}</em>
-                </div>
-                <p>{preview}</p>
+                <span className={styles.mockTile} />
+                <span className={styles.mockLine} />
               </div>
             ))}
           </div>
 
-          <span className={styles.silhouetteSectionTitle}>Custom</span>
-          <div className={styles.silhouetteCustomRow}>
-            <span />
-            <i />
+          <div className={styles.mockNavDivider} />
+
+          <div className={styles.mockNavFoot}>
+            <span className={styles.mockLine} />
+            <div className={styles.mockNavDot} />
+            <div className={styles.mockNavDot} />
+            <div className={styles.mockNavDot} />
           </div>
         </aside>
 
         <section className={styles.silhouetteMain}>
           <header className={styles.silhouetteHeader}>
             <div>
-              <strong>Board update</strong>
-              <span>26 messages · updated 18m ago</span>
+              <span />
+              <i />
             </div>
-            <button type="button">Archive</button>
+            <div className={styles.silhouetteHeaderActions}>
+              <b />
+              <b />
+            </div>
           </header>
 
           <div className={styles.silhouetteCanvas}>
             <div className={styles.silhouetteThread}>
               <div className={styles.silhouettePrompt}>
                 <span />
-                <span />
+                <i />
               </div>
 
               <div className={styles.silhouetteActivity}>
@@ -258,10 +226,16 @@ function IssueMockup() {
                 </div>
 
                 <div className={styles.silhouetteRows}>
-                  {activityRows.map(([logo, length], index) => (
-                    <div className={styles.silhouetteRow} data-length={length} key={`${logo}-${index}`}>
+                  {activityRows.map(([logo, length, tone], index) => (
+                    <div
+                      className={styles.silhouetteRow}
+                      data-length={length}
+                      data-selected={index === 1 ? 'true' : undefined}
+                      key={`${logo}-${index}`}
+                    >
                       <img src={logoUrl(logo)} alt="" aria-hidden="true" />
                       <span />
+                      <em className={styles[tone]} />
                       <i />
                     </div>
                   ))}
@@ -282,6 +256,7 @@ function IssueMockup() {
             <div>
               <i />
               <i />
+              <b />
             </div>
           </div>
         </section>
@@ -330,19 +305,6 @@ function FeatureGraphic({ kind }: { kind: (typeof features)[number]['graphic'] }
   );
 }
 
-function LogoScene() {
-  return (
-    <div className={styles.logoScene} aria-hidden="true">
-      <div className={styles.logoCube}>
-        <span />
-        <span />
-        <span />
-        <span />
-      </div>
-    </div>
-  );
-}
-
 function Divider() {
   return <div className={styles.divider} />;
 }
@@ -362,21 +324,4 @@ function ArrowRightIcon() {
 
 function logoUrl(name: string) {
   return `https://logos.composio.dev/api/${name}`;
-}
-
-function SunIcon() {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="3" />
-      <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.42 1.42M11.53 11.53l1.42 1.42M12.95 3.05l-1.42 1.42M4.47 11.53l-1.42 1.42" />
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M13.2 10.4A5.5 5.5 0 0 1 5.6 2.8 5.5 5.5 0 1 0 13.2 10.4Z" />
-    </svg>
-  );
 }
