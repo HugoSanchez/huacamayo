@@ -59,48 +59,10 @@ export interface NativeToolManifestRefreshStatus {
  * backend bridge so the Composio project API key stays server-side.
  */
 
-// Maximum time we'll hold a propose_message_draft tool call open while waiting
-// for the user to approve or reject. After this, the call resolves with a
-// timeout rejection so Hermes doesn't sit forever and so we don't pin
-// resources on a forgotten widget.
-const DRAFT_HOLD_TIMEOUT_MS = 10 * 60 * 1000;
-
-// Channels where Verso dispatches the send itself (cleanest UX). For these the
-// draft tool returns immediately with `pending_review` — the model ends its
-// turn and the widget's Send button fires an independent /drafts/send call, so
-// the model never re-engages on send. Every other channel uses the held
-// pattern below, where the agent dispatches the send after approval.
-export const NATIVE_DRAFT_CHANNELS = new Set(['gmail', 'slack']);
-
-// Outcome of a HELD (generic-channel) draft call, fed back to Hermes as the
-// tool result. Native channels never produce one of these — they return
-// `pending_review` immediately instead.
-// - "approved": user confirmed; agent must dispatch the send itself using final_*.
-// - "rejected": user discarded the draft.
-export type DraftResolution =
-  | {
-      status: 'approved';
-      was_edited: boolean;
-      channel: string;
-      final_to: string;
-      final_cc: string;
-      final_subject: string;
-      final_body: string;
-      final_thread_id: string;
-    }
-  | { status: 'rejected'; reason: 'discarded_by_user' | 'timeout' | 'session_ended' };
-
-interface PendingDraftEntry {
-  resolve: (resolution: DraftResolution) => void;
-  timer: NodeJS.Timeout;
-  args: Record<string, unknown>;
-}
-
-// Process-lifetime registry of in-flight draft holds, keyed by a deterministic
-// hash of the agent's call arguments. Both the orchestrator (here) and the
-// chat UI compute the same hash from the same args, so they agree on the key
-// without any explicit coordination.
-const pendingDrafts = new Map<string, PendingDraftEntry>();
+// The draft widget is intentionally a native Gmail/Slack composer. It is not
+// a generic confirmation surface for documents, databases, tasks, or other
+// connected-app mutations.
+export const SUPPORTED_MESSAGE_DRAFT_CHANNELS = new Set(['gmail', 'slack']);
 
 /**
  * Deterministic id for a draft, derived from the agent's tool args. The chat
@@ -128,23 +90,6 @@ function fnv1a32(input: string): string {
     hash = (hash * 0x01000193) >>> 0;
   }
   return hash.toString(16).padStart(8, '0');
-}
-
-export function resolvePendingDraft(draftId: string, resolution: DraftResolution): boolean {
-  const entry = pendingDrafts.get(draftId);
-  if (!entry) return false;
-  clearTimeout(entry.timer);
-  pendingDrafts.delete(draftId);
-  entry.resolve(resolution);
-  return true;
-}
-
-export function rejectAllPendingDrafts(reason: 'session_ended'): void {
-  for (const [draftId, entry] of pendingDrafts) {
-    clearTimeout(entry.timer);
-    pendingDrafts.delete(draftId);
-    entry.resolve({ status: 'rejected', reason });
-  }
 }
 
 export class ComposioBridgeService {
@@ -276,27 +221,19 @@ export class ComposioBridgeService {
         ? argumentRecord.channel.trim().toLowerCase()
         : '';
 
-      // Native channels (Slack/Gmail): return immediately so the model wraps
-      // up its turn ("I've prepared it for review"). Verso dispatches the
-      // actual send when the user clicks Send in the widget — the model is
-      // not involved, which is what makes that flow feel instant.
-      if (NATIVE_DRAFT_CHANNELS.has(channel)) {
-        return {
-          data: {
-            status: 'pending_review',
-            channel,
-            note: 'Draft surfaced to the user for review in Verso. The user will edit and send (or discard) it themselves, and Verso handles the actual send for this channel. Do NOT call any send tool. Reply in one short sentence that you have prepared it for review.',
-          },
-          error: null,
-          logId: null,
-        };
+      if (!SUPPORTED_MESSAGE_DRAFT_CHANNELS.has(channel)) {
+        throw new ComposioBridgeHttpError(
+          400,
+          'propose_message_draft supports only Gmail email and Slack messages. Use the connected app tool directly for other actions.',
+        );
       }
 
-      // Generic channels: hold the call open until the user approves/rejects,
-      // then hand the final values back so the agent dispatches the send.
-      const resolution = await holdDraftForReview(argumentRecord);
       return {
-        data: resolution,
+        data: {
+          status: 'pending_review',
+          channel,
+          note: 'Draft surfaced to the user for review in Verso. The user will edit and send (or discard) it themselves, and Verso handles the actual send. Do NOT call any send tool. Reply in one short sentence that you have prepared it for review.',
+        },
         error: null,
         logId: null,
       };
@@ -382,30 +319,6 @@ export class ComposioBridgeService {
       toolkitName: cleanString(tool.toolkitName) ?? existing?.toolkitName ?? null,
     });
   }
-}
-
-function holdDraftForReview(args: Record<string, unknown>): Promise<DraftResolution> {
-  const draftId = draftIdForArgs(args);
-
-  // If the same draft is already pending (agent retried with the exact same
-  // args), reject the older hold so this new one supersedes it — otherwise
-  // the old timer would fire later and leak a stale resolution.
-  const existing = pendingDrafts.get(draftId);
-  if (existing) {
-    clearTimeout(existing.timer);
-    existing.resolve({ status: 'rejected', reason: 'session_ended' });
-    pendingDrafts.delete(draftId);
-  }
-
-  return new Promise<DraftResolution>((resolve) => {
-    const timer = setTimeout(() => {
-      if (pendingDrafts.get(draftId)) {
-        pendingDrafts.delete(draftId);
-        resolve({ status: 'rejected', reason: 'timeout' });
-      }
-    }, DRAFT_HOLD_TIMEOUT_MS);
-    pendingDrafts.set(draftId, { resolve, timer, args });
-  });
 }
 
 function mapRemoteBridgeError(error: unknown): Error {

@@ -18,6 +18,7 @@
 		A1000001000000000000000C /* chat-ui in Resources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000D /* chat-ui */; };
 		A10000010000000000000021 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000021 /* Fonts */; };
 		A1000001000000000000000D /* ManagedSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000E /* ManagedSessionStore.swift */; };
+		A1000001000000000000000E /* ManagedSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000002000000000000000E /* ManagedSessionStore.swift */; };
 		A1000001000000000000000F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000010 /* SignInView.swift */; };
 		A10000010000000000000011 /* UpdateToastUserDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000011 /* UpdateToastUserDriver.swift */; };
 		A10000010000000000000020 /* Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000020 /* Telemetry.swift */; };
@@ -34,6 +35,24 @@
 		D10000010000000000000001 /* ShellProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000001 /* ShellProtocol.swift */; };
 		D10000010000000000000002 /* ShellProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000001 /* ShellProtocol.swift */; };
 		D10000010000000000000003 /* ShellProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10000020000000000000002 /* ShellProtocolTests.swift */; };
+		E10000010000000000000001 /* SidecarHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000001 /* SidecarHTTPClient.swift */; };
+		E10000010000000000000002 /* SidecarLaunchEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000002 /* SidecarLaunchEnvironment.swift */; };
+		E10000010000000000000003 /* SidecarManagedSessionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000003 /* SidecarManagedSessionPolicy.swift */; };
+		E10000010000000000000004 /* SidecarProcessController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000004 /* SidecarProcessController.swift */; };
+		E10000010000000000000005 /* SidecarHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000001 /* SidecarHTTPClient.swift */; };
+		E10000010000000000000006 /* SidecarLaunchEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000002 /* SidecarLaunchEnvironment.swift */; };
+		E10000010000000000000007 /* SidecarManagedSessionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000003 /* SidecarManagedSessionPolicy.swift */; };
+		E10000010000000000000008 /* SidecarProcessController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000004 /* SidecarProcessController.swift */; };
+		E10000010000000000000009 /* SidecarHTTPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000005 /* SidecarHTTPClientTests.swift */; };
+		E1000001000000000000000A /* SidecarLaunchEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000006 /* SidecarLaunchEnvironmentTests.swift */; };
+		E1000001000000000000000B /* SidecarManagedSessionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000007 /* SidecarManagedSessionPolicyTests.swift */; };
+		E1000001000000000000000C /* SidecarProcessControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000020000000000000008 /* SidecarProcessControllerTests.swift */; };
+		F20000010000000000000001 /* SidebarAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000020000000000000001 /* SidebarAPIClient.swift */; };
+		F20000010000000000000002 /* SidebarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000020000000000000002 /* SidebarStore.swift */; };
+		F20000010000000000000003 /* SidebarAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000020000000000000001 /* SidebarAPIClient.swift */; };
+		F20000010000000000000004 /* SidebarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000020000000000000002 /* SidebarStore.swift */; };
+		F20000010000000000000005 /* SidebarAPIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000020000000000000003 /* SidebarAPIClientTests.swift */; };
+		F20000010000000000000006 /* SidebarStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000020000000000000004 /* SidebarStoreTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -63,6 +82,18 @@
 		C10000020000000000000003 /* NativeWindowChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeWindowChrome.swift; sourceTree = "<group>"; };
 		D10000020000000000000001 /* ShellProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellProtocol.swift; sourceTree = "<group>"; };
 		D10000020000000000000002 /* ShellProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellProtocolTests.swift; sourceTree = "<group>"; };
+		E10000020000000000000001 /* SidecarHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarHTTPClient.swift; sourceTree = "<group>"; };
+		E10000020000000000000002 /* SidecarLaunchEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarLaunchEnvironment.swift; sourceTree = "<group>"; };
+		E10000020000000000000003 /* SidecarManagedSessionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManagedSessionPolicy.swift; sourceTree = "<group>"; };
+		E10000020000000000000004 /* SidecarProcessController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarProcessController.swift; sourceTree = "<group>"; };
+		E10000020000000000000005 /* SidecarHTTPClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarHTTPClientTests.swift; sourceTree = "<group>"; };
+		E10000020000000000000006 /* SidecarLaunchEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarLaunchEnvironmentTests.swift; sourceTree = "<group>"; };
+		E10000020000000000000007 /* SidecarManagedSessionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManagedSessionPolicyTests.swift; sourceTree = "<group>"; };
+		E10000020000000000000008 /* SidecarProcessControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarProcessControllerTests.swift; sourceTree = "<group>"; };
+		F20000020000000000000001 /* SidebarAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarAPIClient.swift; sourceTree = "<group>"; };
+		F20000020000000000000002 /* SidebarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarStore.swift; sourceTree = "<group>"; };
+		F20000020000000000000003 /* SidebarAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarAPIClientTests.swift; sourceTree = "<group>"; };
+		F20000020000000000000004 /* SidebarStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -114,6 +145,12 @@
 				A10000020000000000000006 /* SidecarManager.swift */,
 				B10000020000000000000001 /* SidecarRuntimeResolver.swift */,
 				B10000020000000000000002 /* SidecarStartupProtocol.swift */,
+				E10000020000000000000001 /* SidecarHTTPClient.swift */,
+				F20000020000000000000001 /* SidebarAPIClient.swift */,
+				F20000020000000000000002 /* SidebarStore.swift */,
+				E10000020000000000000002 /* SidecarLaunchEnvironment.swift */,
+				E10000020000000000000003 /* SidecarManagedSessionPolicy.swift */,
+				E10000020000000000000004 /* SidecarProcessController.swift */,
 				D10000020000000000000001 /* ShellProtocol.swift */,
 				A1000002000000000000000C /* ChatWebView.swift */,
 				A1000002000000000000000E /* ManagedSessionStore.swift */,
@@ -145,6 +182,12 @@
 				B10000020000000000000003 /* SidecarStartupProtocolTests.swift */,
 				B10000020000000000000004 /* SidecarRuntimeResolverTests.swift */,
 				D10000020000000000000002 /* ShellProtocolTests.swift */,
+				E10000020000000000000005 /* SidecarHTTPClientTests.swift */,
+				E10000020000000000000006 /* SidecarLaunchEnvironmentTests.swift */,
+				E10000020000000000000007 /* SidecarManagedSessionPolicyTests.swift */,
+				E10000020000000000000008 /* SidecarProcessControllerTests.swift */,
+				F20000020000000000000003 /* SidebarAPIClientTests.swift */,
+				F20000020000000000000004 /* SidebarStoreTests.swift */,
 			);
 			path = desktop/macosTests;
 			sourceTree = "<group>";
@@ -318,6 +361,12 @@
 				B10000010000000000000001 /* SidecarRuntimeResolver.swift in Sources */,
 				B10000010000000000000002 /* SidecarStartupProtocol.swift in Sources */,
 				D10000010000000000000001 /* ShellProtocol.swift in Sources */,
+				E10000010000000000000001 /* SidecarHTTPClient.swift in Sources */,
+				E10000010000000000000002 /* SidecarLaunchEnvironment.swift in Sources */,
+				E10000010000000000000003 /* SidecarManagedSessionPolicy.swift in Sources */,
+				E10000010000000000000004 /* SidecarProcessController.swift in Sources */,
+				F20000010000000000000001 /* SidebarAPIClient.swift in Sources */,
+				F20000010000000000000002 /* SidebarStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,12 +374,25 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000001000000000000000E /* ManagedSessionStore.swift in Sources */,
 				B10000010000000000000006 /* SidecarRuntimeResolver.swift in Sources */,
 				B10000010000000000000007 /* SidecarStartupProtocol.swift in Sources */,
 				B10000010000000000000003 /* SidecarStartupProtocolTests.swift in Sources */,
 				B10000010000000000000004 /* SidecarRuntimeResolverTests.swift in Sources */,
 				D10000010000000000000002 /* ShellProtocol.swift in Sources */,
 				D10000010000000000000003 /* ShellProtocolTests.swift in Sources */,
+				E10000010000000000000005 /* SidecarHTTPClient.swift in Sources */,
+				E10000010000000000000006 /* SidecarLaunchEnvironment.swift in Sources */,
+				E10000010000000000000007 /* SidecarManagedSessionPolicy.swift in Sources */,
+				E10000010000000000000008 /* SidecarProcessController.swift in Sources */,
+				E10000010000000000000009 /* SidecarHTTPClientTests.swift in Sources */,
+				E1000001000000000000000A /* SidecarLaunchEnvironmentTests.swift in Sources */,
+				E1000001000000000000000B /* SidecarManagedSessionPolicyTests.swift in Sources */,
+				E1000001000000000000000C /* SidecarProcessControllerTests.swift in Sources */,
+				F20000010000000000000003 /* SidebarAPIClient.swift in Sources */,
+				F20000010000000000000004 /* SidebarStore.swift in Sources */,
+				F20000010000000000000005 /* SidebarAPIClientTests.swift in Sources */,
+				F20000010000000000000006 /* SidebarStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

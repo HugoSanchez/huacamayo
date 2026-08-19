@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 import mcp.types as types
@@ -163,7 +163,7 @@ def get_connection_status(request_id: str) -> types.CallToolResult:
 
 @mcp.tool()
 def propose_message_draft(
-    channel: str,
+    channel: Literal["gmail", "slack"],
     body: str,
     to: str | None = None,
     subject: str | None = None,
@@ -174,16 +174,14 @@ def propose_message_draft(
     to_display: str | None = None,
     to_avatar_url: str | None = None,
 ) -> types.CallToolResult:
-    """Surface a draft message to the user for review before sending.
+    """Surface a Gmail email or Slack message for review before sending.
 
-    Use this whenever the user asks you to send a message via any app
-    (Slack, Gmail, SMS, WhatsApp, Discord, Telegram, etc). Always call this
-    before the underlying send tool.
+    Use this only for outbound Gmail email and Slack messages. Never use it
+    for Notion pages or tables, documents, databases, tasks, calendar events,
+    comments, or any other connected-app action.
 
-    If the result status is "pending_review", Verso handles the final send
-    from the review widget and you are done. If the result status is
-    "approved", dispatch the send yourself using the final_* values returned.
-    If the result status is "rejected", do not send.
+    Verso handles the final send (or discard) from the review widget. After a
+    "pending_review" result, do not call the underlying send tool yourself.
     """
 
     arguments: dict[str, Any] = {

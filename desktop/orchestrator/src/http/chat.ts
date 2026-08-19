@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { ServerResponse } from 'node:http';
 import { json, route, type Route } from './router.ts';
 import {
   ChatStore,
@@ -6,9 +6,29 @@ import {
   type ChatSessionRecord,
   type ChatSessionSummary,
 } from './chat-store.ts';
+import {
+  ChatRequestRegistry,
+  type ActiveChatRequest,
+  type ActiveChatRequestSnapshot,
+} from './chat-request-registry.ts';
 import { applyDraftResolutions } from './draft-resolutions.ts';
 import { HermesSupervisor, type HermesGatewayConfig } from './hermes-supervisor.ts';
-import { extractAssistantText, hermesGatewayAuthHeaders, hermesOneShotText } from './hermes-gateway-client.ts';
+import { hermesOneShotText } from './hermes-gateway-client.ts';
+import {
+  HERMES_REASONING_EFFORTS,
+  asRecord,
+  extractFinalResponseText,
+  extractReasoningDelta,
+  extractResponseError,
+  extractResponseId,
+  isHermesGatewayAuthFailure,
+  isReasoningDeltaEvent,
+  parseJsonMaybe,
+  shouldRetryWithoutCursor,
+  streamHermesConversation,
+  type HermesEventPayload,
+  type HermesReasoningEffort,
+} from './hermes-response-stream.ts';
 import {
   hermesHistoryHomeCandidates,
   readHermesChatMessages,
@@ -36,49 +56,22 @@ import { ManagedBackendClient } from '../integrations/managed-backend-client.ts'
 
 type ChatStatus = 'idle' | 'running';
 
-interface ActiveChatRequest {
-  sessionId: string;
-  responseId: string | null;
-  gatewayUrl: string;
-  startedAt: number;
-  close: () => void;
-}
-
-class HermesHttpError extends Error {
-  readonly status: number;
-  readonly body: string;
-
-  constructor(status: number, body: string, message: string) {
-    super(message);
-    this.name = 'HermesHttpError';
-    this.status = status;
-    this.body = body;
-  }
-}
-
-type HermesEventPayload = Record<string, unknown> | null;
-
-// Per-session streams: each session can have at most one in-flight chat
-// request, but different sessions stream independently. Hermes handles
-// concurrent /v1/responses for different `conversation` ids (verified by the
-// per-session-streams spike).
-const activeRequests = new Map<string, ActiveChatRequest>();
-
 export function buildChatRoutes(
   store: ChatStore,
   hermes: HermesSupervisor,
   managedBackend: ManagedBackendClient,
+  requests: ChatRequestRegistry,
   memoryExtraction?: MemoryExtractionScheduler,
   defaultModelForNewSession?: () => Promise<ChatModel | null>,
 ): Route[] {
   return [
     route('GET', '/chat/status', async (_req, res) => {
       const gateway = await hermes.getStatus();
-      const activeSessionIds = Array.from(activeRequests.keys());
+      const activeSessionIds = requests.sessionIds();
       json(res, 200, {
-        status: activeRequests.size > 0 ? 'running' : 'idle',
+        status: requests.size > 0 ? 'running' : 'idle',
         provider: 'hermes',
-        hasActiveRequest: activeRequests.size > 0,
+        hasActiveRequest: requests.size > 0,
         activeSessionIds,
         sessionCount: store.listSessions().length,
         gateway: {
@@ -199,15 +192,6 @@ export function buildChatRoutes(
         return json(res, 400, { error: 'bad_request', message: 'Missing "content"' });
       }
 
-      // Per-session: block only a second concurrent request for the *same*
-      // session. Streams against other sessions run in parallel.
-      if (activeRequests.has(params.id)) {
-        return json(res, 409, {
-          error: 'conflict',
-          message: 'A chat request is already running for this session',
-        });
-      }
-
       const attached = parseAttached(body);
       const reasoningEffort = parseReasoningEffort(body);
       // The composer sends its selection with every message so a click and an
@@ -254,63 +238,78 @@ export function buildChatRoutes(
       const priorMessageCount = store.getMessages(params.id)?.length ?? 0;
       const isFirstUserMessage = priorMessageCount === 0;
 
-      store.appendMessage(params.id, 'user', appendAttachmentMarkers(content, attachments));
-      managedBackend.recordAnalyticsEvent({ eventType: 'message_sent', sessionId: params.id });
-      let promptForHermes = content;
-      if (attached?.kind === 'cron') {
-        // Fetch the cron's current state and prepend it as a system block so
-        // the agent can reason about — and edit — the job via its `cronjob`
-        // tool. If the fetch fails, fall through to the raw user text.
-        const cronContext = await buildCronContextPrompt(hermes, attached.id, content)
-          .catch(() => null);
-        if (cronContext) promptForHermes = cronContext;
-      } else {
-        const slashRequest = extractSlashSkillRequest(content);
-        const skill = slashRequest ? findSkillBySlug(slashRequest.slug) : null;
-        if (skill && slashRequest) {
-          promptForHermes = buildSkillInvocationPrompt(skill, slashRequest.remainder, params.id);
-        }
-      }
-      // Markers ride inside the prompt text (and thus Hermes' own transcript
-      // and any history rebuild); the actual image bytes only travel on the
-      // live request as `input_image` parts. Converted document Markdown is
-      // injected here too, as a delimited block per document — never stored.
-      promptForHermes = appendAttachmentMarkers(promptForHermes, attachments);
-      if (documentContext) {
-        promptForHermes = promptForHermes
-          ? `${promptForHermes}\n\n${documentContext}`
-          : documentContext;
+      // Reserve before appending the message or starting Hermes. This closes
+      // the duplicate-send race without blocking independent sessions.
+      const activeRequest = requests.begin(params.id, hermes.gatewayConfig.baseUrl);
+      if (!activeRequest) {
+        return json(res, 409, {
+          error: 'conflict',
+          message: 'A chat request is already running for this session',
+        });
       }
 
-      const session = hydrateSessionSummary(record, store);
-
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-
+      let responseStarted = false;
       try {
-        await runHermesMessage({
-          session,
-          sessionRecord: record,
-          userPrompt: promptForHermes,
-          attachments,
-          isFirstUserMessage,
-          reasoningEffort,
-          model,
-          res,
-        }, store, hermes, managedBackend, memoryExtraction);
-      } catch (error: unknown) {
-        if (isAbortError(error)) {
-          sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
+        store.appendMessage(params.id, 'user', appendAttachmentMarkers(content, attachments));
+        managedBackend.recordAnalyticsEvent({ eventType: 'message_sent', sessionId: params.id });
+        let promptForHermes = content;
+        if (attached?.kind === 'cron') {
+          // Fetch the cron's current state and prepend it as a system block so
+          // the agent can reason about — and edit — the job via its `cronjob`
+          // tool. If the fetch fails, fall through to the raw user text.
+          const cronContext = await buildCronContextPrompt(hermes, attached.id, content)
+            .catch(() => null);
+          if (cronContext) promptForHermes = cronContext;
         } else {
-          const message = error instanceof Error ? error.message : String(error);
-          sendSSE(res, { type: 'error', message, session_id: session.id });
+          const slashRequest = extractSlashSkillRequest(content);
+          const skill = slashRequest ? findSkillBySlug(slashRequest.slug) : null;
+          if (skill && slashRequest) {
+            promptForHermes = buildSkillInvocationPrompt(skill, slashRequest.remainder, params.id);
+          }
+        }
+        // Markers ride inside the prompt text (and thus Hermes' own transcript
+        // and any history rebuild); the actual image bytes only travel on the
+        // live request as `input_image` parts. Converted document Markdown is
+        // injected here too, as a delimited block per document — never stored.
+        promptForHermes = appendAttachmentMarkers(promptForHermes, attachments);
+        if (documentContext) {
+          promptForHermes = promptForHermes
+            ? `${promptForHermes}\n\n${documentContext}`
+            : documentContext;
+        }
+
+        const session = hydrateSessionSummary(record, store);
+
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        responseStarted = true;
+
+        try {
+          await runHermesMessage({
+            session,
+            sessionRecord: record,
+            activeRequest,
+            userPrompt: promptForHermes,
+            attachments,
+            isFirstUserMessage,
+            reasoningEffort,
+            model,
+            res,
+          }, store, hermes, managedBackend, memoryExtraction);
+        } catch (error: unknown) {
+          if (isAbortError(error)) {
+            sendSSE(res, { type: 'done', reason: 'aborted', session_id: session.id });
+          } else {
+            const message = error instanceof Error ? error.message : String(error);
+            sendSSE(res, { type: 'error', message, session_id: session.id });
+          }
         }
       } finally {
-        activeRequests.delete(session.id);
-        res.end();
+        requests.finish(activeRequest);
+        if (responseStarted) res.end();
       }
     }),
 
@@ -320,13 +319,9 @@ export function buildChatRoutes(
         return json(res, 404, { error: 'not_found', message: `Unknown session: ${params.id}` });
       }
 
-      const active = activeRequests.get(params.id);
-      if (!active) {
+      if (!requests.cancel(params.id)) {
         return json(res, 200, { status: 'no_active_request' });
       }
-
-      active.close();
-      activeRequests.delete(params.id);
       json(res, 200, { status: 'stopped' });
     }),
   ];
@@ -334,22 +329,18 @@ export function buildChatRoutes(
 
 export function buildChatDiagnostics(
   store: ChatStore,
+  requests: ChatRequestRegistry,
   memoryExtraction?: MemoryExtractionScheduler,
 ): {
   status: ChatStatus;
-  activeRequests: Array<Omit<ActiveChatRequest, 'close'>>;
+  activeRequests: ActiveChatRequestSnapshot[];
   sessionCount: number;
   storePath: string;
   memoryExtraction?: ReturnType<MemoryExtractionScheduler['diagnostics']>;
 } {
   return {
-    status: activeRequests.size > 0 ? 'running' : 'idle',
-    activeRequests: Array.from(activeRequests.values()).map((request) => ({
-      sessionId: request.sessionId,
-      responseId: request.responseId,
-      gatewayUrl: request.gatewayUrl,
-      startedAt: request.startedAt,
-    })),
+    status: requests.size > 0 ? 'running' : 'idle',
+    activeRequests: requests.snapshots(),
     sessionCount: store.listSessions().length,
     storePath: store.path,
     ...(memoryExtraction ? { memoryExtraction: memoryExtraction.diagnostics() } : {}),
@@ -374,17 +365,14 @@ type AttachedContext = { kind: 'cron'; id: string };
 // Reasoning-effort levels Hermes accepts (see hermes_constants.VALID_REASONING_EFFORTS).
 // The chat-input selector sends one of these per message; anything else falls
 // back to the gateway's config.yaml default.
-const VALID_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
-type ReasoningEffort = (typeof VALID_REASONING_EFFORTS)[number];
-
-function parseReasoningEffort(body: unknown): ReasoningEffort | null {
+function parseReasoningEffort(body: unknown): HermesReasoningEffort | null {
   const raw = body && typeof body === 'object' && !Array.isArray(body)
     ? (body as Record<string, unknown>).reasoningEffort
     : undefined;
   if (typeof raw !== 'string') return null;
   const value = raw.trim().toLowerCase();
-  return (VALID_REASONING_EFFORTS as readonly string[]).includes(value)
-    ? (value as ReasoningEffort)
+  return (HERMES_REASONING_EFFORTS as readonly string[]).includes(value)
+    ? (value as HermesReasoningEffort)
     : null;
 }
 
@@ -547,10 +535,11 @@ async function runHermesMessage(
   opts: {
     session: ChatSessionSummary;
     sessionRecord: ChatSessionRecord;
+    activeRequest: ActiveChatRequest;
     userPrompt: string;
     attachments?: ChatAttachment[];
     isFirstUserMessage: boolean;
-    reasoningEffort?: ReasoningEffort | null;
+    reasoningEffort?: HermesReasoningEffort | null;
     model?: ChatModel | null;
     res: ServerResponse;
   },
@@ -560,7 +549,6 @@ async function runHermesMessage(
   memoryExtraction?: MemoryExtractionScheduler,
 ): Promise<void> {
   let toolCallCount = 0;
-  const controller = new AbortController();
   const runtime = await hermes.getStatus(500);
 
   if (runtime.state !== 'ready') {
@@ -572,16 +560,8 @@ async function runHermesMessage(
     });
   }
 
-  let config = await hermes.ensureReady(controller.signal);
-
-  const activeRequest: ActiveChatRequest = {
-    sessionId: opts.session.id,
-    responseId: null,
-    gatewayUrl: config.baseUrl,
-    startedAt: Date.now(),
-    close: () => controller.abort(),
-  };
-  activeRequests.set(opts.session.id, activeRequest);
+  let config = await hermes.ensureReady(opts.activeRequest.signal);
+  opts.activeRequest.gatewayUrl = config.baseUrl;
 
   let streamedText = '';
   let finalText = '';
@@ -591,7 +571,7 @@ async function runHermesMessage(
     if (eventName === 'response.created') {
       const responseId = extractResponseId(data);
       if (responseId) {
-        activeRequest.responseId = responseId;
+        opts.activeRequest.responseId = responseId;
       }
       return;
     }
@@ -686,7 +666,7 @@ async function runHermesMessage(
       conversationHistory: null,
       reasoningEffort: opts.reasoningEffort ?? null,
       model: opts.model ?? null,
-      signal: controller.signal,
+      signal: opts.activeRequest.signal,
       onSessionId: (sessionId) => {
         linkedHermesSessionId = sessionId;
       },
@@ -704,7 +684,7 @@ async function runHermesMessage(
       streamedText = '';
       finalText = '';
       config = await hermes.recoverFromAuthFailure();
-      activeRequest.gatewayUrl = config.baseUrl;
+      opts.activeRequest.gatewayUrl = config.baseUrl;
       await streamHermesConversation(config, {
         conversation: opts.session.id,
         userPrompt: opts.userPrompt,
@@ -712,7 +692,7 @@ async function runHermesMessage(
         conversationHistory: null,
         reasoningEffort: opts.reasoningEffort ?? null,
         model: opts.model ?? null,
-        signal: controller.signal,
+        signal: opts.activeRequest.signal,
         onSessionId: (sessionId) => {
           linkedHermesSessionId = sessionId;
         },
@@ -739,7 +719,7 @@ async function runHermesMessage(
         conversationHistory: recoveryMessages,
         reasoningEffort: opts.reasoningEffort ?? null,
         model: opts.model ?? null,
-        signal: controller.signal,
+        signal: opts.activeRequest.signal,
         onSessionId: (sessionId) => {
           linkedHermesSessionId = sessionId;
         },
@@ -850,254 +830,8 @@ function sanitizeGeneratedTitle(raw: string): string | null {
   return title.length > 0 ? title.slice(0, 80) : null;
 }
 
-async function streamHermesConversation(
-  config: HermesGatewayConfig,
-  opts: {
-    conversation: string;
-    userPrompt: string;
-    attachments?: ChatAttachment[];
-    conversationHistory: ChatMessageRecord[] | null;
-    reasoningEffort?: ReasoningEffort | null;
-    model?: ChatModel | null;
-    signal: AbortSignal;
-    onSessionId: (sessionId: string) => void;
-    onEvent: (eventName: string, data: HermesEventPayload) => void;
-  },
-): Promise<void> {
-  const payload = buildHermesRequestBody(
-    opts.conversation,
-    opts.userPrompt,
-    opts.conversationHistory,
-    opts.reasoningEffort ?? null,
-    opts.model ?? null,
-    opts.attachments ?? [],
-  );
-  await streamHermesResponse(config, payload, opts.signal, opts.onSessionId, opts.onEvent);
-}
-
-function buildHermesRequestBody(
-  conversation: string,
-  userPrompt: string,
-  conversationHistory: ChatMessageRecord[] | null,
-  reasoningEffort: ReasoningEffort | null = null,
-  model: ChatModel | null = null,
-  attachments: ChatAttachment[] = [],
-): Record<string, unknown> {
-  // Only images become multimodal parts. Documents were already converted to
-  // Markdown and injected into `userPrompt`, so a document-only message keeps a
-  // plain string `input`. With images, `input` switches to the Responses
-  // message-array shape the gateway also accepts: images travel as base64 data
-  // URLs; the gateway validates and forwards them to the model.
-  const imageAttachments = attachments.filter((attachment) => attachment.kind === 'image');
-  const input = imageAttachments.length > 0
-    ? [{
-        role: 'user',
-        content: [
-          ...(userPrompt ? [{ type: 'input_text', text: userPrompt }] : []),
-          ...imageAttachments.map((attachment) => ({
-            type: 'input_image',
-            image_url: `data:${attachment.mimeType};base64,${attachment.dataBase64}`,
-          })),
-        ],
-      }]
-    : userPrompt;
-
-  const body: Record<string, unknown> = {
-    input,
-    conversation,
-    truncation: 'auto',
-    stream: true,
-    store: true,
-  };
-
-  // OpenAI Responses native fields. The gateway (via the Verso request-overrides
-  // patch) reads `reasoning.effort` and `model` per request and overrides
-  // config.yaml for that turn.
-  if (reasoningEffort) {
-    body.reasoning = { effort: reasoningEffort };
-  }
-  if (model) {
-    body.model = model;
-  }
-
-  if (conversationHistory && conversationHistory.length > 0) {
-    body.conversation_history = conversationHistory.map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
-  }
-
-  return body;
-}
-
-async function streamHermesResponse(
-  config: HermesGatewayConfig,
-  body: Record<string, unknown>,
-  signal: AbortSignal,
-  onSessionId: (sessionId: string) => void,
-  onEvent: (eventName: string, data: HermesEventPayload) => void,
-): Promise<void> {
-  const res = await fetch(`${config.baseUrl}/v1/responses`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-      ...hermesGatewayAuthHeaders(config),
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
-
-  if (!res.ok || !res.body) {
-    const responseBody = await safeReadBody(res);
-    throw new HermesHttpError(
-      res.status,
-      responseBody,
-      `Hermes response stream failed (HTTP ${res.status})${responseBody ? `: ${responseBody}` : ''}`,
-    );
-  }
-
-  const hermesSessionId = res.headers.get('x-hermes-session-id');
-  if (hermesSessionId) {
-    onSessionId(hermesSessionId);
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() ?? '';
-
-    for (const frame of frames) {
-      const parsed = parseSseFrame(frame);
-      if (!parsed) continue;
-      onEvent(parsed.event, parsed.data);
-    }
-  }
-
-  if (buffer.trim().length > 0) {
-    const parsed = parseSseFrame(buffer);
-    if (parsed) {
-      onEvent(parsed.event, parsed.data);
-    }
-  }
-}
-
-function parseSseFrame(frame: string): { event: string; data: HermesEventPayload } | null {
-  const lines = frame
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0);
-
-  if (lines.length === 0 || lines.every((line) => line.startsWith(':'))) {
-    return null;
-  }
-
-  let eventName = 'message';
-  const dataLines: string[] = [];
-
-  for (const line of lines) {
-    if (line.startsWith(':')) continue;
-    if (line.startsWith('event:')) {
-      eventName = line.slice(6).trim() || eventName;
-      continue;
-    }
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trim());
-    }
-  }
-
-  if (dataLines.length === 0) {
-    return { event: eventName, data: null };
-  }
-
-  try {
-    const parsed = JSON.parse(dataLines.join('\n'));
-    return parsed && typeof parsed === 'object'
-      ? { event: eventName, data: parsed as Record<string, unknown> }
-      : { event: eventName, data: null };
-  } catch {
-    return { event: eventName, data: null };
-  }
-}
-
-function extractResponseId(data: HermesEventPayload): string | null {
-  const response = asRecord(data?.response);
-  const responseId = response?.id;
-  return typeof responseId === 'string' && responseId.length > 0 ? responseId : null;
-}
-
-function extractFinalResponseText(data: HermesEventPayload): string {
-  return extractAssistantText(asRecord(data?.response));
-}
-
-function extractResponseError(data: HermesEventPayload): string {
-  const response = asRecord(data?.response);
-  const error = asRecord(response?.error);
-  const message = error?.message;
-  return typeof message === 'string' ? message : '';
-}
-
-function isReasoningDeltaEvent(eventName: string): boolean {
-  return eventName === 'hermes.reasoning.delta'
-    || eventName === 'response.reasoning_text.delta'
-    || eventName === 'response.reasoning_summary_text.delta';
-}
-
-function extractReasoningDelta(data: HermesEventPayload): string {
-  const delta = data?.delta;
-  if (typeof delta === 'string') return delta;
-  const text = data?.text;
-  if (typeof text === 'string') return text;
-  const nestedText = asRecord(delta)?.text;
-  return typeof nestedText === 'string' ? nestedText : '';
-}
-
-function parseJsonMaybe(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  const trimmed = value.trim();
-  if (!trimmed) return value;
-
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function shouldRetryWithoutCursor(error: unknown): boolean {
-  if (!(error instanceof HermesHttpError)) return false;
-  if (error.status !== 404) return false;
-  return /previous response not found/i.test(error.body);
-}
-
-function isHermesGatewayAuthFailure(error: unknown): boolean {
-  if (!(error instanceof HermesHttpError) || error.status !== 401) return false;
-  return /invalid[_ ]api[_ ]key|unauthorized/i.test(error.body);
-}
-
 function sendSSE(res: ServerResponse, data: unknown): void {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-async function safeReadBody(res: Response): Promise<string> {
-  try {
-    return (await res.text()).trim();
-  } catch {
-    return '';
-  }
 }
 
 function isAbortError(error: unknown): boolean {

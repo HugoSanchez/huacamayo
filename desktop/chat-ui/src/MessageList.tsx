@@ -1,11 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage, ActivityStep, ConnectionRequestView, ConnectionView, ToolkitView } from './types';
 import {
-  approveDraft,
   discardDraft,
   draftIdForArgs,
-  NATIVE_DRAFT_CHANNELS,
-  rejectDraft,
   resolveSidecarUrl,
   sendDraft,
 } from './chat';
@@ -13,7 +10,8 @@ import { AssistantActivity, AssistantMessageActions } from './AssistantActivity'
 import { MarkdownContent } from './MarkdownContent';
 import { displayToolkitName } from './display-names';
 import { CodexMark, CodexConnectFlow, useCodexConnect } from './CodexConnect';
-import { stripNamespace, type ToolkitInfo } from './message-activity-model';
+import { type ToolkitInfo } from './message-activity-model';
+import { isSupportedMessageDraftStep } from './message-draft-model';
 
 interface DraftOverlayItem {
   step: Extract<ActivityStep, { type: 'tool' }>;
@@ -101,14 +99,15 @@ export function MessageList({ messages, onConnect, connections, toolkitCatalog, 
     );
   }
 
-  // Collect every propose_message_draft tool step across the session so the
-  // floating overlay can stack them in one place. Pulling them out at the
-  // list level (not per-message) lets the overlay survive scrolling and lets
-  // drafts from different assistant turns share one anchored container.
+  // Collect supported Gmail/Slack draft steps across the session so the
+  // floating overlay can stack them in one place. Historical misuse of the
+  // tool for another app remains ordinary activity instead of a stale widget.
   const draftSteps: DraftOverlayItem[] = [];
   for (const msg of messages) {
     for (const step of msg.steps ?? []) {
-      if (step.type === 'tool' && isProposeMessageDraftStep(step) && !isDraftFinalized(step)) {
+      if (step.type === 'tool'
+        && isSupportedMessageDraftStep(step)
+        && !isDraftFinalized(step)) {
         draftSteps.push({ step, sessionId: msg.sessionId });
       }
     }
@@ -171,7 +170,9 @@ function MessageBubble({
       connectionRequests.push(step.connection);
       continue;
     }
-    if (step.type === 'tool' && isProposeMessageDraftStep(step) && !isDraftFinalized(step)) {
+    if (step.type === 'tool'
+      && isSupportedMessageDraftStep(step)
+      && !isDraftFinalized(step)) {
       continue;
     }
     stepsForActivity.push(step);
@@ -271,10 +272,8 @@ function CodexConnectRequiredCard({ onConnected }: { onConnected: () => void }) 
 }
 
 interface DraftFields {
-  // Channel is whatever the agent provided — typically a toolkit slug like
-  // `slack`/`gmail`/`whatsapp`. We use it to look up the toolkit logo from
-  // the connected catalog and feed it back to the agent on approval so it
-  // knows which send tool to dispatch.
+  // The widget is intentionally limited to the two communication channels
+  // that Verso can dispatch and durably resolve itself.
   channel: string;
   channelLabel: string;
   channelLogoUrl: string;
@@ -291,13 +290,6 @@ interface DraftFields {
 }
 
 type DraftStatus = 'draft' | 'sending' | 'sent' | 'error';
-
-// Hermes may register native composio-style tools under a namespace prefix
-// (e.g. `mcp_composio_propose_message_draft`). Match on the stripped form so
-// we catch the call regardless of how Hermes wired the registration.
-function isProposeMessageDraftStep(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
-  return stripNamespace(step.name).toLowerCase() === 'propose_message_draft';
-}
 
 function parseDraftInput(input: unknown): DraftFields {
   const obj = (input && typeof input === 'object' && !Array.isArray(input)
@@ -347,11 +339,8 @@ function firstStringField(obj: Record<string, unknown>, keys: string[]): string 
   return '';
 }
 
-// True once a held (generic-channel) draft has resolved through some path we
-// didn't drive — timeout, session-end cleanup, a second tab. We hide the
-// editor then so the user isn't acting on a stale draft. Native channels
-// return `pending_review` immediately, which is NOT a finalized state — the
-// widget stays interactive until the user sends or discards locally.
+// Pending review is interactive; every durable send/discard resolution is
+// final and should never reconstruct a widget after session hydration.
 function isDraftFinalized(step: Extract<ActivityStep, { type: 'tool' }>): boolean {
   if (typeof step.result !== 'string' || step.result.length === 0) return false;
   try {
@@ -390,10 +379,8 @@ function MessageDraftCard({
 
   const finalized = isDraftFinalized(step);
 
-  // If the held tool call resolved through some other path (timeout,
-  // session-end cleanup, a different tab approving the same draft), the
-  // tool result lands on the step. Hide the editor so the user isn't acting
-  // on a stale draft.
+  // A resolution can arrive from session rehydration or another view. Hide
+  // the editor as soon as that durable result reaches the step.
   useEffect(() => {
     if (finalized && status === 'draft') setIsHidden(true);
   }, [finalized, status]);
@@ -404,15 +391,11 @@ function MessageDraftCard({
     return () => clearTimeout(id);
   }, [status]);
 
-  // Deterministic draft id derived from the agent's args — both this client
-  // and the orchestrator compute the same value, so the approve/reject
-  // endpoints find the matching held tool call.
+  // Deterministic draft id derived from the agent's args. The orchestrator
+  // uses the same value to persist the send/discard resolution by session.
   const draftId = draftIdForArgs(step.input);
 
-  // Channel header: prefer the agent's explicit hints (channel_label,
-  // channel_logo_url) so unknown channels still feel native, fall back to the
-  // toolkit catalog (works for any connected toolkit), and finally just title-
-  // case the channel slug. Avoid passing an empty channel to toolkits.get.
+  // Prefer explicit display hints, then the connected toolkit catalog.
   const toolkitInfo = fields.channel ? toolkits.get(fields.channel) : undefined;
   const channelLogoUrl = fields.channelLogoUrl || toolkitInfo?.logoUrl || null;
   const channelLabel = fields.channelLabel
@@ -428,16 +411,6 @@ function MessageDraftCard({
     if (status === 'error') setStatus('draft');
   };
 
-  const isNative = NATIVE_DRAFT_CHANNELS.has(fields.channel);
-
-  const wasEdited = (): boolean => (
-    fields.to !== initial.to
-    || fields.body !== initial.body
-    || fields.subject !== initial.subject
-    || fields.cc !== initial.cc
-    || fields.threadId !== initial.threadId
-  );
-
   const handleSend = async () => {
     if (sendDisabled) return;
     setStatus('sending');
@@ -449,18 +422,10 @@ function MessageDraftCard({
       subject: fields.subject.trim() || undefined,
       body: fields.body,
       threadId: fields.threadId.trim() || undefined,
-      wasEdited: wasEdited(),
     };
     try {
-      // Native (Slack/Gmail): Verso dispatches directly — the model already
-      // ended its turn, so this is instant and doesn't re-engage it.
-      // Generic: resolve the held tool call so the agent dispatches.
-      if (isNative) {
-        if (!sessionId) throw new Error('Cannot send draft before the session is ready.');
-        await sendDraft(draftId, sessionId, payload);
-      } else {
-        await approveDraft(draftId, payload);
-      }
+      if (!sessionId) throw new Error('Cannot send draft before the session is ready.');
+      await sendDraft(draftId, sessionId, payload);
       setStatus('sent');
     } catch (error: unknown) {
       setStatus('error');
@@ -471,29 +436,14 @@ function MessageDraftCard({
   const handleDiscard = async () => {
     if (status === 'sending') return;
     setErrorMessage(null);
-    // Native drafts have no held call to resolve — the model already moved
-    // on, so discarding is purely local. Generic drafts must reject the held
-    // call so the agent stops waiting.
-    if (isNative) {
-      if (!sessionId) {
-        setStatus('error');
-        setErrorMessage('Cannot discard draft before the session is ready.');
-        return;
-      }
-      try {
-        await discardDraft(draftId, sessionId, fields.channel);
-      } catch (error: unknown) {
-        setStatus('error');
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-        return;
-      }
-      setIsDiscarded(true);
-      setStatus('sent');
+    if (!sessionId) {
+      setStatus('error');
+      setErrorMessage('Cannot discard draft before the session is ready.');
       return;
     }
     setStatus('sending');
     try {
-      await rejectDraft(draftId);
+      await discardDraft(draftId, sessionId, fields.channel);
       setIsDiscarded(true);
       setStatus('sent');
     } catch (error: unknown) {
@@ -508,19 +458,11 @@ function MessageDraftCard({
   // `to` (likely an opaque id) only when no display label is set.
   const toFriendly = fields.toLabel.trim() || fields.to.trim();
 
-  // Whether to surface email-style fields. Defaults to gmail (which always
-  // wants them), but any channel can opt in by supplying a subject or cc on
-  // the original draft — covers exotic email-shaped channels we don't know
-  // about by name.
-  const supportsEmailFields = fields.channel === 'gmail'
-    || initial.subject.length > 0
-    || initial.cc.length > 0;
+  const supportsEmailFields = fields.channel === 'gmail';
 
   const toPlaceholder = fields.channel === 'gmail'
     ? 'name@example.com'
-    : fields.channel === 'slack'
-      ? '#channel or @user'
-      : 'Recipient';
+    : '#channel or @user';
   const sizeClass = draftSizeClass(fields.body);
   const bodyRows = draftBodyRows(fields.body);
 

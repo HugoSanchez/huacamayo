@@ -541,37 +541,25 @@ export async function disconnectAnthropic(): Promise<void> {
   await requestJson<void>('/model-auth/anthropic/disconnect', 'Failed to disconnect Anthropic', { method: 'POST' });
 }
 
-// Generic draft channel — the agent picks whatever toolkit slug it wants
-// (`slack`, `gmail`, `whatsapp`, etc.); the UI uses it for the widget header
-// and the orchestrator forwards it back to the agent in the resolution so the
-// agent can dispatch the matching Composio send tool.
-export type DraftChannel = string;
-
-// Channels Verso dispatches itself (must match NATIVE_DRAFT_CHANNELS in the
-// orchestrator). For these the widget Send button hits /drafts/send directly
-// and the model is never re-engaged.
-export const NATIVE_DRAFT_CHANNELS = new Set(['gmail', 'slack']);
-
-export interface DraftApproveInput {
+export interface DraftSendInput {
   channel: string;
   to: string;
   cc?: string;
   subject?: string;
   body: string;
   threadId?: string;
-  wasEdited: boolean;
 }
 
 // The draft endpoints stay on raw `sidecarFetch`: their fallback error
 // message embeds the live HTTP status, which `requestJson`'s static message
 // can't express.
 
-// Native-channel send: dispatches directly, no held draft. The model already
-// ended its turn after proposing, so this is a pure UI → orchestrator action.
+// The model ends its turn after proposing, so sending is a direct
+// UI → orchestrator action.
 export async function sendDraft(
   draftId: string,
   sessionId: string,
-  payload: DraftApproveInput,
+  payload: DraftSendInput,
 ): Promise<void> {
   const res = await sidecarFetch(`${baseURL()}/drafts/send`, {
     method: 'POST',
@@ -595,28 +583,6 @@ export async function discardDraft(
   });
   if (!res.ok) {
     throw new Error(await readError(res, `Failed to discard draft (HTTP ${res.status})`));
-  }
-}
-
-export async function approveDraft(draftId: string, payload: DraftApproveInput): Promise<void> {
-  const res = await sidecarFetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/approve`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, `Failed to approve draft (HTTP ${res.status})`));
-  }
-}
-
-export async function rejectDraft(draftId: string): Promise<void> {
-  const res = await sidecarFetch(`${baseURL()}/drafts/${encodeURIComponent(draftId)}/reject`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-  });
-  if (!res.ok) {
-    throw new Error(await readError(res, `Failed to reject draft (HTTP ${res.status})`));
   }
 }
 

@@ -2,7 +2,7 @@
    InputBar.tsx). The dynamic textIndent stays inline on the textarea and the
    active-send state is expressed via the .is-active modifier. */
 .input-bar {
-  padding: 0 44px 20px;
+  padding: 0 64px 20px;
   background: var(--paper);
 }
 /* Editorial composer (mockup `.composer`): no filled/bordered box — the field

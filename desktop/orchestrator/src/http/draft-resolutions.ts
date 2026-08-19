@@ -1,6 +1,6 @@
 import {
   draftIdForArgs,
-  NATIVE_DRAFT_CHANNELS,
+  SUPPORTED_MESSAGE_DRAFT_CHANNELS,
 } from '../integrations/composio-bridge.ts';
 import type {
   ChatActivityStep,
@@ -26,7 +26,7 @@ export function applyDraftResolutions(
       const input = asRecord(step.input);
       if (!input) return step;
       const channel = typeof input.channel === 'string' ? input.channel.trim().toLowerCase() : '';
-      if (!NATIVE_DRAFT_CHANNELS.has(channel)) return step;
+      if (!SUPPORTED_MESSAGE_DRAFT_CHANNELS.has(channel)) return step;
 
       const draftId = draftIdForArgs(input);
       const resolution = byDraftId.get(draftId);

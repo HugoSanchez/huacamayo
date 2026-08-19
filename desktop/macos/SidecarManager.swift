@@ -1,11 +1,12 @@
 import Foundation
-import Darwin
 import os
 import Security
 
 /// Manages the local Node.js sidecar process lifecycle.
 @MainActor
 final class SidecarManager: ObservableObject {
+    typealias ManagedAccountSnapshot = SidecarManagedAccountSnapshot
+
     enum State: Equatable {
         case idle
         case starting
@@ -18,86 +19,30 @@ final class SidecarManager: ObservableObject {
     @Published private(set) var managedAccount: ManagedAccountSnapshot?
     @Published private(set) var authToken: String?
 
-    private var process: Process?
-    private var logFileHandle: FileHandle?
-    private var stderrTailHandle: FileHandle?
-    private var stdoutTailHandle: FileHandle?
     private var activityToken: NSObjectProtocol?
     private var stopRequested = false
     private var launchGeneration = 0
     private var restartTask: Task<Void, Never>?
     private var restartAttempts = 0
     private let restartPolicy = SidecarRestartPolicy.standard
+    private let processController: SidecarProcessController
+    private let httpTransport: any SidecarHTTPTransport
     private let logger = Logger(subsystem: "com.verso.app", category: "Sidecar")
 
-    struct ManagedAccountSnapshot: Equatable, Decodable {
-        struct Backend: Equatable, Decodable {
-            let configured: Bool
-            let baseUrl: String?
-        }
-
-        struct Session: Equatable, Decodable {
-            let present: Bool
-            let userId: String?
-            let email: String?
-            let displayName: String?
-            let expiresAt: String?
-            let receivedAt: String?
-            let expired: Bool
-        }
-
-        struct User: Equatable, Decodable {
-            let id: String
-            let privyUserId: String
-            let email: String?
-            let displayName: String?
-        }
-
-        struct Device: Equatable, Decodable {
-            let id: String
-            let label: String
-            let platform: String
-            let lastSeenAt: String
-        }
-
-        struct AuthSession: Equatable, Decodable {
-            let id: String
-            let issuedAt: String
-            let expiresAt: String
-        }
-
-        struct Entitlement: Equatable, Decodable {
-            let id: String
-            let mode: String
-            let status: String
-            let allowedModels: [String]
-            let monthlyUsdLimit: Double?
-            let dailyUsdLimit: Double?
-        }
-
-        struct Account: Equatable, Decodable {
-            let state: String
-            let error: String?
-            let user: User?
-            let device: Device?
-            let session: AuthSession?
-            let entitlements: [Entitlement]
-        }
-
-        let backend: Backend
-        let session: Session
-        let account: Account
+    init(
+        processController: SidecarProcessController? = nil,
+        httpTransport: any SidecarHTTPTransport = URLSession.shared
+    ) {
+        self.processController = processController ?? SidecarProcessController(
+            logFileURL: SidecarProcessController.defaultLogFileURL
+        )
+        self.httpTransport = httpTransport
     }
 
     /// Path to the on-disk sidecar log. Returned even before the sidecar
     /// starts so the UI can offer a "reveal in Finder" affordance.
     static var logFileURL: URL {
-        let logsDir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)
-            .first!
-            .appendingPathComponent("Logs", isDirectory: true)
-            .appendingPathComponent("verso", isDirectory: true)
-        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
-        return logsDir.appendingPathComponent("sidecar.log")
+        SidecarProcessController.defaultLogFileURL
     }
 
     var port: Int? {
@@ -119,19 +64,24 @@ final class SidecarManager: ObservableObject {
         } else {
             logger.info("Managed backend session cleared")
         }
-        if port != nil {
+        switch SidecarManagedSessionPolicy.action(
+            isSidecarRunning: port != nil,
+            previousUserId: previousUserId,
+            nextUserId: session?.userId
+        ) {
+        case .restart:
             Task {
-                if shouldRestartForManagedSessionChange(previousUserId: previousUserId, nextUserId: session?.userId) {
-                    await clearManagedSessionBeforeRestart()
-                    restart()
-                } else {
-                    await pushManagedSession(session)
-                    await refreshManagedAccount()
-                }
+                await clearManagedSessionBeforeRestart()
+                restart()
             }
-        } else if session == nil {
+        case .synchronize:
+            Task {
+                await pushManagedSession(session)
+                await refreshManagedAccount()
+            }
+        case .clearLocal:
             managedAccount = nil
-        } else {
+        case .start:
             start()
         }
     }
@@ -159,14 +109,12 @@ final class SidecarManager: ObservableObject {
                 restartAttempts = 0
                 logger.info("Sidecar running on port \(detectedPort)")
 
-                // Keychain restoration is intentionally asynchronous so it
-                // can never block app launch. If it completes while the
-                // sidecar is starting, make sure that launch is not allowed
-                // to keep running under the previous account identity. A
-                // same-user token refresh can be applied live; an identity
-                // change requires a serialized process restart so all local
-                // state is re-isolated for the new user.
-                if shouldRestartForManagedSessionChange(
+                // A callback, token refresh, or sign-out can still arrive
+                // while the process is starting. Do not let that launch keep
+                // running under an obsolete identity. A same-user token
+                // refresh can be applied live; an identity change requires a
+                // serialized restart so all local state remains isolated.
+                if SidecarManagedSessionPolicy.requiresRestart(
                     previousUserId: launchManagedSession?.userId,
                     nextUserId: managedSession?.userId
                 ) {
@@ -193,17 +141,10 @@ final class SidecarManager: ObservableObject {
         restartTask = nil
         stopRequested = true
         launchGeneration += 1
-        if let process, process.isRunning {
-            process.terminate()
+        if processController.isRunning {
             logger.info("Sidecar stopped")
         }
-        self.process = nil
-        stderrTailHandle?.readabilityHandler = nil
-        stdoutTailHandle?.readabilityHandler = nil
-        stderrTailHandle = nil
-        stdoutTailHandle = nil
-        try? logFileHandle?.close()
-        logFileHandle = nil
+        processController.stopImmediately()
         endActivityIfNeeded()
         managedAccount = nil
         authToken = nil
@@ -236,85 +177,32 @@ final class SidecarManager: ObservableObject {
         launchGeneration += 1
         state = .starting
 
-        guard let process else {
-            clearProcessResources()
-            return true
-        }
-
-        if process.isRunning {
+        if processController.isRunning {
             logger.info("Stopping sidecar before restart")
-            process.terminate()
         }
-
-        var didExit = await waitForProcessExit(process, timeout: .seconds(5))
-        if !didExit, process.isRunning, !Task.isCancelled {
-            logger.warning("Sidecar did not exit after SIGTERM; sending SIGKILL")
-            Darwin.kill(process.processIdentifier, SIGKILL)
-            didExit = await waitForProcessExit(process, timeout: .seconds(1))
-        }
-
-        guard didExit || !process.isRunning else {
+        guard await processController.stopGracefully() else {
             authToken = nil
             state = .failed("The previous sidecar process did not stop. Quit and reopen Verso before retrying.")
-            logger.error("Sidecar process \(process.processIdentifier) did not exit before restart")
+            logger.error("Sidecar process did not exit before restart")
             return false
         }
-
-        if self.process === process {
-            self.process = nil
-        }
-        clearProcessResources()
         managedAccount = nil
         authToken = nil
         return true
     }
 
-    private func waitForProcessExit(_ process: Process, timeout: Duration) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while process.isRunning, clock.now < deadline {
-            if Task.isCancelled { return false }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return !process.isRunning
-    }
-
-    private func clearProcessResources() {
-        stderrTailHandle?.readabilityHandler = nil
-        stdoutTailHandle?.readabilityHandler = nil
-        stderrTailHandle = nil
-        stdoutTailHandle = nil
-        try? logFileHandle?.close()
-        logFileHandle = nil
-    }
-
-    private func shouldRestartForManagedSessionChange(previousUserId: String?, nextUserId: String?) -> Bool {
-        previousUserId != nextUserId
-    }
-
     func refreshManagedAccount() async {
-        guard let baseURL else {
+        guard let baseURL, let authToken else {
             managedAccount = nil
             return
         }
-
-        let endpoint = baseURL.appendingPathComponent("managed/account")
-        var request = URLRequest(url: endpoint)
-        applyAuthHeader(&request)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw URLError(.badServerResponse)
-            }
-            guard (200..<300).contains(http.statusCode) else {
-                throw NSError(
-                    domain: "verso.SidecarManager",
-                    code: http.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "Managed account request failed with HTTP \(http.statusCode)."]
-                )
-            }
-            let decoded = try JSONDecoder().decode(ManagedAccountSnapshot.self, from: data)
-            managedAccount = decoded
+            let client = SidecarHTTPClient(
+                baseURL: baseURL,
+                authToken: authToken,
+                transport: httpTransport
+            )
+            managedAccount = try await client.fetchManagedAccount()
         } catch {
             logger.error("Managed account refresh failed: \(error.localizedDescription, privacy: .public)")
             Telemetry.reportError(error, context: "managed-account-refresh")
@@ -325,29 +213,17 @@ final class SidecarManager: ObservableObject {
     /// over loopback IPC. The orchestrator never persists the bearer token; on
     /// sidecar restart we re-seed via env vars in `launchProcess`.
     private func pushManagedSession(_ session: ManagedAppSession?) async {
-        guard let baseURL else { return }
-        let endpoint = baseURL.appendingPathComponent("managed/session")
-        var request = URLRequest(url: endpoint)
-        applyAuthHeader(&request)
-
-        if let session {
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            do {
-                request.httpBody = try JSONEncoder().encode(session)
-            } catch {
-                logger.error("Failed to encode managed session for push: \(error.localizedDescription, privacy: .public)")
-                Telemetry.reportError(error, context: "managed-session-encode")
-                return
-            }
-        } else {
-            request.httpMethod = "DELETE"
-        }
-
+        guard let baseURL, let authToken else { return }
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                logger.error("Managed session push returned HTTP \(http.statusCode, privacy: .public)")
+            let client = SidecarHTTPClient(
+                baseURL: baseURL,
+                authToken: authToken,
+                transport: httpTransport
+            )
+            if let session {
+                try await client.setManagedSession(session)
+            } else {
+                try await client.clearManagedSession()
             }
         } catch {
             logger.error("Managed session push failed: \(error.localizedDescription, privacy: .public)")
@@ -358,12 +234,6 @@ final class SidecarManager: ObservableObject {
     private func clearManagedSessionBeforeRestart() async {
         guard baseURL != nil else { return }
         await pushManagedSession(nil)
-    }
-
-    deinit {
-        if let process, process.isRunning {
-            process.terminate()
-        }
     }
 
     /// Tell macOS this app is doing a long-running, user-initiated task so
@@ -409,18 +279,15 @@ final class SidecarManager: ObservableObject {
     }
 
     private func launchProcess(managedSession launchManagedSession: ManagedAppSession?) async throws -> Int {
-        let process = Process()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-
-        let serverDir = SidecarRuntimeResolver.orchestratorPath(
-            environment: ProcessInfo.processInfo.environment,
+        let environment = ProcessInfo.processInfo.environment
+        let serverDirectory = SidecarRuntimeResolver.orchestratorPath(
+            environment: environment,
             bundleResourcePath: Bundle.main.resourcePath,
             currentDirectory: FileManager.default.currentDirectoryPath,
             sourceFilePath: #filePath
         )
-        guard FileManager.default.fileExists(atPath: serverDir) else {
-            throw SidecarError.directoryNotFound(serverDir)
+        guard FileManager.default.fileExists(atPath: serverDirectory) else {
+            throw SidecarError.directoryNotFound(serverDirectory)
         }
 
         guard let nodePath = SidecarRuntimeResolver.nodePath(
@@ -429,40 +296,15 @@ final class SidecarManager: ObservableObject {
             throw SidecarError.executableNotFound("node")
         }
 
-        let tsxBin = (serverDir as NSString).appendingPathComponent("node_modules/.bin/tsx")
-        guard FileManager.default.isExecutableFile(atPath: tsxBin) else {
+        let tsxPath = (serverDirectory as NSString)
+            .appendingPathComponent("node_modules/.bin/tsx")
+        guard FileManager.default.isExecutableFile(atPath: tsxPath) else {
             throw SidecarError.executableNotFound("tsx (run npm install in the sidecar package)")
         }
-
-        process.executableURL = URL(fileURLWithPath: nodePath)
-        process.arguments = [tsxBin, "src/http/server.ts"]
-        process.currentDirectoryURL = URL(fileURLWithPath: serverDir)
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        var env = ProcessInfo.processInfo.environment
-        let home = NSHomeDirectory()
-        let extraPaths = [
-            "\(home)/.local/bin",
-            "\(home)/.hermes/hermes-agent/venv/bin",
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-        ]
-        let currentPath = env["PATH"] ?? ""
-        env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
-
-        // The native app normally needs the deployed managed backend: it owns
-        // the Privy exchange and account/session APIs. This applies to Debug
-        // too, because Cmd+R and Conductor Run are product testing paths, not
-        // an implicit request to boot a separate frontend/backend stack. A
-        // scheme VERSO_BACKEND_URL remains an explicit local-dev override.
-        if env["VERSO_BACKEND_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
-            env["VERSO_BACKEND_URL"] = "https://verso-backend-2lg3.onrender.com"
+        guard let authToken else {
+            throw SidecarError.authTokenUnavailable
         }
-        // Release builds use runtime components from app Resources. Debug
-        // builds accept the same layout or fall back to desktop/runtime-bundles
-        // so local launches exercise the packaged Python and Hermes paths.
+
         #if DEBUG
         let allowDevelopmentRuntime = true
         #else
@@ -473,166 +315,46 @@ final class SidecarManager: ObservableObject {
             sourceFilePath: #filePath,
             allowDevelopmentFallback: allowDevelopmentRuntime
         )
-        SidecarRuntimeResolver.applyBundledRuntimeEnvironment(
-            &env,
+        let managedSessionSeed = launchManagedSession.flatMap { session in
+            session.isExpired ? nil : SidecarManagedSessionSeed(
+                token: session.token,
+                expiresAt: session.expiresAt,
+                userId: session.userId
+            )
+        }
+        let launchEnvironment = SidecarLaunchEnvironment.make(
+            baseEnvironment: environment,
+            homeDirectory: NSHomeDirectory(),
             bundleRoot: bundleRoot,
-            homeDirectory: home,
-            hermesHomeOverride: ProcessInfo.processInfo.environment["VERSO_HERMES_HOME"]
+            hermesHomeOverride: environment["VERSO_HERMES_HOME"],
+            managedSession: managedSessionSeed,
+            authToken: authToken,
+            parentProcessIdentifier: ProcessInfo.processInfo.processIdentifier
         )
-        if let launchManagedSession, !launchManagedSession.isExpired {
-            env["VERSO_MANAGED_SESSION_TOKEN"] = launchManagedSession.token
-            env["VERSO_MANAGED_SESSION_EXPIRES_AT"] = launchManagedSession.expiresAt
-            env["VERSO_MANAGED_USER_ID"] = launchManagedSession.userId
-        }
-        guard let authToken else {
-            throw SidecarError.authTokenUnavailable
-        }
-        env["VERSO_SIDECAR_AUTH_SECRET"] = authToken
-        // The orchestrator polls this pid every few seconds; if it goes away
-        // (we crashed, were force-quit, were stopped from Xcode without a
-        // graceful shutdown), the orchestrator self-exits. Without this, the
-        // sidecar gets re-parented to launchd and keeps spinning forever.
-        env["VERSO_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
-        process.environment = env
+        let configuration = SidecarProcessConfiguration(
+            executableURL: URL(fileURLWithPath: nodePath),
+            arguments: [tsxPath, "src/http/server.ts"],
+            currentDirectoryURL: URL(fileURLWithPath: serverDirectory),
+            environment: launchEnvironment
+        )
 
-        logger.info("Launching sidecar: \(nodePath) \(tsxBin) src/http/server.ts")
-        logger.info("Working directory: \(serverDir)")
-        if let command = env["VERSO_HERMES_COMMAND"], !command.isEmpty {
+        logger.info("Launching sidecar: \(nodePath) \(tsxPath) src/http/server.ts")
+        logger.info("Working directory: \(serverDirectory)")
+        if let command = launchEnvironment["VERSO_HERMES_COMMAND"], !command.isEmpty {
             logger.info("Agent runtime launch mode: managed command \(command)")
         } else {
             logger.info("Agent runtime launch mode: auto-detect installed CLI")
         }
-        self.process = process
 
-        try process.run()
-
-        // Open the persistent log file before the child writes anything so we
-        // never lose output. Append-mode keeps history across restarts; we
-        // truncate manually if it grows past a hard cap.
-        let logURL = Self.logFileURL
-        let logHandle = Self.openLogHandle(at: logURL)
-        self.logFileHandle = logHandle
-        self.stderrTailHandle = stderrPipe.fileHandleForReading
-        self.stdoutTailHandle = stdoutPipe.fileHandleForReading
-
-        let startMarker = "\n[verso] launching sidecar pid=\(process.processIdentifier) at \(Self.timestamp())\n"
-        if let logHandle {
-            Self.appendToLog(handle: logHandle, text: startMarker)
-        }
-
-        // We track stderr during startup so we can surface structured
-        // failure envelopes (`{"status":"error", ...}`) the server emits
-        // before exiting. Once the sidecar reaches "ready" we stop buffering
-        // and only forward to the log file.
-        let stderrBuffer = SidecarStartupErrorBuffer()
-        let stderrReader = stderrPipe.fileHandleForReading
-        stderrReader.readabilityHandler = { [weak self, weak logHandle] handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty { return }
-            if let logHandle {
-                Self.appendToLog(handle: logHandle, data: chunk, prefix: "[stderr] ")
+        return try await processController.launch(configuration: configuration) { [weak self] reason in
+            guard let self else { return }
+            if case .running = self.state {
+                self.state = .failed("Sidecar exited: \(reason)")
+                self.logger.error(
+                    "Sidecar exited unexpectedly: \(reason, privacy: .public). Log: \(Self.logFileURL.path, privacy: .public)"
+                )
+                self.scheduleRestart()
             }
-            stderrBuffer.append(chunk)
-            if let text = String(data: chunk, encoding: .utf8) {
-                self?.logger.debug("sidecar stderr: \(text, privacy: .public)")
-            }
-        }
-
-        let port: Int = try await withCheckedThrowingContinuation { continuation in
-            // Mutable state captured by the FileHandle readabilityHandler runs
-            // on a background queue, so wrap it in a thread-safe holder to
-            // satisfy Swift's concurrency checker. The holder also makes the
-            // resume call idempotent.
-            let resolver = StartupResolver(continuation: continuation)
-            let startupParser = SynchronizedSidecarStartupParser()
-
-            process.terminationHandler = { [weak self, weak logHandle] terminatedProcess in
-                let reason = Self.describeTermination(terminatedProcess)
-                Task { @MainActor in
-                    guard let self else { return }
-                    if let logHandle {
-                        Self.appendToLog(handle: logHandle, text: "\n[verso] sidecar exited: \(reason) at \(Self.timestamp())\n")
-                    }
-
-                    let isCurrentProcess = self.process.map { $0 === terminatedProcess } ?? false
-                    if isCurrentProcess {
-                        self.stderrTailHandle?.readabilityHandler = nil
-                        self.stdoutTailHandle?.readabilityHandler = nil
-                        self.stderrTailHandle = nil
-                        self.stdoutTailHandle = nil
-                    }
-
-                    if !resolver.isResolved() {
-                        if let startup = stderrBuffer.latestFailure() {
-                            resolver.resume(.failure(SidecarError.startupFailed(startup)))
-                        } else {
-                            resolver.resume(.failure(SidecarError.unexpectedExit))
-                        }
-                        return
-                    }
-
-                    guard isCurrentProcess else { return }
-                    if case .running = self.state {
-                        self.state = .failed("Sidecar exited: \(reason)")
-                        self.logger.error("Sidecar exited unexpectedly: \(reason, privacy: .public). Log: \(Self.logFileURL.path, privacy: .public)")
-                        self.scheduleRestart()
-                    }
-                }
-            }
-
-            let stdoutReader = stdoutPipe.fileHandleForReading
-            stdoutReader.readabilityHandler = { [weak self, weak logHandle] handle in
-                let chunk = handle.availableData
-                if chunk.isEmpty {
-                    if !resolver.isResolved() {
-                        for event in startupParser.finish() {
-                            switch event {
-                            case .ready(let port):
-                                stderrBuffer.clear()
-                                resolver.resume(.success(port))
-                                return
-                            case .failure(let failure):
-                                resolver.resume(.failure(SidecarError.startupFailed(failure)))
-                                return
-                            }
-                        }
-                        if let startup = stderrBuffer.latestFailure() {
-                            resolver.resume(.failure(SidecarError.startupFailed(startup)))
-                        } else {
-                            resolver.resume(.failure(SidecarError.unexpectedExit))
-                        }
-                    }
-                    return
-                }
-
-                if let logHandle {
-                    Self.appendToLog(handle: logHandle, data: chunk, prefix: "[stdout] ")
-                }
-                self?.logger.debug("sidecar stdout chunk: \(chunk.count) bytes")
-
-                if resolver.isResolved() { return }
-
-                for event in startupParser.append(chunk) {
-                    switch event {
-                    case .ready(let port):
-                        // Free the startup buffer; from here on stderr only flows to the log file.
-                        stderrBuffer.clear()
-                        resolver.resume(.success(port))
-                        return
-                    case .failure(let failure):
-                        resolver.resume(.failure(SidecarError.startupFailed(failure)))
-                        return
-                    }
-                }
-            }
-        }
-
-        return port
-    }
-
-    private func applyAuthHeader(_ request: inout URLRequest) {
-        if let authToken {
-            request.setValue(authToken, forHTTPHeaderField: "X-Verso-Sidecar-Token")
         }
     }
 
@@ -644,93 +366,12 @@ final class SidecarManager: ObservableObject {
         }
         return Data(bytes).base64EncodedString()
     }
-
-    nonisolated private static func describeTermination(_ process: Process) -> String {
-        switch process.terminationReason {
-        case .exit:
-            return "exit code=\(process.terminationStatus)"
-        case .uncaughtSignal:
-            return "signal=\(process.terminationStatus)"
-        @unknown default:
-            return "unknown reason status=\(process.terminationStatus)"
-        }
-    }
-
-    nonisolated private static func openLogHandle(at url: URL) -> FileHandle? {
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: nil)
-        }
-        // Cap the log at ~5 MB; truncate to start fresh once it gets too big.
-        if let attrs = try? fm.attributesOfItem(atPath: url.path),
-           let size = attrs[.size] as? UInt64,
-           size > 5 * 1024 * 1024 {
-            try? Data().write(to: url)
-        }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return nil }
-        _ = try? handle.seekToEnd()
-        return handle
-    }
-
-    nonisolated private static func appendToLog(handle: FileHandle, text: String) {
-        guard let data = text.data(using: .utf8) else { return }
-        try? handle.write(contentsOf: data)
-    }
-
-    nonisolated private static func appendToLog(handle: FileHandle, data: Data, prefix: String) {
-        // Light-touch line-prefixing: just write the prefix once per chunk
-        // so the file is greppable without paying for full per-line splitting
-        // on the I/O path.
-        guard let prefixData = prefix.data(using: .utf8) else { return }
-        try? handle.write(contentsOf: prefixData)
-        try? handle.write(contentsOf: data)
-    }
-
-    nonisolated private static func timestamp() -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: Date())
-    }
-
 }
-
-// One-shot resolver wrapping a CheckedContinuation. Calling resume() more
-// than once is a fatal error in Swift's continuation model, so we serialize
-// access and ignore subsequent resumes.
-private final class StartupResolver: @unchecked Sendable {
-    private let lock = NSLock()
-    private var resolved = false
-    private let continuation: CheckedContinuation<Int, Error>
-
-    init(continuation: CheckedContinuation<Int, Error>) {
-        self.continuation = continuation
-    }
-
-    func isResolved() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return resolved
-    }
-
-    func resume(_ result: Result<Int, Error>) {
-        lock.lock()
-        if resolved {
-            lock.unlock()
-            return
-        }
-        resolved = true
-        lock.unlock()
-        continuation.resume(with: result)
-    }
-}
-
 
 enum SidecarError: LocalizedError {
     case executableNotFound(String)
     case directoryNotFound(String)
     case authTokenUnavailable
-    case startupFailed(SidecarStartupFailure)
-    case unexpectedExit
 
     var errorDescription: String? {
         switch self {
@@ -740,13 +381,6 @@ enum SidecarError: LocalizedError {
             return "sidecar package not found at \(path)"
         case .authTokenUnavailable:
             return "failed to create sidecar authentication token"
-        case .startupFailed(let startup):
-            if startup.code == "unknown" {
-                return "Sidecar failed to start: \(startup.message)"
-            }
-            return "Sidecar startup failed (\(startup.code)): \(startup.message)"
-        case .unexpectedExit:
-            return "Sidecar exited before becoming ready"
         }
     }
 }
