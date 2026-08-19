@@ -129,3 +129,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ## Repo
 
 This repo is `huacamayo`. verso is the product.
+
+## License
+
+Verso is available under the [MIT License](LICENSE).
