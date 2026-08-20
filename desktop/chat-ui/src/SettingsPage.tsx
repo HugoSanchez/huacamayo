@@ -3,12 +3,17 @@ import {
   connectAnthropic,
   disconnectAnthropic,
   disconnectCodex,
+  getAgentBrowserStatus,
   getAnthropicStatus,
   getCodexStatus,
   getIngestionSources,
   getSidecarPort,
+  openAgentBrowser,
+  resetAgentBrowser,
+  setAgentBrowserPrivateUrls,
   sidecarFetch,
   toggleIngestionSource,
+  type AgentBrowserStatus,
   type AnthropicStatus,
   type CodexStatus,
   type IngestionSourceView,
@@ -161,6 +166,8 @@ export function SettingsPage({ onBack }: Props) {
 
           <IngestionSection />
 
+          <AgentBrowserSection />
+
           <section className="settings-section settings-section-signout">
             <div className="settings-row">
               <span className="settings-label">Session</span>
@@ -289,6 +296,114 @@ function IngestionSection() {
           </div>
         );
       })}
+    </section>
+  );
+}
+
+function AgentBrowserSection() {
+  const [status, setStatus] = useState<AgentBrowserStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<'open' | 'reset' | 'toggle' | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+
+  useEffect(() => {
+    void refresh();
+    const id = window.setInterval(() => { void refresh(); }, 5000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  async function refresh() {
+    try {
+      setStatus(await getAgentBrowserStatus());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function run(op: 'open' | 'reset' | 'toggle', action: () => Promise<unknown>) {
+    if (pending) return;
+    setPending(op);
+    try {
+      await action();
+      await refresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  function handleReset() {
+    if (!confirmingReset) {
+      setConfirmingReset(true);
+      return;
+    }
+    setConfirmingReset(false);
+    void run('reset', () => resetAgentBrowser());
+  }
+
+  if (status === null && !error) return null;
+
+  const allowPrivate = status?.settings?.allowPrivateUrls === true;
+  return (
+    <section className="settings-section">
+      <div className="ingestion-header">
+        <h2>Agent browser</h2>
+        <p className="settings-footnote">
+          A dedicated browser the assistant can operate. Open it to sign in to a
+          site yourself — the assistant reuses the session but never sees your
+          passwords.
+        </p>
+      </div>
+      {error ? <p className="settings-footnote codex-error">{error}</p> : null}
+      {status && !status.supported ? (
+        <p className="settings-footnote">Install Google Chrome (or Chromium, Brave, Edge) to use browser automation.</p>
+      ) : null}
+      <div className="settings-row">
+        <span className="settings-label">Status</span>
+        <span className="settings-value">
+          {status?.running ? 'Running' : status?.enabled ? 'Not running' : 'Not set up'}
+        </span>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Browser</span>
+        <button
+          type="button"
+          className="settings-button settings-button-primary"
+          onClick={() => { void run('open', () => openAgentBrowser()); }}
+          disabled={pending !== null || status?.supported === false}
+        >
+          {pending === 'open' ? 'Opening…' : 'Open browser'}
+        </button>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Allow local &amp; private addresses</span>
+        <span
+          className={`skill-row-toggle is-${allowPrivate ? 'on' : 'off'}`}
+          role="switch"
+          aria-checked={allowPrivate}
+          aria-disabled={pending !== null}
+          onClick={() => { void run('toggle', () => setAgentBrowserPrivateUrls(!allowPrivate)); }}
+        >
+          <span className="skill-row-toggle-thumb" />
+        </span>
+      </div>
+      {status?.enabled ? (
+        <div className="settings-row">
+          <span className="settings-label">Browsing data</span>
+          <button
+            type="button"
+            className="settings-button settings-button-danger"
+            onClick={handleReset}
+            onBlur={() => setConfirmingReset(false)}
+            disabled={pending !== null}
+          >
+            {pending === 'reset' ? 'Clearing…' : confirmingReset ? 'Confirm — signs out of all sites' : 'Clear browsing data'}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

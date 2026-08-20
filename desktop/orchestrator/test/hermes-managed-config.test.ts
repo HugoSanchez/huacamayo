@@ -86,6 +86,35 @@ describe('HermesSupervisor: managed config override', () => {
     expect(parsed.toolsets).toEqual(['hermes-cli']);
   });
 
+  it('writes managed browser policy: restrict_evaluate always, allow_private_urls from settings', () => {
+    let allowPrivate = false;
+    const supervisor = new HermesSupervisor({
+      runtimeMode: 'managed',
+      browserRuntime: { cdpUrl: () => null, allowPrivateUrls: () => allowPrivate },
+    });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    const seed = () => (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    seed();
+    let parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(parsed.browser).toEqual({ restrict_evaluate: true, allow_private_urls: false });
+
+    // The toggle lands on the next prepare (which precedes every spawn).
+    allowPrivate = true;
+    seed();
+    parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(parsed.browser).toEqual({ restrict_evaluate: true, allow_private_urls: true });
+  });
+
+  it('defaults browser policy to restricted and no private URLs without a browserRuntime', () => {
+    const supervisor = new HermesSupervisor({ runtimeMode: 'managed' });
+    supervisor.setOrchestratorBaseUrl('http://127.0.0.1:62000');
+    (supervisor as unknown as { ensureManagedHermesHome: () => void }).ensureManagedHermesHome();
+
+    const parsed = YAML.parse(readFileSync(path.join(managedHome, 'config.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(parsed.browser).toEqual({ restrict_evaluate: true, allow_private_urls: false });
+  });
+
   it('removes persisted gateway transport and auth overrides from upgraded profiles', () => {
     mkdirSync(managedHome, { recursive: true });
     writeFileSync(path.join(managedHome, 'config.yaml'), YAML.stringify({

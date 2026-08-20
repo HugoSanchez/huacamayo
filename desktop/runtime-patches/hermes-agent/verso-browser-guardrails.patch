@@ -1,0 +1,86 @@
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -156,17 +156,20 @@
+ def _resolve_cron_disabled_toolsets(cfg: dict) -> list[str]:
+     """Toolsets a cron-spawned agent must never receive.
+ 
+-    Three protected toolsets are always disabled in cron context:
++    Four protected toolsets are always disabled in cron context:
+       - ``cronjob`` — would let a cron-spawned agent schedule more cron jobs
+       - ``messaging`` — interactive, needs a live gateway session
+       - ``clarify`` — interactive, blocks waiting for user input
++      - ``browser-drive`` — browser automation is attended-only; an
++        unattended cron agent must never drive a (possibly authenticated)
++        browser. Scoped to the driving tools so cron keeps ``web_search``.
+ 
+     User-level ``agent.disabled_toolsets`` from config.yaml is layered on top
+     so per-job ``enabled_toolsets`` cannot bypass policy that applies to
+     ordinary agent runs (#25752 — LLM-supplied enabled_toolsets was widening
+     past config.yaml's denylist).
+     """
+-    disabled = ["cronjob", "messaging", "clarify"]
++    disabled = ["cronjob", "messaging", "clarify", "browser-drive"]
+     agent_cfg = (cfg or {}).get("agent") or {}
+     user_disabled = agent_cfg.get("disabled_toolsets") or []
+     for name in user_disabled:
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -182,6 +182,21 @@
+         "includes": []
+     },
+     
++    "browser-drive": {
++        # The driving subset of ``browser`` (everything except ``web_search``).
++        # Exists so policy can deny browser *control* without also taking away
++        # web search, which ``browser`` bundles for URL discovery.
++        "description": "Browser-driving tools only, without the bundled web search",
++        "tools": [
++            "browser_navigate", "browser_snapshot", "browser_click",
++            "browser_type", "browser_scroll", "browser_back",
++            "browser_press", "browser_get_images",
++            "browser_vision", "browser_console", "browser_cdp",
++            "browser_dialog"
++        ],
++        "includes": []
++    },
++
+     "cronjob": {
+         "description": "Cronjob management tool - create, list, update, pause, resume, remove, and trigger scheduled tasks",
+         "tools": ["cronjob"],
+--- a/tools/browser_cdp_tool.py
++++ b/tools/browser_cdp_tool.py
+@@ -634,6 +634,25 @@
+ }
+ 
+ 
++def _expose_cdp_tool_enabled() -> bool:
++    """Return whether the raw-CDP tool is explicitly enabled.
++
++    Opt-in via ``browser.expose_cdp_tool: true``. A CDP override routes the
++    *typed* browser tools to a shared local browser; exposing raw protocol
++    access (``Runtime.evaluate``, cookie dumps, target control) to the model
++    is a separate, stronger grant than merely attaching.
++    """
++    try:
++        from hermes_cli.config import cfg_get, read_raw_config
++        from utils import is_truthy_value
++
++        cfg = read_raw_config()
++        return is_truthy_value(cfg_get(cfg, "browser", "expose_cdp_tool"), default=False)
++    except Exception as exc:
++        logger.debug("Could not read browser.expose_cdp_tool from config: %s", exc)
++        return False
++
++
+ def _browser_cdp_check() -> bool:
+     """Availability check for browser_cdp.
+ 
+@@ -661,6 +680,8 @@
+         return False
+     if not check_browser_requirements():
+         return False
++    if not _expose_cdp_tool_enabled():
++        return False
+     return bool(_get_cdp_override())
+ 
+ 

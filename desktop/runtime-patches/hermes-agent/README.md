@@ -17,13 +17,19 @@ gateway and exercises streaming plus the MCP OAuth routes.
    through the API-server SSE response.
 2. `codex-tool-schema-required.patch` — normalizes tool schemas for the Codex
    Responses API's stricter required-field rules.
-3. `verso-gateway-mcp-oauth.patch` — adds the loopback MCP OAuth routes used by
+3. `verso-browser-guardrails.patch` — defines a `browser-drive` toolset (the
+   browser toolset minus its bundled `web_search`), adds it to the cron
+   protected denylist (browser automation is attended-only, but cron keeps web
+   search), and makes the raw `browser_cdp` tool opt-in via
+   `browser.expose_cdp_tool` instead of auto-enabling whenever a CDP endpoint
+   is configured.
+4. `verso-gateway-mcp-oauth.patch` — adds the loopback MCP OAuth routes used by
    the desktop connection flow.
-4. `verso-personal-assistant-prompts.patch` — adapts the upstream agent prompt
+5. `verso-personal-assistant-prompts.patch` — adapts the upstream agent prompt
    for Verso's general personal-assistant surface.
-5. `verso-request-overrides.patch` — supports per-request model and reasoning
+6. `verso-request-overrides.patch` — supports per-request model and reasoning
    effort selected in the chat UI. It depends on patch 1.
-6. `verso-tool-search-pinned.patch` — keeps essential tools visible when
+7. `verso-tool-search-pinned.patch` — keeps essential tools visible when
    Hermes defers the remainder behind tool search.
 
 ## Updating Hermes

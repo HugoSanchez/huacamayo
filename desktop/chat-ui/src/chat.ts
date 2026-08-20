@@ -505,6 +505,34 @@ export function openExternalUrl(url: string): void {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+export interface AgentBrowserStatus {
+  supported: boolean;
+  enabled: boolean;
+  running: boolean;
+  settings?: { allowPrivateUrls: boolean };
+}
+
+export async function getAgentBrowserStatus(): Promise<AgentBrowserStatus> {
+  return requestJson('/browser/status', 'Failed to load agent browser status');
+}
+
+export async function openAgentBrowser(url?: string): Promise<AgentBrowserStatus> {
+  return requestJson('/browser/open', 'Failed to open the agent browser', jsonInit('POST', url ? { url } : {}));
+}
+
+export async function resetAgentBrowser(): Promise<AgentBrowserStatus> {
+  return requestJson('/browser/reset', 'Failed to clear agent browser data', { method: 'POST' });
+}
+
+export async function setAgentBrowserPrivateUrls(allow: boolean): Promise<{ allowPrivateUrls: boolean }> {
+  const body = await requestJson<{ settings: { allowPrivateUrls: boolean } }>(
+    '/browser/settings',
+    'Failed to update agent browser settings',
+    jsonInit('POST', { allowPrivateUrls: allow }),
+  );
+  return body.settings;
+}
+
 export interface CodexStatus {
   connected: boolean;
   count: number;

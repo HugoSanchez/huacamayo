@@ -75,6 +75,12 @@ export interface HermesSupervisorOptions {
   memoryToolsMode?: 'full' | 'none';
   customConnectorsStore?: CustomConnectorsStore;
   customConnectorKeychain?: CustomConnectorKeychain;
+  /**
+   * The Verso-owned agent browser (BrowserHost + settings). cdpUrl() is read
+   * at each spawn: non-null routes Hermes's browser tools to that endpoint,
+   * null leaves Hermes in its default local browser mode.
+   */
+  browserRuntime?: { cdpUrl(): string | null; allowPrivateUrls(): boolean };
 }
 
 export class HermesSupervisor {
@@ -87,6 +93,7 @@ export class HermesSupervisor {
   private readonly memoryToolsMode: 'full' | 'none';
   private readonly customConnectorsStore: CustomConnectorsStore;
   private readonly customConnectorKeychain: CustomConnectorKeychain;
+  private readonly browserRuntime: { cdpUrl(): string | null; allowPrivateUrls(): boolean } | null;
   private readonly managedProfile: HermesManagedProfile;
 
   private config: HermesGatewayConfig;
@@ -114,6 +121,7 @@ export class HermesSupervisor {
     this.memoryToolsMode = options.memoryToolsMode ?? 'full';
     this.customConnectorsStore = options.customConnectorsStore ?? new CustomConnectorsStore();
     this.customConnectorKeychain = options.customConnectorKeychain ?? new CustomConnectorKeychain();
+    this.browserRuntime = options.browserRuntime ?? null;
     this.hasExplicitBaseUrl = Boolean(process.env.VERSO_HERMES_GATEWAY_URL?.trim());
     this.managedEndpointSelected = this.hasExplicitBaseUrl;
     this.manualMode = isManagedDisabled();
@@ -125,6 +133,7 @@ export class HermesSupervisor {
       runtimeMode: this.runtimeMode,
       memoryToolsMode: this.memoryToolsMode,
       customConnectorsStore: this.customConnectorsStore,
+      browserRuntime: this.browserRuntime ?? undefined,
     });
     this.state = this.launch.command || this.manualMode ? 'idle' : 'unavailable';
   }
@@ -573,6 +582,7 @@ export class HermesSupervisor {
       const token = await this.customConnectorKeychain.getSecret(connector.id);
       if (token) customConnectorEnv[`VERSO_CC_${connector.id}_TOKEN`] = token;
     }
+    const browserCdpUrl = this.browserRuntime?.cdpUrl() ?? null;
 
     const env = {
       ...process.env,
@@ -589,6 +599,7 @@ export class HermesSupervisor {
       HERMES_HOME: this.managedHermesHome,
       VERSO_HERMES_GATEWAY_URL: this.config.baseUrl,
       ...(this.orchestratorBaseUrl ? { VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
+      ...(browserCdpUrl ? { BROWSER_CDP_URL: browserCdpUrl } : {}),
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {

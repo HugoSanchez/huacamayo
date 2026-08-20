@@ -17,6 +17,7 @@ HERMES_EXTRA_PINS=("aiohttp==3.13.3")
 HERMES_PATCHES=(
     "api-server-reasoning-stream.patch"
     "codex-tool-schema-required.patch"
+    "verso-browser-guardrails.patch"
     "verso-gateway-mcp-oauth.patch"
     "verso-personal-assistant-prompts.patch"
     "verso-request-overrides.patch"
