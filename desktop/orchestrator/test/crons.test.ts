@@ -100,6 +100,14 @@ describe('Crons orchestrator routes', () => {
     expect(body.crons.some((j) => j.id === id && j.name === 'list-target')).toBe(true);
   });
 
+  it('preserves Hermes\' authoritative running state', async () => {
+    const id = await createJobOnGateway({ name: 'active-target', running: true });
+    const res = await fetch(url('/crons'));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { crons: Array<{ id: string; running?: boolean }> };
+    expect(body.crons).toContainEqual(expect.objectContaining({ id, running: true }));
+  });
+
   it('returns a single job with empty runs when no output dir', async () => {
     const id = await createJobOnGateway({ name: 'detail-target' });
     const res = await fetch(url(`/crons/${id}`));

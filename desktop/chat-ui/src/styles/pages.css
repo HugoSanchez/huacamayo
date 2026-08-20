@@ -950,6 +950,33 @@
   background: var(--danger-btn-hover-bg);
 }
 
+.settings-link {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-dim);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.settings-link:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.settings-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.settings-link-danger {
+  color: var(--danger-btn-text);
+}
+
 .codex-actions {
   display: flex;
   gap: 8px;

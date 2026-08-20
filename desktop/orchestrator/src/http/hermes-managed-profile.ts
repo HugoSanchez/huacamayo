@@ -47,7 +47,6 @@ const DEFAULT_DISABLED_HERMES_SKILLS = [
   'github-issues',
 ];
 const DEFAULT_DISABLED_SKILLS_MARKER = '.verso-default-disabled-skills-v1';
-const PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER = '.verso-paused-pre-release-browser-crons-v1';
 
 export interface HermesManagedProfileOptions {
   templateHome: string;
@@ -55,6 +54,8 @@ export interface HermesManagedProfileOptions {
   runtimeMode: RuntimeMode;
   memoryToolsMode: 'full' | 'none';
   customConnectorsStore: CustomConnectorsStore;
+  /** Current agent-browser policy; read at each prepare() so toggles land on the next spawn. */
+  browserRuntime?: { allowPrivateUrls(): boolean };
 }
 
 /**
@@ -71,6 +72,7 @@ export class HermesManagedProfile {
   private readonly runtimeMode: RuntimeMode;
   private readonly memoryToolsMode: 'full' | 'none';
   private readonly customConnectorsStore: CustomConnectorsStore;
+  private readonly browserRuntime: { allowPrivateUrls(): boolean } | null;
 
   constructor(options: HermesManagedProfileOptions) {
     this.templateHome = options.templateHome;
@@ -78,6 +80,7 @@ export class HermesManagedProfile {
     this.runtimeMode = options.runtimeMode;
     this.memoryToolsMode = options.memoryToolsMode;
     this.customConnectorsStore = options.customConnectorsStore;
+    this.browserRuntime = options.browserRuntime ?? null;
   }
 
   get composioToolsManifestPath(): string {
@@ -97,7 +100,7 @@ export class HermesManagedProfile {
     seedHermesHomeFile(this.templateHome, this.managedHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers(orchestratorBaseUrl);
-    this.pausePreReleaseBrowserCrons();
+    this.configureBrowserRuntime();
     this.configureModelRoutes();
     this.restoreManagedModelConfigIfProxyOwned();
     this.seedDefaultDisabledSkillsIfNeeded(configExistedBeforeSeed);
@@ -126,52 +129,21 @@ export class HermesManagedProfile {
     copyFileSync(sourcePath, targetPath);
   }
 
-  private pausePreReleaseBrowserCrons(): void {
-    const markerPath = join(this.managedHome, PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER);
-    if (existsSync(markerPath)) return;
-
-    const jobsPath = join(this.managedHome, 'cron', 'jobs.json');
-    let pausedCount = 0;
-    if (existsSync(jobsPath)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(jobsPath, 'utf8'));
-      } catch (error) {
-        console.warn(
-          `[cron-cleanup] could not read ${jobsPath}; browser routines were not changed:`,
-          error instanceof Error ? error.message : String(error),
-        );
-        return;
-      }
-
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
-      const jobs = (parsed as Record<string, unknown>).jobs;
-      if (Array.isArray(jobs)) {
-        const pausedAt = new Date().toISOString();
-        for (const rawJob of jobs) {
-          if (!rawJob || typeof rawJob !== 'object' || Array.isArray(rawJob)) continue;
-          const job = rawJob as Record<string, unknown>;
-          if (!Array.isArray(job.enabled_toolsets) || !job.enabled_toolsets.includes('browser')) continue;
-          if (job.enabled === false && job.state === 'paused') continue;
-          job.enabled = false;
-          job.state = 'paused';
-          job.paused_at = pausedAt;
-          job.paused_reason = 'Browser routines are disabled in this Verso release.';
-          pausedCount += 1;
-        }
-      }
-
-      if (pausedCount > 0) {
-        const tempPath = `${jobsPath}.verso-cleanup-${process.pid}.tmp`;
-        writeFileSync(tempPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
-        renameSync(tempPath, jobsPath);
-      }
-    }
-
-    writeFileSync(markerPath, 'Browser cron cleanup v1 completed.\n', 'utf8');
-    if (pausedCount > 0) {
-      console.warn(`[cron-cleanup] paused ${pausedCount} pre-release browser routine(s)`);
-    }
+  private configureBrowserRuntime(): void {
+    const configPath = join(this.managedHome, 'config.yaml');
+    const config = readYamlRecord(configPath) ?? {};
+    const browser = asRecord(config.browser) ?? {};
+    const allowPrivateUrls = this.browserRuntime?.allowPrivateUrls() === true;
+    // restrict_evaluate is upstream's own recommendation for agents driving a
+    // logged-in profile: it blocks cookie/storage/clipboard/form-value reads
+    // through browser_console(expression=...). allow_private_urls is the
+    // user's opt-in for reaching self-hosted tools on localhost/RFC1918.
+    if (browser.restrict_evaluate === true && browser.allow_private_urls === allowPrivateUrls) return;
+    browser.restrict_evaluate = true;
+    browser.allow_private_urls = allowPrivateUrls;
+    config.browser = browser;
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, YAML.stringify(config), 'utf8');
   }
 
   private syncManagedAuthStore(): void {

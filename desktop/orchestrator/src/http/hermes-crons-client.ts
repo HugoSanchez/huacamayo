@@ -33,6 +33,8 @@ export interface HermesCronJob {
   repeat?: { times: number | null; completed: number };
   enabled: boolean;
   state: string;
+  /** True only while Hermes' scheduler is actively executing this job. */
+  running?: boolean;
   paused_at?: string | null;
   paused_reason?: string | null;
   created_at: string;

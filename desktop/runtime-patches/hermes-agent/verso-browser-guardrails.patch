@@ -1,0 +1,240 @@
+diff --git a/cron/scheduler.py b/cron/scheduler.py
+index c595707..3b59350 100644
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -3429,7 +3429,12 @@ def run_job(
+         # env passthrough registrations) when the cron run hops into the worker
+         # thread used for inactivity timeout monitoring.
+         _cron_context = contextvars.copy_context()
+-        _cron_future = _cron_pool.submit(_cron_context.run, agent.run_conversation, prompt)
++        _cron_future = _cron_pool.submit(
++            _cron_context.run,
++            agent.run_conversation,
++            prompt,
++            task_id=_cron_session_id,
++        )
+         _inactivity_timeout = False
+         try:
+             if _cron_inactivity_limit is None:
+diff --git a/tools/browser_cdp_tool.py b/tools/browser_cdp_tool.py
+index 2df9a16..1f2aa48 100644
+--- a/tools/browser_cdp_tool.py
++++ b/tools/browser_cdp_tool.py
+@@ -634,6 +634,25 @@ BROWSER_CDP_SCHEMA: Dict[str, Any] = {
+ }
+
+
++def _expose_cdp_tool_enabled() -> bool:
++    """Return whether the raw-CDP tool is explicitly enabled.
++
++    Opt-in via ``browser.expose_cdp_tool: true``. A CDP override routes the
++    *typed* browser tools to a shared local browser; exposing raw protocol
++    access (``Runtime.evaluate``, cookie dumps, target control) to the model
++    is a separate, stronger grant than merely attaching.
++    """
++    try:
++        from hermes_cli.config import cfg_get, read_raw_config
++        from utils import is_truthy_value
++
++        cfg = read_raw_config()
++        return is_truthy_value(cfg_get(cfg, "browser", "expose_cdp_tool"), default=False)
++    except Exception as exc:
++        logger.debug("Could not read browser.expose_cdp_tool from config: %s", exc)
++        return False
++
++
+ def _browser_cdp_check() -> bool:
+     """Availability check for browser_cdp.
+
+@@ -661,6 +680,8 @@ def _browser_cdp_check() -> bool:
+         return False
+     if not check_browser_requirements():
+         return False
++    if not _expose_cdp_tool_enabled():
++        return False
+     return bool(_get_cdp_override())
+
+
+diff --git a/tools/browser_tool.py b/tools/browser_tool.py
+index bcc1455..4bbc0600 100644
+--- a/tools/browser_tool.py
++++ b/tools/browser_tool.py
+@@ -485,6 +485,29 @@ def _get_cdp_override() -> str:
+     return ""
+
+
++def _ensure_verso_browser_started() -> None:
++    """Ask the local Verso sidecar to launch its browser on first use.
++
++    ``BROWSER_CDP_URL`` remains stable while Chrome is stopped, so Hermes can
++    start without launching a visible browser. The supervisor sets the lazy
++    launch marker only for Verso-managed endpoints.
++    """
++    if not is_truthy_value(os.environ.get("VERSO_BROWSER_LAZY_LAUNCH"), default=False):
++        return
++    base_url = os.environ.get("VERSO_ORCHESTRATOR_BASE_URL", "").rstrip("/")
++    if not base_url.startswith(("http://127.0.0.1:", "http://localhost:")):
++        return
++    try:
++        headers = {}
++        token = os.environ.get("VERSO_SIDECAR_AUTH_SECRET", "").strip()
++        if token:
++            headers["x-verso-sidecar-token"] = token
++        response = requests.post(f"{base_url}/browser/ensure", headers=headers, timeout=20)
++        response.raise_for_status()
++    except Exception as exc:
++        logger.warning("Could not start the Verso agent browser: %s", exc)
++
++
+ def _get_dialog_policy_config() -> Tuple[str, float]:
+     """Read ``browser.dialog_policy`` + ``browser.dialog_timeout_s`` from config.
+
+@@ -2069,8 +2092,37 @@ def _get_session_info(task_id: Optional[str] = None) -> Dict[str, Any]:
+
+     with _cleanup_lock:
+         # Check if we already have a session for this task
+-        if task_id in _active_sessions:
+-            return _active_sessions[task_id]
++        existing_session = _active_sessions.get(task_id)
++
++    if existing_session:
++        if not existing_session.get("features", {}).get("cdp_override"):
++            return existing_session
++
++        # Verso keeps the HTTP discovery endpoint stable across Chrome
++        # restarts, but Chrome assigns a new browser WebSocket path. Rotate
++        # only this task's agent-browser session so it binds a fresh pinned tab
++        # instead of retrying the stale path forever.
++        _ensure_verso_browser_started()
++        current_cdp_url = _get_cdp_override()
++        if not current_cdp_url or current_cdp_url == existing_session.get("cdp_url"):
++            return existing_session
++
++        replacement = _create_cdp_session(task_id, current_cdp_url)
++        replacement["session_key"] = existing_session.get("session_key", task_id)
++        replacement["owner_task_id"] = existing_session.get(
++            "owner_task_id", _bare_task_id_for_session_key(task_id)
++        )
++        rotated = False
++        with _cleanup_lock:
++            if _active_sessions.get(task_id) is existing_session:
++                _active_sessions[task_id] = replacement
++                rotated = True
++            current_session = _active_sessions.get(task_id)
++        if rotated:
++            _kill_agent_browser_daemon(existing_session["session_name"])
++        if current_session:
++            return current_session
++        return _get_session_info(task_id)
+
+     # Hybrid routing: session keys ending with ``::local`` force a local
+     # Chromium regardless of the globally-configured cloud provider.  Public
+@@ -2079,6 +2131,7 @@ def _get_session_info(task_id: Optional[str] = None) -> Dict[str, Any]:
+     force_local = _is_local_sidecar_key(task_id)
+
+     # Create session outside the lock (network call in cloud mode)
++    _ensure_verso_browser_started()
+     cdp_override = _get_cdp_override()
+     if cdp_override and not force_local:
+         session_info = _create_cdp_session(task_id, cdp_override)
+@@ -2132,11 +2185,10 @@ def _get_session_info(task_id: Optional[str] = None) -> Dict[str, Any]:
+         session_info.setdefault("owner_task_id", _bare_task_id_for_session_key(task_id))
+         _active_sessions[task_id] = session_info
+
+-    # Lazy-start the CDP supervisor now that the session exists (if the
+-    # backend surfaces a CDP URL via override or session_info["cdp_url"]).
+-    # Idempotent; swallows errors. See _ensure_cdp_supervisor for details.
+-    # Skip for local sidecars — they have no CDP URL.
+-    if not force_local:
++    # Provider-owned CDP sessions can use Hermes' process-level supervisor.
++    # Shared overrides stay with agent-browser because only it knows the
++    # pinned target for this task.
++    if not force_local and not session_info.get("features", {}).get("cdp_override"):
+         _ensure_cdp_supervisor(task_id)
+
+     return session_info
+@@ -2376,10 +2428,17 @@ def _run_browser_command(
+     # Local mode: --session <name> launches a local headless Chromium.
+     # The rest of the command (--json, command, args) is identical.
+     if session_info.get("cdp_url"):
+-        # Cloud mode — connect to remote Browserbase browser via CDP
+-        # IMPORTANT: Do NOT use --session with --cdp. In agent-browser >=0.13,
+-        # --session creates a local browser instance and silently ignores --cdp.
+-        backend_args = ["--cdp", session_info["cdp_url"]]
++        # A user-supplied CDP endpoint may be shared by concurrent tasks.
++        # agent-browser owns the target binding; Hermes only supplies its
++        # existing per-task session name and requires strict isolation.
++        if session_info.get("features", {}).get("cdp_override"):
++            backend_args = [
++                "--session", session_info["session_name"],
++                "--cdp", session_info["cdp_url"],
++                "--pin-tab",
++            ]
++        else:
++            backend_args = ["--cdp", session_info["cdp_url"]]
+     else:
+         # Local mode — launch Chromium (headless by default, headed when configured)
+         backend_args = ["--session", session_info["session_name"]]
+@@ -4458,6 +4517,14 @@ def _cleanup_single_browser_session(task_id: str) -> None:
+
+         # Try to close via agent-browser first (needs session in _active_sessions)
++        if (
++            task_id.startswith("cron_")
++            and session_info.get("features", {}).get("cdp_override")
++        ):
++            try:
++                _run_browser_command(task_id, "tab", ["close"], timeout=10)
++            except Exception as e:
++                logger.debug("Cron browser tab close failed for task %s: %s", task_id, e)
+         try:
+             _run_browser_command(task_id, "close", [], timeout=10)
+             logger.debug("agent-browser close command completed for task %s", task_id)
+         except Exception as e:
+@@ -4479,28 +4546,31 @@ def _cleanup_single_browser_session(task_id: str) -> None:
+                 except Exception as e:
+                     logger.warning("Could not close cloud browser session: %s", e)
+
+-        # Kill the daemon process and clean up socket directory
+-        session_name = session_info.get("session_name", "")
+-        if session_name:
+-            socket_dir = os.path.join(_socket_safe_tmpdir(), f"agent-browser-{session_name}")
+-            if os.path.exists(socket_dir):
+-                # agent-browser writes {session}.pid in the socket dir
+-                pid_file = os.path.join(socket_dir, f"{session_name}.pid")
+-                if os.path.isfile(pid_file):
+-                    try:
+-                        from tools.process_registry import ProcessRegistry
+-                        daemon_pid = int(Path(pid_file).read_text(encoding="utf-8").strip())
+-                        ProcessRegistry._terminate_host_pid(daemon_pid)
+-                        logger.debug("Killed daemon pid %s for %s", daemon_pid, session_name)
+-                    except (ProcessLookupError, ValueError, PermissionError, OSError):
+-                        logger.debug("Could not kill daemon pid for %s (already dead or inaccessible)", session_name)
+-                shutil.rmtree(socket_dir, ignore_errors=True)
++        session_name = session_info.get("session_name", "")
++        if session_name:
++            _kill_agent_browser_daemon(session_name)
+
+         logger.debug("Removed task %s from active sessions", task_id)
+     else:
+         logger.debug("No active session found for task_id: %s", task_id)
+
+
++def _kill_agent_browser_daemon(session_name: str) -> None:
++    socket_dir = os.path.join(_socket_safe_tmpdir(), f"agent-browser-{session_name}")
++    if not os.path.exists(socket_dir):
++        return
++    pid_file = os.path.join(socket_dir, f"{session_name}.pid")
++    if os.path.isfile(pid_file):
++        try:
++            from tools.process_registry import ProcessRegistry
++            daemon_pid = int(Path(pid_file).read_text(encoding="utf-8").strip())
++            ProcessRegistry._terminate_host_pid(daemon_pid)
++            logger.debug("Killed daemon pid %s for %s", daemon_pid, session_name)
++        except (ProcessLookupError, ValueError, PermissionError, OSError):
++            logger.debug("Could not kill daemon pid for %s (already dead or inaccessible)", session_name)
++    shutil.rmtree(socket_dir, ignore_errors=True)
++
++
+ def cleanup_all_browsers() -> None:
+     """
+     Clean up all active browser sessions.

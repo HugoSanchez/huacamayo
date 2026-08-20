@@ -73,6 +73,35 @@ describe('parseCronToolStep', () => {
     })?.jobId).toBe('job-2');
   });
 
+  it('recognizes namespaced cron tools inside a generic tool_call envelope', () => {
+    expect(parseCronToolStep({
+      type: 'tool',
+      name: 'tool_call',
+      input: {
+        name: 'mcp__scheduler__cronjob',
+        arguments: { action: 'create', name: 'Wrapped routine', schedule: 'hourly' },
+      },
+      result: JSON.stringify({
+        success: true,
+        job: { id: 'wrapped-job', name: 'Wrapped routine', schedule_display: 'Every hour' },
+      }),
+    })).toEqual({
+      action: 'create',
+      jobId: 'wrapped-job',
+      name: 'Wrapped routine',
+      scheduleDisplay: 'Every hour',
+    });
+  });
+
+  it('does not mistake similarly named tools for cron mutations', () => {
+    expect(parseCronToolStep({
+      type: 'tool',
+      name: 'mcp__scheduler__cronjob_helper',
+      input: { action: 'create' },
+      result: '{"success":true}',
+    })).toBeNull();
+  });
+
   it.each([
     undefined,
     'not json',

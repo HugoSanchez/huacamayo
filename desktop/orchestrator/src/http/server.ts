@@ -1,6 +1,9 @@
 import 'dotenv/config';
 import http from 'node:http';
 import path from 'node:path';
+import { BrowserHost } from './browser-host.ts';
+import { BrowserSettingsStore } from './browser-settings-store.ts';
+import { buildBrowserRoutes } from './browser.ts';
 import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
 import { ChatRequestRegistry } from './chat-request-registry.ts';
 import { ChatStore } from './chat-store.ts';
@@ -109,7 +112,23 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const managedBackend = new ManagedBackendClient();
   const customConnectorsStore = new CustomConnectorsStore();
   const customConnectorKeychain = new CustomConnectorKeychain();
-  const hermes = new HermesSupervisor({ runtimeMode, customConnectorsStore, customConnectorKeychain });
+  const browserSettings = new BrowserSettingsStore();
+  const browserHost = new BrowserHost();
+  await browserHost.prepareCdpEndpoint().catch((error: unknown) => {
+    console.warn(
+      '[browser-host] could not prepare lazy CDP endpoint; Hermes stays in local browser mode:',
+      error instanceof Error ? error.message : String(error),
+    );
+  });
+  const hermes = new HermesSupervisor({
+    runtimeMode,
+    customConnectorsStore,
+    customConnectorKeychain,
+    browserRuntime: {
+      cdpUrl: () => browserHost.cdpUrl(),
+      allowPrivateUrls: () => browserSettings.get().allowPrivateUrls,
+    },
+  });
   const hermesHistoryHomes = hermesHistoryHomeCandidates(hermes.hermesHome);
   // Hermes has the exact model for conversations it executed. Restore that
   // durable per-session state for databases created before Verso stored model
@@ -230,6 +249,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
     ...buildSkillsHubRoutes(hermes),
     ...buildSkillsRoutes(skillsConfig, pinnedSkills),
     ...buildCronsRoutes(hermes, cronDescriptions),
+    ...buildBrowserRoutes(browserHost, browserSettings, hermes),
     ...buildModelAuthRoutes(codexAuth, anthropicAuth),
     ...buildChatRoutes(store, hermes, managedBackend, chatRequests, memoryExtraction, async () => {
       const codex = await codexAuth.getStatus();
@@ -261,6 +281,7 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
       sourceIngestion.stop();
       await Promise.all([
         hermes.shutdown(),
+        browserHost.shutdown(),
         memoryProvider.stop(),
       ]);
     })();

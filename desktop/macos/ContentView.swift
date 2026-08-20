@@ -305,6 +305,22 @@ struct ContentView: View {
                 await sidebarStore.refreshConnections()
             }
         }
+        // Hermes runs scheduled routines outside the chat WebView, so there
+        // is no shell action to announce their lifecycle. Its jobs endpoint
+        // exposes the scheduler's authoritative `running` flag; polling this
+        // local sidecar endpoint makes the same sidebar activity cue appear
+        // for both scheduled and manually triggered runs.
+        .task(id: sidecarPort) {
+            guard sidecarPort != nil else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(3))
+                } catch {
+                    return
+                }
+                await sidebarStore.refreshCrons()
+            }
+        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in
             // One-shot resync on wake so the sidebar reflects anything that
             // happened externally (e.g. a routine fired, a connection was
