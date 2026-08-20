@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeMode } from '../integrations/runtime-mode.ts';
 import {
@@ -75,11 +75,7 @@ export interface HermesSupervisorOptions {
   memoryToolsMode?: 'full' | 'none';
   customConnectorsStore?: CustomConnectorsStore;
   customConnectorKeychain?: CustomConnectorKeychain;
-  /**
-   * The Verso-owned agent browser (BrowserHost + settings). cdpUrl() is read
-   * at each spawn: non-null routes Hermes's browser tools to that endpoint,
-   * null leaves Hermes in its default local browser mode.
-   */
+  /** Resolved on each spawn so browser setup and settings changes take effect after restart. */
   browserRuntime?: { cdpUrl(): string | null; allowPrivateUrls(): boolean };
 }
 
@@ -588,6 +584,13 @@ export class HermesSupervisor {
       ...process.env,
       ...pythonEnv,
       ...customConnectorEnv,
+      PATH: [
+        fileURLToPath(new URL('../../node_modules/.bin/', import.meta.url)),
+        dirname(process.execPath),
+        process.env.PATH,
+      ]
+        .filter(Boolean)
+        .join(delimiter),
       PORT: port,
       HOST: host,
       HERMES_PORT: port,
@@ -600,6 +603,7 @@ export class HermesSupervisor {
       VERSO_HERMES_GATEWAY_URL: this.config.baseUrl,
       ...(this.orchestratorBaseUrl ? { VERSO_ORCHESTRATOR_BASE_URL: this.orchestratorBaseUrl } : {}),
       ...(browserCdpUrl ? { BROWSER_CDP_URL: browserCdpUrl } : {}),
+      VERSO_BROWSER_LAZY_LAUNCH: browserCdpUrl ? '1' : '',
     };
     const runnerPath = fileURLToPath(new URL('./hermes-child-runner.mjs', import.meta.url));
     const child = spawn(process.execPath, [runnerPath], {

@@ -47,7 +47,6 @@ const DEFAULT_DISABLED_HERMES_SKILLS = [
   'github-issues',
 ];
 const DEFAULT_DISABLED_SKILLS_MARKER = '.verso-default-disabled-skills-v1';
-const PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER = '.verso-paused-pre-release-browser-crons-v1';
 
 export interface HermesManagedProfileOptions {
   templateHome: string;
@@ -101,7 +100,6 @@ export class HermesManagedProfile {
     seedHermesHomeFile(this.templateHome, this.managedHome, 'memories/USER.md');
     this.syncVersoSkill();
     this.configureManagedMcpServers(orchestratorBaseUrl);
-    this.pausePreReleaseBrowserCrons();
     this.configureBrowserRuntime();
     this.configureModelRoutes();
     this.restoreManagedModelConfigIfProxyOwned();
@@ -129,54 +127,6 @@ export class HermesManagedProfile {
     }
     mkdirSync(dirname(targetPath), { recursive: true });
     copyFileSync(sourcePath, targetPath);
-  }
-
-  private pausePreReleaseBrowserCrons(): void {
-    const markerPath = join(this.managedHome, PRE_RELEASE_BROWSER_CRON_CLEANUP_MARKER);
-    if (existsSync(markerPath)) return;
-
-    const jobsPath = join(this.managedHome, 'cron', 'jobs.json');
-    let pausedCount = 0;
-    if (existsSync(jobsPath)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(jobsPath, 'utf8'));
-      } catch (error) {
-        console.warn(
-          `[cron-cleanup] could not read ${jobsPath}; browser routines were not changed:`,
-          error instanceof Error ? error.message : String(error),
-        );
-        return;
-      }
-
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
-      const jobs = (parsed as Record<string, unknown>).jobs;
-      if (Array.isArray(jobs)) {
-        const pausedAt = new Date().toISOString();
-        for (const rawJob of jobs) {
-          if (!rawJob || typeof rawJob !== 'object' || Array.isArray(rawJob)) continue;
-          const job = rawJob as Record<string, unknown>;
-          if (!Array.isArray(job.enabled_toolsets) || !job.enabled_toolsets.includes('browser')) continue;
-          if (job.enabled === false && job.state === 'paused') continue;
-          job.enabled = false;
-          job.state = 'paused';
-          job.paused_at = pausedAt;
-          job.paused_reason = 'Browser routines are disabled in this Verso release.';
-          pausedCount += 1;
-        }
-      }
-
-      if (pausedCount > 0) {
-        const tempPath = `${jobsPath}.verso-cleanup-${process.pid}.tmp`;
-        writeFileSync(tempPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
-        renameSync(tempPath, jobsPath);
-      }
-    }
-
-    writeFileSync(markerPath, 'Browser cron cleanup v1 completed.\n', 'utf8');
-    if (pausedCount > 0) {
-      console.warn(`[cron-cleanup] paused ${pausedCount} pre-release browser routine(s)`);
-    }
   }
 
   private configureBrowserRuntime(): void {

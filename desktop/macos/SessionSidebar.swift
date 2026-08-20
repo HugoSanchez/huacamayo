@@ -739,6 +739,28 @@ private struct EqualizerBars: View {
     }
 }
 
+/// A quiet, continuously pulsing presence indicator for scheduled routines.
+/// Its fixed trailing footprint preserves the sidebar's row alignment while
+/// the breathing animation distinguishes active work from an unread dot.
+private struct PulsingActivityDot: View {
+    let color: Color
+    private let period: Double = 1.2
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let phase = (context.date.timeIntervalSinceReferenceDate / period)
+                .truncatingRemainder(dividingBy: 1)
+            let pulse = (sin(phase * 2 * .pi) + 1) / 2
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+                .opacity(0.5 + 0.5 * pulse)
+                .scaleEffect(0.82 + 0.18 * pulse)
+                .frame(width: 16, height: 16)
+        }
+    }
+}
+
 struct CronOpenRequest: Equatable {
     let id: String
     let token: UUID
@@ -806,6 +828,13 @@ private struct SidebarCronRow: View {
                     }
                     .buttonStyle(.plain)
                     .help("Delete routine")
+                } else if cron.running == true {
+                    // Hermes marks a job active for its whole execution,
+                    // including tool calls and result delivery. A pulse makes
+                    // the routine's live state easy to scan without competing
+                    // with the session equalizer or its schedule metadata.
+                    PulsingActivityDot(color: theme.green)
+                        .help("Routine is running")
                 } else if let subtitle {
                     Text(subtitle)
                         .font(ConductorType.meta)

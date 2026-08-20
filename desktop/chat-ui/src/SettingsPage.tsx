@@ -346,7 +346,7 @@ function AgentBrowserSection() {
 
   if (status === null && !error) return null;
 
-  const allowPrivate = status?.settings?.allowPrivateUrls === true;
+  const allowPrivate = status?.settings.allowPrivateUrls === true;
   return (
     <section className="settings-section">
       <div className="ingestion-header">

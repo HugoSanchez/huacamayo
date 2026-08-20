@@ -7,15 +7,15 @@ interface HermesRestarter {
 }
 
 /**
- * Routes for the agent browser. The browser process itself is desired-state
- * managed by the orchestrator; these routes exist for the explicit user
- * actions (open to log in, clear data, toggle private URLs) and status.
+ * Routes for explicit browser lifecycle, settings, and status requests.
  */
 export function buildBrowserRoutes(
   browserHost: BrowserHost,
   settings: BrowserSettingsStore,
   hermes: HermesRestarter,
 ): Route[] {
+  const status = () => ({ ...browserHost.status(), settings: settings.get() });
+
   // Hermes captures BROWSER_CDP_URL and browser.* config at spawn, so any
   // change to either must restart it. Serialized on the supervisor's own
   // coalesced restart(); fire-and-forget so the HTTP response stays snappy.
@@ -27,16 +27,31 @@ export function buildBrowserRoutes(
 
   return [
     route('GET', '/browser/status', async (_req, res) => {
-      json(res, 200, { ...browserHost.status(), settings: settings.get() });
+      json(res, 200, status());
     }),
 
-    route('POST', '/browser/open', async (_req, res, _params, body) => {
-      const url = typeof (body as Record<string, unknown> | null)?.url === 'string'
-        ? String((body as Record<string, unknown>).url)
-        : undefined;
+    // Hermes calls this immediately before attaching its typed browser tools.
+    // Keeping it separate from /browser/open starts Chrome without activating a
+    // window, so simply launching Verso never brings Chrome along with it.
+    route('POST', '/browser/ensure', async (_req, res) => {
+      if (!browserHost.isEnabled()) {
+        json(res, 409, { error: 'browser_not_configured', message: 'Open the agent browser once before using it.' });
+        return;
+      }
+      try {
+        await browserHost.ensureStarted();
+        const cdpUrl = browserHost.cdpUrl();
+        if (!cdpUrl) throw new Error('Agent browser did not expose a CDP endpoint.');
+        json(res, 200, { cdpUrl });
+      } catch (error) {
+        json(res, 502, { error: 'browser_unavailable', message: error instanceof Error ? error.message : String(error) });
+      }
+    }),
+
+    route('POST', '/browser/open', async (_req, res) => {
       const wasEnabled = browserHost.isEnabled();
       try {
-        await browserHost.openUrl(url);
+        await browserHost.open();
       } catch (error) {
         json(res, 502, { error: 'browser_unavailable', message: error instanceof Error ? error.message : String(error) });
         return;
@@ -44,13 +59,13 @@ export function buildBrowserRoutes(
       // First-ever open creates the profile, which turns CDP attach on;
       // Hermes must relaunch to pick up the endpoint.
       if (!wasEnabled && browserHost.isEnabled()) restartHermes();
-      json(res, 200, browserHost.status());
+      json(res, 200, status());
     }),
 
     route('POST', '/browser/reset', async (_req, res) => {
       await browserHost.reset();
       restartHermes();
-      json(res, 200, browserHost.status());
+      json(res, 200, status());
     }),
 
     route('POST', '/browser/settings', async (_req, res, _params, body) => {

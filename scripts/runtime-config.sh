@@ -18,6 +18,7 @@ HERMES_PATCHES=(
     "api-server-reasoning-stream.patch"
     "codex-tool-schema-required.patch"
     "verso-browser-guardrails.patch"
+    "verso-cron-running-status.patch"
     "verso-gateway-mcp-oauth.patch"
     "verso-personal-assistant-prompts.patch"
     "verso-request-overrides.patch"

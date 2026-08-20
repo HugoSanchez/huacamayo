@@ -9,6 +9,7 @@ struct SidebarCron: Decodable, Identifiable, Equatable {
     let lastError: String?
     let state: String
     let enabled: Bool
+    let running: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -19,6 +20,7 @@ struct SidebarCron: Decodable, Identifiable, Equatable {
         case lastError = "last_error"
         case state
         case enabled
+        case running
     }
 }
 

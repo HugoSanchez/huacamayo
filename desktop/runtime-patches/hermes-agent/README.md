@@ -17,19 +17,19 @@ gateway and exercises streaming plus the MCP OAuth routes.
    through the API-server SSE response.
 2. `codex-tool-schema-required.patch` — normalizes tool schemas for the Codex
    Responses API's stricter required-field rules.
-3. `verso-browser-guardrails.patch` — defines a `browser-drive` toolset (the
-   browser toolset minus its bundled `web_search`), adds it to the cron
-   protected denylist (browser automation is attended-only, but cron keeps web
-   search), and makes the raw `browser_cdp` tool opt-in via
-   `browser.expose_cdp_tool` instead of auto-enabling whenever a CDP endpoint
-   is configured.
-4. `verso-gateway-mcp-oauth.patch` — adds the loopback MCP OAuth routes used by
+3. `verso-browser-guardrails.patch` — lazily starts Verso's shared browser,
+   pins each Hermes task to its own tab, rebinds tasks after Chrome restarts,
+   closes ephemeral cron tabs, and keeps raw CDP access opt-in via
+   `browser.expose_cdp_tool`.
+4. `verso-cron-running-status.patch` — exposes Hermes' authoritative
+   in-flight scheduler state on each cron API response.
+5. `verso-gateway-mcp-oauth.patch` — adds the loopback MCP OAuth routes used by
    the desktop connection flow.
-5. `verso-personal-assistant-prompts.patch` — adapts the upstream agent prompt
+6. `verso-personal-assistant-prompts.patch` — adapts the upstream agent prompt
    for Verso's general personal-assistant surface.
-6. `verso-request-overrides.patch` — supports per-request model and reasoning
+7. `verso-request-overrides.patch` — supports per-request model and reasoning
    effort selected in the chat UI. It depends on patch 1.
-7. `verso-tool-search-pinned.patch` — keeps essential tools visible when
+8. `verso-tool-search-pinned.patch` — keeps essential tools visible when
    Hermes defers the remainder behind tool search.
 
 ## Updating Hermes

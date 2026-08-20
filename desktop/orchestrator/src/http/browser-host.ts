@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,25 +21,20 @@ const DARWIN_BROWSER_APPS = [
 interface BrowserHostState {
   pid: number | null;
   binary: string | null;
-  userDataDir: string | null;
   port: number | null;
 }
 
-export interface BrowserHostStatus {
+interface BrowserHostStatus {
   supported: boolean;
   enabled: boolean;
   running: boolean;
-  port: number | null;
-  binary: string | null;
 }
 
-export interface BrowserHostOptions {
+interface BrowserHostOptions {
   /** Directory holding the profile dir and the pidfile. Defaults to the app data dir. */
   baseDir?: string;
   /** Override the browser binary (tests point this at a fake). */
   binary?: string | null;
-  /** Extra args appended to the spawn (tests only). */
-  extraArgs?: string[];
   logger?: Pick<Console, 'info' | 'warn'>;
 }
 
@@ -50,15 +45,21 @@ function defaultBaseDir(): string {
 function decodeState(value: unknown): BrowserHostState {
   const record = (value ?? {}) as Record<string, unknown>;
   return {
-    pid: typeof record.pid === 'number' ? record.pid : null,
+    pid: typeof record.pid === 'number' && Number.isInteger(record.pid) && record.pid > 0
+      ? record.pid
+      : null,
     binary: typeof record.binary === 'string' ? record.binary : null,
-    userDataDir: typeof record.userDataDir === 'string' ? record.userDataDir : null,
-    port: typeof record.port === 'number' ? record.port : null,
+    port: typeof record.port === 'number'
+      && Number.isInteger(record.port)
+      && record.port > 0
+      && record.port <= 65_535
+      ? record.port
+      : null,
   };
 }
 
-function emptyState(): BrowserHostState {
-  return { pid: null, binary: null, userDataDir: null, port: null };
+function inactiveState(port: number | null = null): BrowserHostState {
+  return { pid: null, binary: null, port };
 }
 
 /**
@@ -72,28 +73,23 @@ export class BrowserHost {
   readonly profileDir: string;
   private readonly stateFile: string;
   private readonly binaryOverride: string | null | undefined;
-  private readonly extraArgs: string[];
   private readonly logger: Pick<Console, 'info' | 'warn'>;
 
   private child: ChildProcess | null = null;
+  private headless = false;
   private port: number | null = null;
   private startPromise: Promise<void> | null = null;
   private shutdownPromise: Promise<void> | null = null;
-  private desiredRunning = false;
-  private respawnTimer: NodeJS.Timeout | null = null;
-  private rapidExits = 0;
-  private lastSpawnAt = 0;
 
   constructor(options: BrowserHostOptions = {}) {
     const baseDir = options.baseDir ?? defaultBaseDir();
     this.profileDir = path.join(baseDir, 'agent-browser-profile');
     this.stateFile = path.join(baseDir, 'agent-browser-host.json');
     this.binaryOverride = options.binary;
-    this.extraArgs = options.extraArgs ?? [];
     this.logger = options.logger ?? console;
   }
 
-  resolveBinary(): string | null {
+  private resolveBinary(): string | null {
     if (this.binaryOverride !== undefined) return this.binaryOverride;
     return DARWIN_BROWSER_APPS.find((candidate) => existsSync(candidate)) ?? null;
   }
@@ -107,10 +103,15 @@ export class BrowserHost {
     return this.child !== null && !hasExited(this.child);
   }
 
-  /** Loopback CDP endpoint for Hermes's child env; null keeps Hermes in its default local mode. */
+  /**
+   * Loopback CDP endpoint for Hermes's child env. The port survives a stopped
+   * browser so Hermes can request a lazy launch before its first browser tool
+   * call, rather than forcing Chrome to start with the app.
+   */
   cdpUrl(): string | null {
-    if (!this.isEnabled() || this.port === null) return null;
-    return `http://127.0.0.1:${this.port}`;
+    if (!this.isEnabled() || !this.resolveBinary()) return null;
+    const port = this.port ?? readJsonFileOr(this.stateFile, decodeState, inactiveState).port;
+    return port === null ? null : `http://127.0.0.1:${port}`;
   }
 
   status(): BrowserHostStatus {
@@ -118,39 +119,47 @@ export class BrowserHost {
       supported: this.resolveBinary() !== null,
       enabled: this.isEnabled(),
       running: this.isRunning(),
-      port: this.port,
-      binary: this.resolveBinary(),
     };
   }
 
-  /**
-   * Start (or adopt-nothing-and-start) the browser. Coalesced; safe to call
-   * repeatedly. Creates the profile on first use, which flips isEnabled().
-   */
+  /** Coalesced start; creates the profile on first use. */
   ensureStarted(): Promise<void> {
+    return this.start(true);
+  }
+
+  private start(headless: boolean): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise.then(() => this.start(headless));
     if (this.isRunning()) return Promise.resolve();
     if (this.startPromise) return this.startPromise;
-    this.startPromise = this.startOnce().finally(() => {
+    this.startPromise = this.startOnce(headless).finally(() => {
       this.startPromise = null;
     });
     return this.startPromise;
   }
 
-  /**
-   * Open a URL for the user. Relies on Chromium's singleton behavior: invoking
-   * the binary again with the same --user-data-dir forwards the URL to the
-   * running instance and activates it — the only sanctioned way a window comes
-   * to the foreground, and only ever from an explicit user action.
-   */
-  async openUrl(url?: string): Promise<void> {
-    await this.ensureStarted();
+  /** Reserve Hermes' stable CDP endpoint without launching Chrome. */
+  async prepareCdpEndpoint(): Promise<void> {
+    if (!this.isEnabled() || !this.resolveBinary() || this.port !== null) return;
+    await this.sweepStaleProcess();
+    const persisted = readJsonFileOr(this.stateFile, decodeState, inactiveState).port;
+    this.port = persisted !== null && await canBind('127.0.0.1', persisted)
+      ? persisted
+      : await allocatePort('127.0.0.1');
+    writeJsonFileAtomic(this.stateFile, inactiveState(this.port));
+  }
+
+  /** Activate the dedicated browser after an explicit user action. */
+  async open(): Promise<void> {
+    await this.startPromise?.catch(() => undefined);
+    if (this.isRunning() && this.headless) await this.shutdown();
+    await this.start(false);
     const binary = this.resolveBinary();
     if (!binary) throw new Error('No Chromium-family browser installed.');
-    const target = url && /^https?:\/\//i.test(url) ? url : 'about:blank';
-    const forwarder = spawn(binary, [`--user-data-dir=${this.profileDir}`, target], {
+    const forwarder = spawn(binary, [`--user-data-dir=${this.profileDir}`, 'about:blank'], {
       stdio: 'ignore',
       detached: true,
     });
+    await once(forwarder, 'spawn');
     forwarder.unref();
   }
 
@@ -158,19 +167,15 @@ export class BrowserHost {
   async reset(): Promise<void> {
     await this.shutdown();
     rmSync(this.profileDir, { recursive: true, force: true });
-    writeJsonFileAtomic(this.stateFile, emptyState());
+    rmSync(this.stateFile, { force: true });
     this.port = null;
   }
 
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
-    this.desiredRunning = false;
-    if (this.respawnTimer) {
-      clearTimeout(this.respawnTimer);
-      this.respawnTimer = null;
-    }
-    const child = this.child;
     this.shutdownPromise = (async () => {
+      await this.startPromise?.catch(() => undefined);
+      const child = this.child;
       if (child && !hasExited(child)) {
         try {
           await terminateChild(child);
@@ -179,7 +184,10 @@ export class BrowserHost {
         }
       }
       this.child = null;
-      writeJsonFileAtomic(this.stateFile, emptyState());
+      this.headless = false;
+      if (this.isEnabled() || this.port !== null) {
+        writeJsonFileAtomic(this.stateFile, inactiveState(this.port));
+      }
     })().finally(() => {
       this.shutdownPromise = null;
     });
@@ -192,7 +200,7 @@ export class BrowserHost {
    * and our profile dir — PIDs get recycled, so a bare pidfile is not identity.
    */
   async sweepStaleProcess(): Promise<void> {
-    const state = readJsonFileOr(this.stateFile, decodeState, emptyState);
+    const state = readJsonFileOr(this.stateFile, decodeState, inactiveState);
     if (!state.pid) return;
     const command = await processCommand(state.pid);
     const ours = command !== null
@@ -209,49 +217,44 @@ export class BrowserHost {
         // Already gone between the check and the signal.
       }
     }
-    writeJsonFileAtomic(this.stateFile, emptyState());
+    writeJsonFileAtomic(this.stateFile, inactiveState(state.port));
   }
 
-  private async startOnce(): Promise<void> {
+  private async startOnce(headless = true): Promise<void> {
     const binary = this.resolveBinary();
     if (!binary) throw new Error('No Chromium-family browser installed.');
 
-    await this.sweepStaleProcess();
-
+    mkdirSync(this.profileDir, { recursive: true });
+    await this.prepareCdpEndpoint();
     ensureProfilePreferences(this.profileDir);
-
-    // One port per orchestrator lifetime: Hermes's env captures the URL at
-    // spawn, so the endpoint must survive browser restarts. Prefer the port
-    // from the previous run so long-lived Hermes homes see a stable endpoint,
-    // but never fight another process for it.
-    if (this.port === null) {
-      const persisted = readJsonFileOr(this.stateFile, decodeState, emptyState).port;
-      this.port = persisted !== null && await canBind('127.0.0.1', persisted)
-        ? persisted
-        : await allocatePort('127.0.0.1');
-    }
+    const port = this.port;
+    if (port === null) throw new Error('Could not reserve an agent browser port.');
 
     const args = [
       `--user-data-dir=${this.profileDir}`,
-      `--remote-debugging-port=${this.port}`,
+      `--remote-debugging-port=${port}`,
       '--remote-debugging-address=127.0.0.1',
       '--no-first-run',
       '--no-default-browser-check',
       '--no-startup-window',
       '--hide-crash-restore-bubble',
       '--disable-session-crashed-bubble',
-      ...this.extraArgs,
+      ...(headless ? ['--headless=new'] : []),
     ];
     const child = spawn(binary, args, { stdio: 'ignore' });
     this.child = child;
-    this.desiredRunning = true;
-    this.lastSpawnAt = Date.now();
+    this.headless = headless;
     child.once('exit', () => this.handleUnexpectedExit(child));
 
     try {
-      await this.awaitReady(child);
+      await once(child, 'spawn');
+      writeJsonFileAtomic(this.stateFile, {
+        pid: child.pid ?? null,
+        binary,
+        port,
+      } satisfies BrowserHostState);
+      await this.awaitReady(child, port);
     } catch (error) {
-      this.desiredRunning = false;
       if (!hasExited(child)) {
         try {
           await terminateChild(child);
@@ -260,31 +263,27 @@ export class BrowserHost {
         }
       }
       this.child = null;
+      this.headless = false;
+      this.persistInactiveState(port);
       throw error;
     }
 
-    writeJsonFileAtomic(this.stateFile, {
-      pid: child.pid ?? null,
-      binary,
-      userDataDir: this.profileDir,
-      port: this.port,
-    } satisfies BrowserHostState);
-    this.logger.info(`[browser-host] agent browser ready on 127.0.0.1:${this.port} (pid ${child.pid})`);
+    this.logger.info(`[browser-host] agent browser ready on 127.0.0.1:${port} (pid ${child.pid})`);
   }
 
-  private async awaitReady(child: ChildProcess): Promise<void> {
+  private async awaitReady(child: ChildProcess, port: number): Promise<void> {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       if (hasExited(child)) throw new Error('Agent browser exited during startup.');
-      if (await this.cdpResponds() && await this.portOwnedByChild(child)) return;
+      if (await this.cdpResponds(port) && await this.portOwnedByChild(child, port)) return;
       await delay(250);
     }
     throw new Error('Agent browser did not become ready within 15s.');
   }
 
-  private async cdpResponds(): Promise<boolean> {
+  private async cdpResponds(port: number): Promise<boolean> {
     try {
-      const response = await fetch(`http://127.0.0.1:${this.port}/json/version`, {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
         signal: AbortSignal.timeout(1_000),
       });
       return response.ok;
@@ -294,10 +293,10 @@ export class BrowserHost {
   }
 
   /** Never adopt a foreign CDP endpoint: the listener must be our child. */
-  private async portOwnedByChild(child: ChildProcess): Promise<boolean> {
+  private async portOwnedByChild(child: ChildProcess, port: number): Promise<boolean> {
     if (!child.pid) return false;
     try {
-      const { stdout } = await execFileAsync('lsof', ['-nP', `-iTCP:${this.port}`, '-sTCP:LISTEN', '-t']);
+      const { stdout } = await execFileAsync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
       const owners = stdout.split('\n').map((line) => parseInt(line.trim(), 10)).filter(Number.isFinite);
       return owners.includes(child.pid);
     } catch {
@@ -309,23 +308,20 @@ export class BrowserHost {
   private handleUnexpectedExit(child: ChildProcess): void {
     if (this.child !== child) return;
     this.child = null;
-    if (!this.desiredRunning) return;
-    // Windowless respawn keeps logged-in sessions reachable without ever
-    // touching window focus. Three quick deaths in a row means something is
-    // genuinely wrong — stop until the next explicit user action.
-    this.rapidExits = Date.now() - this.lastSpawnAt < 60_000 ? this.rapidExits + 1 : 1;
-    if (this.rapidExits >= 3) {
-      this.logger.warn('[browser-host] agent browser keeps exiting; giving up until next user action');
-      this.desiredRunning = false;
-      return;
+    this.headless = false;
+    if (this.shutdownPromise) return;
+    // Chrome belongs to the user while it is visible. Do not turn a manual
+    // quit into an app-level respawn loop; the next browser tool call starts it
+    // again through the sidecar's explicit lazy-launch route.
+    this.persistInactiveState(this.port);
+  }
+
+  private persistInactiveState(port: number | null): void {
+    try {
+      writeJsonFileAtomic(this.stateFile, inactiveState(port));
+    } catch (error) {
+      this.logger.warn('[browser-host] could not persist browser state:', error instanceof Error ? error.message : String(error));
     }
-    this.respawnTimer = setTimeout(() => {
-      this.respawnTimer = null;
-      void this.ensureStarted().catch((error) => {
-        this.logger.warn('[browser-host] respawn failed:', error instanceof Error ? error.message : String(error));
-      });
-    }, 2_000);
-    this.respawnTimer.unref();
   }
 }
 

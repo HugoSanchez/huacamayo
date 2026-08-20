@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,24 @@ describe('BrowserHost', () => {
     expect(response.ok).toBe(true);
   });
 
+  it('runs automation headlessly until the user opens the browser', async () => {
+    host = makeHost(freshBase());
+    await host.ensureStarted();
+
+    const launchesPath = path.join(host.profileDir, 'fake-chrome-launches.jsonl');
+    const launches = () => readFileSync(launchesPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as string[]);
+    expect(launches()[0]).toContain('--headless=new');
+
+    await host.open();
+    await waitFor(() => launches().length >= 3);
+    const managedLaunches = launches().filter((args) => args.some((arg) => arg.startsWith('--remote-debugging-port=')));
+    expect(managedLaunches).toHaveLength(2);
+    expect(managedLaunches[1]).not.toContain('--headless=new');
+  });
+
   it('seeds the profile with password saving and session restore disabled', async () => {
     host = makeHost(freshBase());
     await host.ensureStarted();
@@ -106,21 +124,16 @@ describe('BrowserHost', () => {
     expect(host.cdpUrl()).toBeNull();
   });
 
-  it('respawns after an unexpected browser exit', async () => {
+  it('does not respawn after an unexpected browser exit', async () => {
     host = makeHost(freshBase());
     await host.ensureStarted();
     const statePath = path.join(baseDir, 'agent-browser-host.json');
     const firstPid = JSON.parse(readFileSync(statePath, 'utf8')).pid as number;
 
     process.kill(firstPid, 'SIGKILL');
-    await waitFor(() => {
-      if (!host!.isRunning()) return false;
-      const currentPid = JSON.parse(readFileSync(statePath, 'utf8')).pid as number | null;
-      return currentPid !== null && currentPid !== firstPid;
-    }, 10_000);
-
-    expect(host.isRunning()).toBe(true);
-  }, 15_000);
+    await waitFor(() => !host!.isRunning());
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).pid).toBeNull();
+  });
 
   it('keeps the same port across a browser restart', async () => {
     host = makeHost(freshBase());
@@ -128,9 +141,24 @@ describe('BrowserHost', () => {
     const firstUrl = host.cdpUrl();
 
     await host.shutdown();
+    expect(host.cdpUrl()).toBe(firstUrl);
+    host = makeHost(baseDir);
+    expect(host.cdpUrl()).toBe(firstUrl);
     await host.ensureStarted();
 
     expect(host.cdpUrl()).toBe(firstUrl);
+  });
+
+  it('reserves a CDP endpoint without starting Chrome', async () => {
+    host = makeHost(freshBase());
+    mkdirSync(host.profileDir, { recursive: true });
+
+    await host.prepareCdpEndpoint();
+    const cdpUrl = host.cdpUrl();
+
+    expect(cdpUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(host.isRunning()).toBe(false);
+    expect(JSON.parse(readFileSync(path.join(baseDir, 'agent-browser-host.json'), 'utf8')).port).not.toBeNull();
   });
 
   it('sweeps a stale process only when its identity matches', async () => {
@@ -143,7 +171,6 @@ describe('BrowserHost', () => {
     writeFileSync(statePath, JSON.stringify({
       pid: bystander.pid,
       binary: FAKE_CHROME,
-      userDataDir: host.profileDir,
       port: null,
     }));
     await host.sweepStaleProcess();
@@ -156,11 +183,13 @@ describe('BrowserHost', () => {
       `--user-data-dir=${host.profileDir}`,
       '--remote-debugging-port=0',
     ], { stdio: 'ignore' });
-    await waitFor(() => stale.pid !== undefined);
+    await new Promise<void>((resolve, reject) => {
+      stale.once('spawn', resolve);
+      stale.once('error', reject);
+    });
     writeFileSync(statePath, JSON.stringify({
       pid: stale.pid,
       binary: FAKE_CHROME,
-      userDataDir: host.profileDir,
       port: null,
     }));
     await host.sweepStaleProcess();

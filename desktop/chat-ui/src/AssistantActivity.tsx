@@ -29,6 +29,11 @@ interface AssistantActivityProps {
 export function AssistantActivity({ message, toolkits }: AssistantActivityProps) {
   const steps = activityStepsWithReasoningFallback(message.steps ?? [], message.reasoning);
   const hasReasoning = steps.some((step) => step.type === 'reasoning');
+  const cronMutationSignature = JSON.stringify(steps.flatMap((step) => {
+    if (step.type !== 'tool') return [];
+    const card = parseCronToolStep(step);
+    return card ? [[card.action, card.jobId]] : [];
+  }));
   const [expanded, setExpanded] = useState(false);
   const wasStreaming = useRef(!!message.isStreaming);
 
@@ -36,6 +41,23 @@ export function AssistantActivity({ message, toolkits }: AssistantActivityProps)
     if (wasStreaming.current && !message.isStreaming) setExpanded(false);
     wasStreaming.current = !!message.isStreaming;
   }, [message.isStreaming]);
+
+  // This must live above the collapsible tool-call details. A completed
+  // assistant activity is collapsed by default, so a notification emitted by
+  // CronToolCard would otherwise never run and leave the native sidebar stale.
+  useEffect(() => {
+    const mutations = JSON.parse(cronMutationSignature) as Array<[CronToolCardModel['action'], string | null]>;
+    if (mutations.length === 0) return;
+    postShellAction({ kind: 'crons-changed' });
+    const createdJobIds = new Set(mutations.flatMap(([action, jobId]) => (
+      action === 'create' && jobId ? [jobId] : []
+    )));
+    for (const jobId of createdJobIds) {
+      void generateCronDescription(jobId).catch(() => {
+        // Best effort; the detail page also generates missing descriptions.
+      });
+    }
+  }, [cronMutationSignature]);
 
   if (steps.length === 0) return null;
   const toolCount = steps.filter((step) => step.type === 'tool').length;
@@ -147,10 +169,8 @@ function StepView({
     );
   }
   if (step.type === 'reasoning') return <ThinkingStep text={step.text} />;
-  if (step.name === 'cronjob') {
-    const card = parseCronToolStep(step);
-    if (card) return <CronToolCard {...card} />;
-  }
+  const card = parseCronToolStep(step);
+  if (card) return <CronToolCard {...card} />;
   return <ToolStep step={step} toolkits={toolkits} />;
 }
 
@@ -192,15 +212,6 @@ const CRON_ACTION_LABELS: Record<CronToolCardModel['action'], string> = {
 };
 
 function CronToolCard({ action, jobId, name, scheduleDisplay }: CronToolCardModel) {
-  useEffect(() => {
-    postShellAction({ kind: 'crons-changed' });
-    if (action === 'create' && jobId) {
-      void generateCronDescription(jobId).catch(() => {
-        // Best effort; the detail page also generates missing descriptions.
-      });
-    }
-  }, [action, jobId]);
-
   const canView = action !== 'remove' && jobId !== null;
   const handleView = () => {
     if (canView && jobId !== null) dispatchShellCommand({ kind: 'open-cron', id: jobId });

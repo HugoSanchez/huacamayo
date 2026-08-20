@@ -303,6 +303,7 @@ function normalizeLocalCronJob(raw: unknown): HermesCronJob | null {
     last_run_at: asString(obj.last_run_at),
     last_status: asString(obj.last_status),
     last_error: asString(obj.last_error),
+    running: obj.running === true,
     deliver: asString(obj.deliver),
     origin: obj.origin && typeof obj.origin === 'object' ? obj.origin as Record<string, unknown> : null,
   };

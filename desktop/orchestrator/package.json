@@ -15,6 +15,7 @@
   "dependencies": {
     "@firecrawl/anydoc-wasm": "0.1.6",
     "@huggingface/transformers": "^4.2.0",
+    "agent-browser": "0.34.0",
     "dotenv": "^16.6.1",
     "yaml": "^2.8.3"
   },

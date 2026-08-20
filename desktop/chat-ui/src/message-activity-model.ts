@@ -39,11 +39,16 @@ export function normalizeThinking(text: string): string {
 export function parseCronToolStep(
   step: Extract<ActivityStep, { type: 'tool' }>,
 ): CronToolCardModel | null {
-  if (typeof step.result !== 'string' || step.result.length === 0) return null;
+  // Hermes can expose native tools with an MCP namespace or nest them inside
+  // a generic `tool_call` envelope. Normalize before deciding whether this is
+  // a cron mutation so the UI and native sidebar follow the same event path.
+  const normalizedStep = unwrapToolCall(step);
+  if (stripNamespace(normalizedStep.name).toLowerCase() !== 'cronjob') return null;
+  if (typeof normalizedStep.result !== 'string' || normalizedStep.result.length === 0) return null;
 
   let parsedResult: unknown;
   try {
-    parsedResult = JSON.parse(step.result);
+    parsedResult = JSON.parse(normalizedStep.result);
   } catch {
     return null;
   }
@@ -51,8 +56,8 @@ export function parseCronToolStep(
   const resultObj = parsedResult as Record<string, unknown>;
   if (resultObj.success !== true) return null;
 
-  const inputObj = typeof step.input === 'object' && step.input !== null
-    ? step.input as Record<string, unknown>
+  const inputObj = typeof normalizedStep.input === 'object' && normalizedStep.input !== null
+    ? normalizedStep.input as Record<string, unknown>
     : null;
   const action = typeof inputObj?.action === 'string' ? inputObj.action : null;
   if (

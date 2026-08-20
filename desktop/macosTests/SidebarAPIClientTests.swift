@@ -65,6 +65,25 @@ final class SidebarAPIClientTests: XCTestCase {
         XCTAssertEqual(connectors.first?.logoUrl, "http://127.0.0.1:4242/logos/notion.png")
     }
 
+    func testFetchCronsDecodesLiveRunningState() async throws {
+        let transport = SidebarStubTransport { request in
+            XCTAssertEqual(request.url?.path, "/crons")
+            return try Self.response(
+                for: request,
+                body: #"{"crons":[{"id":"daily","name":"Daily report","schedule_display":"every 1d","next_run_at":null,"last_status":null,"last_error":null,"state":"scheduled","enabled":true,"running":true}]}"#
+            )
+        }
+        let client = SidebarAPIClient(
+            baseURL: URL(string: "http://127.0.0.1:4242")!,
+            authToken: "secret",
+            transport: transport
+        )
+
+        let crons = try await client.fetchCrons()
+
+        XCTAssertEqual(crons.first?.running, true)
+    }
+
     private static func response(
         for request: URLRequest,
         statusCode: Int = 200,

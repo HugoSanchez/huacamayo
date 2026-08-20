@@ -1,12 +1,12 @@
 import 'dotenv/config';
 import http from 'node:http';
 import path from 'node:path';
-import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
-import { ChatRequestRegistry } from './chat-request-registry.ts';
-import { ChatStore } from './chat-store.ts';
 import { BrowserHost } from './browser-host.ts';
 import { BrowserSettingsStore } from './browser-settings-store.ts';
 import { buildBrowserRoutes } from './browser.ts';
+import { buildChatDiagnostics, buildChatRoutes } from './chat.ts';
+import { ChatRequestRegistry } from './chat-request-registry.ts';
+import { ChatStore } from './chat-store.ts';
 import { buildComposioBridgeRoutes } from './composio-bridge.ts';
 import { buildDraftsRoutes } from './drafts.ts';
 import { ComposioToolUsageStore } from './composio-tool-usage-store.ts';
@@ -114,6 +114,12 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
   const customConnectorKeychain = new CustomConnectorKeychain();
   const browserSettings = new BrowserSettingsStore();
   const browserHost = new BrowserHost();
+  await browserHost.prepareCdpEndpoint().catch((error: unknown) => {
+    console.warn(
+      '[browser-host] could not prepare lazy CDP endpoint; Hermes stays in local browser mode:',
+      error instanceof Error ? error.message : String(error),
+    );
+  });
   const hermes = new HermesSupervisor({
     runtimeMode,
     customConnectorsStore,
@@ -312,18 +318,6 @@ export async function startServer(opts: { port?: number; authSecret?: string | n
       // arriving before the hold expires starts Hermes via ensureReady() and
       // is covered by the same path.
       void (async () => {
-        // The agent browser must be listening before Hermes spawns: the CDP
-        // endpoint is captured into Hermes's env at spawn time. Only when the
-        // user has opened the agent browser before (profile exists) — a
-        // startup failure degrades to Hermes's default local browser mode.
-        if (browserHost.isEnabled()) {
-          await browserHost.ensureStarted().catch((error: unknown) => {
-            console.warn(
-              '[browser-host] startup failed; Hermes stays in local browser mode:',
-              error instanceof Error ? error.message : String(error),
-            );
-          });
-        }
         if (composioManifest.needsManifestBeforeHermesStart()) {
           await Promise.race([
             initialManifestRefresh,

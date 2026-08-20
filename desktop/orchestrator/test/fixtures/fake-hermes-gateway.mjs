@@ -187,6 +187,7 @@ function handleJobsRequest(req, res, url) {
         repeat: { times: null, completed: 0 },
         enabled: true,
         state: 'scheduled',
+        running: parsed.running === true,
         paused_at: null,
         paused_reason: null,
         created_at: new Date().toISOString(),

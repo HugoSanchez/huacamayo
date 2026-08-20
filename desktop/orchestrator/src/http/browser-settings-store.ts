@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readJsonFileOr, writeJsonFileAtomic } from './atomic-json-file.ts';
 
-export interface BrowserSettings {
+interface BrowserSettings {
   /**
    * Lets the agent browser reach localhost/RFC1918 addresses (self-hosted
    * tools). Off by default: private-network reach widens what a prompt-injected
@@ -20,23 +20,19 @@ function decode(value: unknown): BrowserSettings {
   return { allowPrivateUrls: record.allowPrivateUrls === true };
 }
 
-function defaults(): BrowserSettings {
-  return { allowPrivateUrls: false };
-}
-
 export class BrowserSettingsStore {
   private readonly storePath: string;
 
-  constructor(storePath: string = defaultStorePath()) {
+  constructor(storePath = defaultStorePath()) {
     this.storePath = storePath;
   }
 
   get(): BrowserSettings {
-    return readJsonFileOr(this.storePath, decode, defaults);
+    return readJsonFileOr(this.storePath, decode, () => ({ allowPrivateUrls: false }));
   }
 
   setAllowPrivateUrls(allow: boolean): BrowserSettings {
-    const next = { ...this.get(), allowPrivateUrls: allow };
+    const next = { allowPrivateUrls: allow };
     writeJsonFileAtomic(this.storePath, next);
     return next;
   }

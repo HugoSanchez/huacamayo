@@ -1,0 +1,43 @@
+diff --git a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
+index 65d5b324..dc3ea2cc 100644
+--- a/gateway/platforms/api_server.py
++++ b/gateway/platforms/api_server.py
+@@ -4120,6 +4120,17 @@ class APIServerAdapter(BasePlatformAdapter):
+             )
+         return None
+ 
++    @staticmethod
++    def _with_running_status(job: dict) -> dict:
++        """Attach the scheduler's live execution state to a cron API job."""
++        try:
++            from cron.scheduler import get_running_job_ids
++            return {**job, "running": job.get("id") in get_running_job_ids()}
++        except Exception:
++            # The normal job data remains useful if an optional scheduler
++            # provider cannot expose its live execution registry.
++            return {**job, "running": False}
++
+     def _check_job_id(self, request: "web.Request") -> tuple:
+         """Validate and extract job_id. Returns (job_id, error_response)."""
+         job_id = request.match_info["job_id"]
+@@ -4144,7 +4155,10 @@ class APIServerAdapter(BasePlatformAdapter):
+             return cron_err
+         try:
+             include_disabled = request.query.get("include_disabled", "").lower() in {"true", "1"}
+-            jobs = _cron_list(include_disabled=include_disabled)
++            jobs = [
++                self._with_running_status(job)
++                for job in _cron_list(include_disabled=include_disabled)
++            ]
+             return web.json_response({"jobs": jobs})
+         except Exception as e:
+             return web.json_response({"error": _redact_api_error_text(e)}, status=500)
+@@ -4218,7 +4232,7 @@ class APIServerAdapter(BasePlatformAdapter):
+             job = _cron_get(job_id)
+             if not job:
+                 return web.json_response({"error": "Job not found"}, status=404)
+-            return web.json_response({"job": job})
++            return web.json_response({"job": self._with_running_status(job)})
+         except Exception as e:
+             return web.json_response({"error": _redact_api_error_text(e)}, status=500)
+ 

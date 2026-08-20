@@ -189,7 +189,8 @@ final class SidebarStoreTests: XCTestCase {
             lastStatus: nil,
             lastError: nil,
             state: "active",
-            enabled: true
+            enabled: true,
+            running: nil
         )
     }
 }
