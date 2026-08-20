@@ -10,7 +10,6 @@ import {
   getSidecarPort,
   openAgentBrowser,
   resetAgentBrowser,
-  setAgentBrowserPrivateUrls,
   sidecarFetch,
   toggleIngestionSource,
   type AgentBrowserStatus,
@@ -303,7 +302,7 @@ function IngestionSection() {
 function AgentBrowserSection() {
   const [status, setStatus] = useState<AgentBrowserStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<'open' | 'reset' | 'toggle' | null>(null);
+  const [pending, setPending] = useState<'open' | 'reset' | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
 
   useEffect(() => {
@@ -321,7 +320,7 @@ function AgentBrowserSection() {
     }
   }
 
-  async function run(op: 'open' | 'reset' | 'toggle', action: () => Promise<unknown>) {
+  async function run(op: 'open' | 'reset', action: () => Promise<unknown>) {
     if (pending) return;
     setPending(op);
     try {
@@ -346,7 +345,6 @@ function AgentBrowserSection() {
 
   if (status === null && !error) return null;
 
-  const allowPrivate = status?.settings.allowPrivateUrls === true;
   return (
     <section className="settings-section">
       <div className="ingestion-header">
@@ -362,12 +360,6 @@ function AgentBrowserSection() {
         <p className="settings-footnote">Install Google Chrome (or Chromium, Brave, Edge) to use browser automation.</p>
       ) : null}
       <div className="settings-row">
-        <span className="settings-label">Status</span>
-        <span className="settings-value">
-          {status?.running ? 'Running' : status?.enabled ? 'Not running' : 'Not set up'}
-        </span>
-      </div>
-      <div className="settings-row">
         <span className="settings-label">Browser</span>
         <button
           type="button"
@@ -378,24 +370,12 @@ function AgentBrowserSection() {
           {pending === 'open' ? 'Opening…' : 'Open browser'}
         </button>
       </div>
-      <div className="settings-row">
-        <span className="settings-label">Allow local &amp; private addresses</span>
-        <span
-          className={`skill-row-toggle is-${allowPrivate ? 'on' : 'off'}`}
-          role="switch"
-          aria-checked={allowPrivate}
-          aria-disabled={pending !== null}
-          onClick={() => { void run('toggle', () => setAgentBrowserPrivateUrls(!allowPrivate)); }}
-        >
-          <span className="skill-row-toggle-thumb" />
-        </span>
-      </div>
       {status?.enabled ? (
         <div className="settings-row">
           <span className="settings-label">Browsing data</span>
           <button
             type="button"
-            className="settings-button settings-button-danger"
+            className="settings-link settings-link-danger"
             onClick={handleReset}
             onBlur={() => setConfirmingReset(false)}
             disabled={pending !== null}

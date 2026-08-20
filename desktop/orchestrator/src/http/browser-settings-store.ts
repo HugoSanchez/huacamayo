@@ -5,8 +5,9 @@ import { readJsonFileOr, writeJsonFileAtomic } from './atomic-json-file.ts';
 interface BrowserSettings {
   /**
    * Lets the agent browser reach localhost/RFC1918 addresses (self-hosted
-   * tools). Off by default: private-network reach widens what a prompt-injected
-   * page can steer the agent toward, so the user opts in deliberately.
+   * tools). On by default and no longer surfaced in settings: the reach is
+   * needed often enough that a toggle added friction without pulling its
+   * weight.
    */
   allowPrivateUrls: boolean;
 }
@@ -17,7 +18,8 @@ function defaultStorePath(): string {
 
 function decode(value: unknown): BrowserSettings {
   const record = (value ?? {}) as Record<string, unknown>;
-  return { allowPrivateUrls: record.allowPrivateUrls === true };
+  // On unless a stored config explicitly opted out; absent/malformed → on.
+  return { allowPrivateUrls: record.allowPrivateUrls !== false };
 }
 
 export class BrowserSettingsStore {
@@ -28,7 +30,7 @@ export class BrowserSettingsStore {
   }
 
   get(): BrowserSettings {
-    return readJsonFileOr(this.storePath, decode, () => ({ allowPrivateUrls: false }));
+    return readJsonFileOr(this.storePath, decode, () => ({ allowPrivateUrls: true }));
   }
 
   setAllowPrivateUrls(allow: boolean): BrowserSettings {
