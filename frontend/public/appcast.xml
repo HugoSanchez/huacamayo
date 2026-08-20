@@ -3,6 +3,15 @@
     <channel>
         <title>verso</title>
         <item>
+            <title>1.0.21</title>
+            <pubDate>Thu, 20 Aug 2026 17:35:26 +0200</pubDate>
+            <sparkle:version>22</sparkle:version>
+            <sparkle:shortVersionString>1.0.21</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.21/verso-1.0.21.dmg" length="362656741" type="application/octet-stream" sparkle:edSignature="6kgSdnqhFkk30cWHWN5n7WcrxrskdF8z8bE4TJsKQRcUDmhlHFZiPhz1nd9Hy9ckxVXCyi+b/coLiJO84FP5BA=="/>
+        </item>
+        <item>
             <title>1.0.20</title>
             <pubDate>Mon, 17 Aug 2026 18:32:22 +0200</pubDate>
             <sparkle:version>21</sparkle:version>
@@ -19,69 +28,6 @@
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.19/verso-1.0.19.dmg" length="322671339" type="application/octet-stream" sparkle:edSignature="GsdaHRHJseAhutWek1VdeJEpzaH2578ZcRFFmDsT7OKxzhPy8ujUoEZvxBp0NndKgUJgkcxGEwVveiVZkTLWAA=="/>
-        </item>
-        <item>
-            <title>1.0.18</title>
-            <pubDate>Tue, 11 Aug 2026 10:05:34 +0200</pubDate>
-            <sparkle:version>19</sparkle:version>
-            <sparkle:shortVersionString>1.0.18</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.18/verso-1.0.18.dmg" length="316678623" type="application/octet-stream" sparkle:edSignature="HXv3tLxfVpoQb/SP4IxpAITnXJtshJHXlTI5LIXlnSzP4roYhHdwQC15RJyrlxsM0TkfvN145Ws8elGtju1rBA=="/>
-        </item>
-        <item>
-            <title>1.0.17</title>
-            <pubDate>Mon, 10 Aug 2026 19:15:44 +0200</pubDate>
-            <sparkle:version>18</sparkle:version>
-            <sparkle:shortVersionString>1.0.17</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.17/verso-1.0.17.dmg" length="316677758" type="application/octet-stream" sparkle:edSignature="HhynopFe6jHF2ACXkwwtCsPhznv2GyZFcUa9K2jbXTM4a5HwtHTfq2UbKW0xJi8LXAvg390Kg0cOzqRzTsdrBw=="/>
-        </item>
-        <item>
-            <title>1.0.16</title>
-            <pubDate>Mon, 27 Jul 2026 09:19:26 +0200</pubDate>
-            <sparkle:version>17</sparkle:version>
-            <sparkle:shortVersionString>1.0.16</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.16/verso-1.0.16.dmg" length="331420737" type="application/octet-stream" sparkle:edSignature="3zvck/11COdxNKyRBdtR17LcFBt8wjr0vtJYpobdvBtuq3H0yotIGM6hKjwSOC3jy926NXL+SceXwvTlQV5yBQ=="/>
-        </item>
-        <item>
-            <title>1.0.15</title>
-            <pubDate>Sun, 26 Jul 2026 20:28:33 +0200</pubDate>
-            <sparkle:version>16</sparkle:version>
-            <sparkle:shortVersionString>1.0.15</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.15/verso-1.0.15.dmg" length="303323119" type="application/octet-stream" sparkle:edSignature="5jA/1Tq7xW7NcKpgqgg3iSIdCmW2SNA2RiV6vk+inchstb1RgmuQCiy+3UDSxOF8Cck+cP9JGVjgvAQqTQhGBg=="/>
-        </item>
-        <item>
-            <title>1.0.14</title>
-            <pubDate>Wed, 08 Jul 2026 10:12:00 +0200</pubDate>
-            <sparkle:version>15</sparkle:version>
-            <sparkle:shortVersionString>1.0.14</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.14/verso-1.0.14.dmg" length="307447491" type="application/octet-stream" sparkle:edSignature="MbL2YeIRHFdfHkP9gvmOslcorx5zkRN9RvmulrPb3mGKiXO058vtzYTx+hkNHXMy75s/Pb9V9ym5n4K+oei6DQ=="/>
-        </item>
-        <item>
-            <title>1.0.13</title>
-            <pubDate>Mon, 08 Jun 2026 21:00:22 +0200</pubDate>
-            <sparkle:version>14</sparkle:version>
-            <sparkle:shortVersionString>1.0.13</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.13/verso-1.0.13.dmg" length="174110642" type="application/octet-stream" sparkle:edSignature="kyh8ls4Sgk4f/ZYFX8qqjm8E+N7o0JJJHWtQhHcyGrhO/5jJkVBG1sxINyN7uqRUTaaMfnfcldon7+t6EUcKAQ=="/>
-        </item>
-        <item>
-            <title>1.0.12</title>
-            <pubDate>Fri, 05 Jun 2026 17:14:47 +0200</pubDate>
-            <sparkle:version>13</sparkle:version>
-            <sparkle:shortVersionString>1.0.12</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/HugoSanchez/huacamayo/releases/download/v1.0.12/verso-1.0.12.dmg" length="173504441" type="application/octet-stream" sparkle:edSignature="TXPQYRuPNvi0j86HBFjGp9YgIbMRCFPqyluzMIb9NSd9WVKY8+ahVvlhL9Kmy+q0cEx3FAUVvuVn5U92/OQGBg=="/>
         </item>
     </channel>
 </rss>
