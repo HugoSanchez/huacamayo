@@ -57,7 +57,7 @@ describe('BrowserHost', () => {
     expect(response.ok).toBe(true);
   });
 
-  it('seeds the profile with Chrome password saving disabled', async () => {
+  it('seeds the profile with password saving and session restore disabled', async () => {
     host = makeHost(freshBase());
     await host.ensureStarted();
 
@@ -66,6 +66,30 @@ describe('BrowserHost', () => {
     );
     expect(preferences.credentials_enable_service).toBe(false);
     expect(preferences.profile.password_manager_enabled).toBe(false);
+    expect(preferences.session.restore_on_startup).toBe(5);
+    expect(preferences.profile.exit_type).toBe('Normal');
+  });
+
+  it('re-marks a crashed exit as clean on relaunch without losing other prefs', async () => {
+    host = makeHost(freshBase());
+    await host.ensureStarted();
+    await host.shutdown();
+
+    // Simulate what Chrome leaves behind after a hard quit, plus a pref the
+    // user changed inside the browser that must survive our reconciliation.
+    const prefsPath = path.join(host.profileDir, 'Default', 'Preferences');
+    const dirty = JSON.parse(readFileSync(prefsPath, 'utf8'));
+    dirty.profile.exit_type = 'Crashed';
+    dirty.profile.exited_cleanly = false;
+    dirty.intl = { accept_languages: 'es-ES' };
+    writeFileSync(prefsPath, JSON.stringify(dirty));
+
+    await host.ensureStarted();
+    const preferences = JSON.parse(readFileSync(prefsPath, 'utf8'));
+    expect(preferences.profile.exit_type).toBe('Normal');
+    expect(preferences.profile.exited_cleanly).toBe(true);
+    expect(preferences.session.restore_on_startup).toBe(5);
+    expect(preferences.intl).toEqual({ accept_languages: 'es-ES' });
   });
 
   it('reset stops the browser and deletes the profile', async () => {

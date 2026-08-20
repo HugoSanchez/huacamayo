@@ -218,8 +218,7 @@ export class BrowserHost {
 
     await this.sweepStaleProcess();
 
-    const firstUse = !existsSync(this.profileDir);
-    if (firstUse) seedProfile(this.profileDir);
+    ensureProfilePreferences(this.profileDir);
 
     // One port per orchestrator lifetime: Hermes's env captures the URL at
     // spawn, so the endpoint must survive browser restarts. Prefer the port
@@ -239,6 +238,8 @@ export class BrowserHost {
       '--no-first-run',
       '--no-default-browser-check',
       '--no-startup-window',
+      '--hide-crash-restore-bubble',
+      '--disable-session-crashed-bubble',
       ...this.extraArgs,
     ];
     const child = spawn(binary, args, { stdio: 'ignore' });
@@ -329,16 +330,40 @@ export class BrowserHost {
 }
 
 /**
- * Create the profile with Chrome's password manager disabled: the whole design
- * keeps Verso out of credential custody, so the agent profile must not offer to
- * save the passwords users type during login.
+ * Reconcile the profile's Preferences before every launch (merging, so user
+ * prefs accumulated in the profile survive):
+ *
+ * - Password manager off: the whole design keeps Verso out of credential
+ *   custody, so the agent profile must not offer to save passwords.
+ * - Session restore off + previous exit marked clean: a respawn (after the
+ *   user quits the browser, or a crash) must come back WINDOWLESS. Without
+ *   this, Chrome "helpfully" reopens the windows from the previous run in
+ *   front of whatever the user is doing. Windows may only ever appear from
+ *   an explicit user open or an agent navigation in an active chat.
  */
-function seedProfile(profileDir: string): void {
-  mkdirSync(path.join(profileDir, 'Default'), { recursive: true });
-  writeJsonFileAtomic(path.join(profileDir, 'Default', 'Preferences'), {
-    credentials_enable_service: false,
-    profile: { password_manager_enabled: false },
-  });
+function ensureProfilePreferences(profileDir: string): void {
+  const prefsPath = path.join(profileDir, 'Default', 'Preferences');
+  mkdirSync(path.dirname(prefsPath), { recursive: true });
+  const prefs = readJsonFileOr(
+    prefsPath,
+    (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}),
+    () => ({} as Record<string, unknown>),
+  );
+  prefs.credentials_enable_service = false;
+  const profile = (prefs.profile && typeof prefs.profile === 'object' && !Array.isArray(prefs.profile))
+    ? prefs.profile as Record<string, unknown>
+    : {};
+  profile.password_manager_enabled = false;
+  profile.exit_type = 'Normal';
+  profile.exited_cleanly = true;
+  prefs.profile = profile;
+  const session = (prefs.session && typeof prefs.session === 'object' && !Array.isArray(prefs.session))
+    ? prefs.session as Record<string, unknown>
+    : {};
+  // 5 = "open the New Tab Page", i.e. never restore the previous session.
+  session.restore_on_startup = 5;
+  prefs.session = session;
+  writeJsonFileAtomic(prefsPath, prefs);
 }
 
 async function processCommand(pid: number): Promise<string | null> {
